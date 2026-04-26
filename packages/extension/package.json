@@ -1,0 +1,22 @@
+{
+  "name": "@pwa-debug/extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rollup -c && node ./scripts/copy-static.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pwa-debug/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/plugin-typescript": "^12.1.1",
+    "@types/chrome": "^0.0.280",
+    "happy-dom": "^15.11.6",
+    "rollup": "^4.27.4",
+    "tslib": "^2.8.1"
+  }
+}

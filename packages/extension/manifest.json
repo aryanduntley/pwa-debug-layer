@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "PWA Debug Layer",
+  "version": "0.0.0",
+  "description": "Browser-side debug layer that exposes live PWA state to AI agents via MCP. Stub build (M1).",
+  "minimum_chrome_version": "111",
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["page-world.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    }
+  ],
+  "permissions": ["scripting", "storage", "nativeMessaging"],
+  "host_permissions": ["<all_urls>"]
+}

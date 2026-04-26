@@ -47,3 +47,6 @@ chrome-devtools-mcp-main/
 .cache/
 tmp/
 temp/
+
+# Closed-source extensions kept locally for architectural reference (not for code copying)
+reference/
