@@ -1,0 +1,47 @@
+# Production
+build/
+dist/
+*.tgz
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.production
+secrets.env
+
+# Database
+*.db
+*.db-journal
+
+# Logs
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hardhat/Foundry
+cache/
+artifacts/
+out/
+broadcast/
+
+# Runtime data
+data/
+
+# PM2
+logs/
+
+# Miscellaneous
+.cache/
+tmp/
+temp/
+chrome-devtools-mcp-main/
+docs/
