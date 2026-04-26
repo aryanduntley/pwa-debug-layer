@@ -23,7 +23,7 @@ export default [
   },
   {
     input: 'src/content-script.ts',
-    output: { file: 'dist/content-script.js', format: 'esm', sourcemap: true },
+    output: { file: 'dist/content-script.js', format: 'iife', sourcemap: true },
     plugins: [resolvePlugin(), tsPlugin()],
   },
   {
