@@ -1,20 +1,33 @@
-# Production
+# Dependencies
+node_modules/
+
+# Build outputs
 build/
 dist/
-*.tgz
+packages/*/dist/
 *.tsbuildinfo
 
-# Environment
+# Test / coverage
+coverage/
+
+# Environment (never commit secrets)
 .env
 .env.local
 .env.production
 secrets.env
 
-# Database
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local state databases (AIMFP project + user prefs, runtime state)
 *.db
 *.db-journal
 
-# Logs
+# AIMFP blueprint snapshot backups (redundant with git history of the blueprint itself)
+.aimfp-project/backups/
 
 # IDE
 .vscode/
@@ -27,20 +40,10 @@ secrets.env
 .DS_Store
 Thumbs.db
 
-# Hardhat/Foundry
-cache/
-artifacts/
-out/
-broadcast/
+# Reference material cloned for review, not part of this project
+chrome-devtools-mcp-main/
 
-# Runtime data
-data/
-
-# PM2
-logs/
-
-# Miscellaneous
+# Misc
 .cache/
 tmp/
 temp/
-chrome-devtools-mcp-main/
