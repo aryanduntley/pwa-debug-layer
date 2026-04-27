@@ -1,4 +1,5 @@
 import { builtinModules } from 'node:module';
+import commonjs from '@rollup/plugin-commonjs';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
 
@@ -25,6 +26,7 @@ export default {
     [...externalPackages].some((pkg) => id === pkg || id.startsWith(`${pkg}/`)),
   plugins: [
     nodeResolve({ preferBuiltins: true, exportConditions: ['node', 'import', 'default'] }),
+    commonjs(),
     typescript({
       tsconfig: './tsconfig.json',
       sourceMap: true,

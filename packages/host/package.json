@@ -17,13 +17,16 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@pwa-debug/shared": "workspace:*",
     "better-sqlite3": "^11.5.0",
+    "winreg": "^1.2.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.1",
     "@rollup/plugin-node-resolve": "^15.3.0",
     "@rollup/plugin-typescript": "^12.1.1",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.17.6",
+    "@types/winreg": "^1.2.36",
     "rollup": "^4.27.4",
     "tslib": "^2.8.1"
   }

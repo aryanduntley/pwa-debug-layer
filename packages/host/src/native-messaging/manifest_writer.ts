@@ -1,6 +1,11 @@
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import type { InstalledBrowser } from './browser_paths.js';
+import { dirname, join } from 'node:path';
+import type {
+  BrowserInstall,
+  BrowserName,
+  InstallKind,
+} from './browser_paths.js';
+import type { RegistryGateway } from './registry_writer.js';
 
 export type HostManifestJson = {
   readonly name: string;
@@ -8,6 +13,18 @@ export type HostManifestJson = {
   readonly path: string;
   readonly type: 'stdio';
   readonly allowed_origins: readonly string[];
+};
+
+export type ManifestWriteResult = {
+  readonly browser: BrowserName;
+  readonly kind: InstallKind;
+  readonly manifestPath: string;
+  readonly registrySubkey?: string;
+};
+
+export type ManifestInstallOptions = {
+  readonly registryJsonPath?: string;
+  readonly registry?: RegistryGateway;
 };
 
 const extensionIdToOrigin = (id: string): string => `chrome-extension://${id}/`;
@@ -36,39 +53,119 @@ export const buildHostManifest = (input: {
 const manifestFilename = (manifestName: string): string => `${manifestName}.json`;
 
 const writeAtomic = async (path: string, body: string): Promise<void> => {
-  await mkdir(join(path, '..'), { recursive: true });
+  await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
   await writeFile(tmp, body, 'utf-8');
   await rename(tmp, path);
 };
 
-export const writeHostManifestForBrowsers = async (
-  manifest: HostManifestJson,
-  browsers: readonly InstalledBrowser[],
-): Promise<readonly string[]> => {
-  const body = `${JSON.stringify(manifest, null, 2)}\n`;
-  const written: string[] = [];
-  for (const browser of browsers) {
-    const path = join(browser.manifestDir, manifestFilename(manifest.name));
-    await writeAtomic(path, body);
-    written.push(path);
+const unlinkIfExists = async (path: string): Promise<boolean> => {
+  try {
+    await unlink(path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    return false;
   }
-  return written;
 };
 
-export const removeHostManifestForBrowsers = async (
+const requireRegistryOptions = (
+  installs: readonly BrowserInstall[],
+  options: ManifestInstallOptions,
+): { jsonPath: string; gateway: RegistryGateway } => {
+  if (!options.registryJsonPath) {
+    throw new Error(
+      'manifest_writer: registryJsonPath is required when any install.kind === "registry"',
+    );
+  }
+  if (!options.registry) {
+    throw new Error(
+      'manifest_writer: registry gateway is required when any install.kind === "registry"',
+    );
+  }
+  void installs;
+  return { jsonPath: options.registryJsonPath, gateway: options.registry };
+};
+
+export const installManifestForBrowsers = async (
+  manifest: HostManifestJson,
+  installs: readonly BrowserInstall[],
+  options: ManifestInstallOptions = {},
+): Promise<readonly ManifestWriteResult[]> => {
+  const body = `${JSON.stringify(manifest, null, 2)}\n`;
+  const out: ManifestWriteResult[] = [];
+
+  let registryJsonPathWritten = false;
+  for (const install of installs) {
+    if (install.kind === 'registry') {
+      const { jsonPath, gateway } = requireRegistryOptions(installs, options);
+      if (!registryJsonPathWritten) {
+        await writeAtomic(jsonPath, body);
+        registryJsonPathWritten = true;
+      }
+      await gateway.setDefault(install.registryHive, install.registrySubkey, jsonPath);
+      out.push(
+        Object.freeze({
+          browser: install.browser,
+          kind: 'registry' as const,
+          manifestPath: jsonPath,
+          registrySubkey: install.registrySubkey,
+        }),
+      );
+      continue;
+    }
+    const path = join(install.manifestDir, manifestFilename(manifest.name));
+    await writeAtomic(path, body);
+    out.push(
+      Object.freeze({
+        browser: install.browser,
+        kind: install.kind,
+        manifestPath: path,
+      }),
+    );
+  }
+  return Object.freeze(out);
+};
+
+export const uninstallManifestForBrowsers = async (
   manifestName: string,
-  browsers: readonly InstalledBrowser[],
-): Promise<readonly string[]> => {
-  const removed: string[] = [];
-  for (const browser of browsers) {
-    const path = join(browser.manifestDir, manifestFilename(manifestName));
-    try {
-      await unlink(path);
-      removed.push(path);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  installs: readonly BrowserInstall[],
+  options: ManifestInstallOptions = {},
+): Promise<readonly ManifestWriteResult[]> => {
+  const out: ManifestWriteResult[] = [];
+
+  for (const install of installs) {
+    if (install.kind === 'registry') {
+      const { gateway } = requireRegistryOptions(installs, options);
+      await gateway.removeKey(install.registryHive, install.registrySubkey);
+      out.push(
+        Object.freeze({
+          browser: install.browser,
+          kind: 'registry' as const,
+          manifestPath: options.registryJsonPath ?? '',
+          registrySubkey: install.registrySubkey,
+        }),
+      );
+      continue;
+    }
+    const path = join(install.manifestDir, manifestFilename(manifestName));
+    if (await unlinkIfExists(path)) {
+      out.push(
+        Object.freeze({
+          browser: install.browser,
+          kind: install.kind,
+          manifestPath: path,
+        }),
+      );
     }
   }
-  return removed;
+
+  if (options.registryJsonPath) {
+    const anyRegistry = installs.some((i) => i.kind === 'registry');
+    if (anyRegistry) {
+      await unlinkIfExists(options.registryJsonPath);
+    }
+  }
+
+  return Object.freeze(out);
 };

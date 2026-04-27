@@ -19,6 +19,9 @@ beforeEach(async () => {
   xdgDir = await mkdtemp(join(tmpdir(), 'pwa-debug-tools-'));
   await mkdir(fakeChromeRoot(), { recursive: true });
   vi.stubEnv('XDG_CONFIG_HOME', xdgDir);
+  // Pin HOME to the same isolated dir so snap (~/snap/...) and flatpak
+  // (~/.var/app/...) detection cannot leak the user's real installs.
+  vi.stubEnv('HOME', xdgDir);
 });
 afterEach(async () => {
   vi.unstubAllEnvs();

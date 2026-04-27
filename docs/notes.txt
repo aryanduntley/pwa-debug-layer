@@ -1,46 +1,138 @@
-M3 progress in DB                                                        
-  - 12/13 items complete (item 25 deleted — IPC moved to M4 per scope
-  decision; item 29 stays pending until you confirm the round-trip in the  
-  next session).                                                         
-  - All new code tracked: ~25 files, 10+ types, 30+ functions with         
-  purpose/parameters/returns, 48+ interactions, 3 modules                  
-  (native_messaging, host_state, mcp_server).                              
-  - 4 notes added: evolution note for the IPC→M4 scope cut, deferred notes
-  on session_ping.ts and host_status.ts documenting their M3-skeleton      
-  state, task-context note on item 29 explaining the restart handoff.      
-                                                                         
-  Files just touched                                                       
-  - .mcp.json:23-29 — added pwa-debug server pointing at                 
-  packages/host/dist/main.js.                                              
-  - AIMFP DB: item 28 → completed, evolution + handoff notes added, git
-  state synced.                                                            
-                                                                           
-  For the next session, ask Claude:
-                                                                           
-  ▎ "Set up pwa-debug. The extension ID is                                 
-  ▎ ecjfpagbncgmjcobenecoihnjgcekmfo."                                     
-                                                                           
-  Claude should:                                                         
-  1. Call mcp__pwa_debug__host_status → see registered_extension_ids: []
-  and the next_step pointing at host_register_extension.                   
-  2. Call mcp__pwa_debug__host_register_extension({ extension_id: 
-  "ecjfpagbncgmjcobenecoihnjgcekmfo" }) → manifest written, requiresReload:
-   true.                                                                   
-  3. Tell you to reload the extension at chrome://extensions.
-  4. After reload, your SW console should show the round-trip — pong plus  
-  the 5-second hello push.                                                 
-  5. Call mcp__pwa_debug__host_status again → registeredExtensionIds and   
-  manifestPathsOnDisk both populated; activeConnections still [] with the  
-  M3 note (lands in M4).                                                   
-                                                                         
-  When you confirm the round-trip works, the next session can mark item 29 
-  complete and close M3.     
+M3 progress in DB (after this session)
+  - 7/9 items complete on task 3:
+    - Items 30 (winreg dep), 31 (launcher), 32 (browser_paths refactor),
+      33 (manifest_writer + registry_writer refactor), 34 (rewire tools),
+      35 (tests) — DONE.
+    - Items 29 + 36 (manual snap-Chromium acceptance retest) — PENDING.
+  - Build clean. typecheck clean. 92/92 vitest tests pass.
+  - Evolution note 15 records the M3 scope expansion mid-session
+    (Linux native only -> Linux native+snap+flatpak, macOS, Windows).
 
-  Next session — you do this:                                              
-  1. Restart Claude Code so the new pwa-debug MCP server in .mcp.json    
-  loads.                                                                   
-  2. Tell Claude: "Set up pwa-debug. The extension ID is    
-  ecjfpagbncgmjcobenecoihnjgcekmfo."                                       
-  3. Confirm in your SW console that you see the pong and the 5-second     
-  hello push.                                                            
-  4. The new session can then mark item 29 complete and close M3.
+  What changed in this session (the snap fix in two parts)
+  1. Multi-kind install resolver
+     packages/host/src/native-messaging/browser_paths.ts now exports
+     detectBrowserInstalls(env, platform, exists) that returns
+     BrowserInstall[] discriminated by kind:
+       - 'native'   ~/.config/<browser>/NativeMessagingHosts/
+       - 'snap'     ~/snap/chromium/common/chromium/NativeMessagingHosts/
+       - 'flatpak'  ~/.var/app/<id>/config/<browser>/NativeMessagingHosts/
+                    (with caveat about confinement; user may need
+                    `flatpak override --user --filesystem=host <id>`)
+       - 'registry' Windows HKCU\Software\<vendor>\NativeMessagingHosts\
+                    com.pwa_debug.host (manifest JSON in %APPDATA%\pwa-debug)
+     macOS uses the native variant under
+       ~/Library/Application Support/<vendor>/NativeMessagingHosts/.
+
+  2. Install-time launcher script (the snap-PATH fix)
+     packages/host/src/native-messaging/launcher.ts emits a tiny POSIX sh
+     launcher (or .bat on Windows) that hardcodes process.execPath +
+     dist/main.js. The manifest's `path` field points at the launcher,
+     never at main.js directly. Result: spawn succeeds even when the
+     spawning browser's PATH is stripped (snap, flatpak).
+     Linux launcher path: ~/.config/pwa-debug/bin/pwa-debug-host
+     Windows launcher path: %APPDATA%\pwa-debug\pwa-debug-host.bat
+
+  Plus
+  - registry_writer.ts wraps the winreg npm package as a RegistryGateway
+    interface (test-friendly via injection).
+  - manifest_writer.ts dispatches install/uninstall by install.kind,
+    sharing one %APPDATA% manifest JSON across all Windows registry
+    installs.
+  - All 4 tool handlers rewired (host_register_extension,
+    host_unregister_extension, host_reset, host_status). They now:
+      * detect installs via the new resolver
+      * emit the launcher idempotently before writing manifests
+      * surface flatpak/snap caveats in next_steps[]
+      * report installs[] (with kind) and launcherPath in tool data
+
+  Files just touched
+  - packages/host/package.json: +winreg, +@types/winreg, +rollup commonjs plugin
+  - packages/host/rollup.config.mjs: +commonjs() plugin
+  - packages/host/src/native-messaging/browser_paths.ts: rewritten
+  - packages/host/src/native-messaging/launcher.ts: NEW
+  - packages/host/src/native-messaging/manifest_writer.ts: rewritten
+  - packages/host/src/native-messaging/registry_writer.ts: NEW
+  - packages/host/src/mcp/tools/host_register_extension.ts: rewritten
+  - packages/host/src/mcp/tools/host_unregister_extension.ts: rewritten
+  - packages/host/src/mcp/tools/host_reset.ts: rewritten
+  - packages/host/src/mcp/tools/host_status.ts: rewritten
+  - packages/host/test/native-messaging/browser_paths.test.ts: rewritten
+  - packages/host/test/native-messaging/manifest_writer.test.ts: rewritten
+  - packages/host/test/native-messaging/launcher.test.ts: NEW
+  - packages/host/test/native-messaging/registry_writer.test.ts: NEW
+  - packages/host/test/mcp/tools/tools.test.ts: stub HOME alongside
+    XDG_CONFIG_HOME so detection cannot leak the user's real installs
+
+  IMPORTANT: the pwa-debug MCP server is still running the OLD compiled
+  host. The new dist/main.js is on disk but not loaded. To verify the
+  M3 acceptance round-trip you must:
+
+    Next session — you do this:
+    1. Restart Claude Code so the new pwa-debug MCP server in
+       .mcp.json (which points at packages/host/dist/main.js) loads.
+    2. In the new session, tell Claude:
+         "Set up pwa-debug. The extension ID is
+          ecjfpagbncgmjcobenecoihnjgcekmfo."
+    3. Claude will:
+         a. call host_status -> see registered IDs from this session
+            but no launcher and missing snap manifest entry
+         b. call host_register_extension(id) -> the new code re-runs
+            detection (now finds snap chromium), emits the launcher at
+            ~/.config/pwa-debug/bin/pwa-debug-host, writes manifests
+            into BOTH ~/.config/chromium/... AND
+            ~/snap/chromium/common/chromium/... with manifest.path =
+            launcher path
+         c. tell you to reload the extension at chrome://extensions
+    4. After reload, your snap-Chromium SW console should show:
+         [pwa-debug/sw] connected to host
+         [pwa-debug/sw] pong ...
+       and ~5 seconds later:
+         [pwa-debug/sw] hello ...
+    5. When the round-trip succeeds, items 29 and 36 close together
+       and M3 milestone closes.
+
+  If the snap connect still fails after restart, the most likely cause
+  is the snap home interface not being able to reach the host binary.
+  We're already under $HOME (~/Desktop/Projects/...) which the home
+  interface allows by default, so this should not happen — but if it
+  does, the next move is to inspect snap's syslog for the real spawn
+  error (the SW only sees "Native host has exited.").
+
+
+M3 expanded — 7 of 9 items closed, 2 manual-retest items pending.        
+  
+  What landed:                                                             
+  - browser_paths.ts — multi-kind resolver: Linux native + snap + flatpak,
+  macOS Application Support, Windows HKCU registry. Returns discriminated  
+  BrowserInstall[] with optional caveat per install kind.                
+  - launcher.ts (new) — emits a POSIX sh (or Windows .bat) launcher that   
+  hardcodes process.execPath, so spawn no longer depends on the browser's
+  PATH. This is the actual snap fix.                                       
+  - registry_writer.ts (new) — winreg-backed RegistryGateway with injection
+   point for tests.                                                        
+  - manifest_writer.ts — rewritten to dispatch by install kind, with a     
+  single shared %APPDATA% JSON across all Windows registry vendors.      
+  - All four tool handlers rewired — detect → emit launcher → build        
+  manifest with launcher path → install per-kind. Caveats surface in
+  next_steps[].                                                            
+  - Tests — pnpm test → 92/92 passing. Tests cover Linux    
+  native+snap+flatpak detection, macOS, Windows registry records, launcher 
+  script generation/write, and dispatch with mocked RegistryGateway.       
+                                                                         
+  Files changed: package.json, rollup.config.mjs, 4 native-messaging source
+   files, 4 tool source files, 4 test files. AIMFP DB fully tracked: items 
+  30–35 marked complete, evolution note 15 records the scope expansion,  
+  task_context note 31 records the handoff.                                
+                                                            
+  The catch — the running pwa-debug MCP server is still the OLD compiled   
+  host. New dist/main.js is on disk but not loaded by your current Claude
+  Code process.                                                            
+                                                            
+  Your next move:                                                        
+  1. Restart Claude Code.
+  2. In the new session: "Set up pwa-debug. The extension ID is            
+  ecjfpagbncgmjcobenecoihnjgcekmfo."                            
+  3. Reload the snap-Chromium extension at chrome://extensions when        
+  prompted.                                                        
+  4. Watch the SW console for [pwa-debug/sw] connected to host → pong → 5  
+  seconds later hello. Report back.  
