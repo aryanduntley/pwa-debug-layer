@@ -6,7 +6,6 @@ const UNSOLICITED_DELAY_MS = 5000;
 
 export type RunNmhInput = {
   readonly origin: string;
-  readonly manifestPath: string;
 };
 
 export const respondToMessage = (
@@ -31,7 +30,7 @@ export const respondToMessage = (
 export const runNmhMode = (input: RunNmhInput): Promise<void> =>
   new Promise<void>((resolve, reject) => {
     stderr.write(
-      `[pwa-debug-host nmh] origin=${input.origin} manifest=${input.manifestPath} pid=${process.pid}\n`,
+      `[pwa-debug-host nmh] origin=${input.origin} pid=${process.pid}\n`,
     );
 
     const reader = createFrameReader();

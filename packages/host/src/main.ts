@@ -3,17 +3,17 @@ import { runMcpMode } from './modes/mcp_mode.js';
 
 export type RunMode = 'nmh' | 'mcp';
 
-export const detectMode = (argv: readonly string[]): RunMode => {
-  const arg1 = argv[1];
-  return typeof arg1 === 'string' && arg1.startsWith('chrome-extension://') ? 'nmh' : 'mcp';
+// userArgs are process.argv.slice(2) — i.e. everything after [nodePath, scriptPath].
+// Chrome/Brave native-messaging passes the calling extension's origin as the first
+// user arg on Linux/macOS; on Windows it appends a `--parent-window=<HWND>` arg.
+export const detectMode = (userArgs: readonly string[]): RunMode => {
+  const a0 = userArgs[0];
+  return typeof a0 === 'string' && a0.startsWith('chrome-extension://') ? 'nmh' : 'mcp';
 };
 
-export const main = async (argv: readonly string[] = process.argv): Promise<void> => {
-  if (detectMode(argv) === 'nmh') {
-    await runNmhMode({
-      origin: argv[1] ?? '',
-      manifestPath: argv[2] ?? '',
-    });
+export const main = async (userArgs: readonly string[] = process.argv.slice(2)): Promise<void> => {
+  if (detectMode(userArgs) === 'nmh') {
+    await runNmhMode({ origin: userArgs[0] ?? '' });
     return;
   }
   await runMcpMode();
