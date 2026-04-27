@@ -10,13 +10,14 @@
   "files": ["dist"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "rollup -c",
+    "build": "rollup -c && chmod +x dist/main.js",
     "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@pwa-debug/shared": "workspace:*",
-    "better-sqlite3": "^11.5.0"
+    "better-sqlite3": "^11.5.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.3.0",

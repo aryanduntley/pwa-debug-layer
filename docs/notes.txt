@@ -1,0 +1,46 @@
+M3 progress in DB                                                        
+  - 12/13 items complete (item 25 deleted — IPC moved to M4 per scope
+  decision; item 29 stays pending until you confirm the round-trip in the  
+  next session).                                                         
+  - All new code tracked: ~25 files, 10+ types, 30+ functions with         
+  purpose/parameters/returns, 48+ interactions, 3 modules                  
+  (native_messaging, host_state, mcp_server).                              
+  - 4 notes added: evolution note for the IPC→M4 scope cut, deferred notes
+  on session_ping.ts and host_status.ts documenting their M3-skeleton      
+  state, task-context note on item 29 explaining the restart handoff.      
+                                                                         
+  Files just touched                                                       
+  - .mcp.json:23-29 — added pwa-debug server pointing at                 
+  packages/host/dist/main.js.                                              
+  - AIMFP DB: item 28 → completed, evolution + handoff notes added, git
+  state synced.                                                            
+                                                                           
+  For the next session, ask Claude:
+                                                                           
+  ▎ "Set up pwa-debug. The extension ID is                                 
+  ▎ ecjfpagbncgmjcobenecoihnjgcekmfo."                                     
+                                                                           
+  Claude should:                                                         
+  1. Call mcp__pwa_debug__host_status → see registered_extension_ids: []
+  and the next_step pointing at host_register_extension.                   
+  2. Call mcp__pwa_debug__host_register_extension({ extension_id: 
+  "ecjfpagbncgmjcobenecoihnjgcekmfo" }) → manifest written, requiresReload:
+   true.                                                                   
+  3. Tell you to reload the extension at chrome://extensions.
+  4. After reload, your SW console should show the round-trip — pong plus  
+  the 5-second hello push.                                                 
+  5. Call mcp__pwa_debug__host_status again → registeredExtensionIds and   
+  manifestPathsOnDisk both populated; activeConnections still [] with the  
+  M3 note (lands in M4).                                                   
+                                                                         
+  When you confirm the round-trip works, the next session can mark item 29 
+  complete and close M3.     
+
+  Next session — you do this:                                              
+  1. Restart Claude Code so the new pwa-debug MCP server in .mcp.json    
+  loads.                                                                   
+  2. Tell Claude: "Set up pwa-debug. The extension ID is    
+  ecjfpagbncgmjcobenecoihnjgcekmfo."                                       
+  3. Confirm in your SW console that you see the pong and the 5-second     
+  hello push.                                                            
+  4. The new session can then mark item 29 complete and close M3.

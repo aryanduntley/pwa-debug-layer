@@ -17,6 +17,14 @@
         "chrome-devtools-mcp@latest"
       ],
       "env": {}
+    },
+    "pwa-debug": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/home/eveningb4dawn/Desktop/Projects/pwa-debug-layer/packages/host/dist/main.js"
+      ],
+      "env": {}
     }
   }
 }
