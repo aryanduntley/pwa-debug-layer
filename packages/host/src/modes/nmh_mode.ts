@@ -1,73 +1,114 @@
 import { stdin, stdout, stderr } from 'node:process';
 import { createFrameReader, frameMessage } from '../native-messaging/framing.js';
-
-const HOST_VERSION = '0.0.0-m3';
-const UNSOLICITED_DELAY_MS = 5000;
+import {
+  parseIpcEnvelope,
+  type IpcEnvelope,
+} from '../mcp/ipc/envelope.js';
+import { createIpcClient, type IpcClient } from '../mcp/ipc/ipc_client.js';
+import { defaultSocketPath } from '../mcp/ipc/socket_path.js';
 
 export type RunNmhInput = {
   readonly origin: string;
 };
 
-export const respondToMessage = (
-  msg: unknown,
-  ctx: { readonly hostVersion: string; readonly pid: number },
-): unknown => {
-  if (typeof msg !== 'object' || msg === null) {
-    return { kind: 'error', reason: 'message-not-object' };
+export const extensionIdFromOrigin = (origin: string): string => {
+  const stripped = origin
+    .replace(/^chrome-extension:\/\//, '')
+    .replace(/\/$/, '');
+  if (
+    stripped.length === 0 ||
+    stripped.includes('/') ||
+    stripped.includes(':')
+  ) {
+    throw new Error(
+      `nmh_mode: cannot derive extensionId from origin ${origin}`,
+    );
   }
-  const m = msg as { kind?: unknown; id?: unknown };
-  if (m.kind === 'ping' && typeof m.id === 'string') {
-    return {
-      kind: 'pong',
-      echo: m.id,
-      hostVersion: ctx.hostVersion,
-      pid: ctx.pid,
-    };
-  }
-  return { kind: 'error', reason: 'unknown-kind', got: m.kind };
+  return stripped;
 };
 
 export const runNmhMode = (input: RunNmhInput): Promise<void> =>
   new Promise<void>((resolve, reject) => {
+    let extensionId: string;
+    try {
+      extensionId = extensionIdFromOrigin(input.origin);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const socketPath = defaultSocketPath();
+
     stderr.write(
-      `[pwa-debug-host nmh] origin=${input.origin} pid=${process.pid}\n`,
+      `[pwa-debug-host nmh] origin=${input.origin} extensionId=${extensionId} pid=${process.pid}\n`,
     );
 
     const reader = createFrameReader();
-    const ctx = { hostVersion: HOST_VERSION, pid: process.pid };
+    let settled = false;
+    let client: IpcClient | null = null;
 
-    const writeFrame = (value: unknown): void => {
-      stdout.write(frameMessage(value));
+    const finish = (err?: Error): void => {
+      if (settled) return;
+      settled = true;
+      stdin.removeAllListeners('data');
+      stdin.removeAllListeners('end');
+      stdin.removeAllListeners('error');
+      client?.close();
+      if (err) reject(err);
+      else resolve();
     };
 
-    const onData = (chunk: Buffer): void => {
+    const onIpcEnvelope = (env: IpcEnvelope): void => {
       try {
-        const arr = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-        for (const msg of reader.push(arr)) {
-          writeFrame(respondToMessage(msg, ctx));
-        }
+        stdout.write(frameMessage(env));
       } catch (err) {
-        reject(err);
+        finish(err as Error);
       }
     };
 
-    stdin.on('data', onData);
-    stdin.once('end', () => {
-      stderr.write('[pwa-debug-host nmh] stdin EOF\n');
-      resolve();
-    });
-    stdin.once('error', reject);
+    const onIpcClose = (): void => {
+      stderr.write('[pwa-debug-host nmh] ipc closed; exiting\n');
+      finish();
+    };
 
-    setTimeout(() => {
-      try {
-        writeFrame({
-          kind: 'hello',
-          at: new Date().toISOString(),
-          source: 'unsolicited-push',
-          hostVersion: HOST_VERSION,
+    createIpcClient({
+      socketPath,
+      extensionId,
+      onEnvelope: onIpcEnvelope,
+      onClose: onIpcClose,
+    })
+      .then((c) => {
+        client = c;
+        stdin.on('data', (chunk: Buffer) => {
+          try {
+            const arr = new Uint8Array(
+              chunk.buffer,
+              chunk.byteOffset,
+              chunk.byteLength,
+            );
+            for (const raw of reader.push(arr)) {
+              const env = parseIpcEnvelope(raw);
+              const result = c.send(env);
+              if (!result.ok) {
+                finish(
+                  new Error(`nmh_mode: ipc send failed: ${result.error}`),
+                );
+                return;
+              }
+            }
+          } catch (err) {
+            finish(err as Error);
+          }
         });
-      } catch (err) {
-        reject(err);
-      }
-    }, UNSOLICITED_DELAY_MS);
+        stdin.once('end', () => {
+          stderr.write('[pwa-debug-host nmh] stdin EOF\n');
+          finish();
+        });
+        stdin.once('error', (err) => finish(err));
+      })
+      .catch((err: Error) => {
+        stderr.write(
+          `[pwa-debug-host nmh] ipc connect failed: ${err.message}\n`,
+        );
+        finish(err);
+      });
   });

@@ -1,41 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import { respondToMessage } from '../../src/modes/nmh_mode.js';
+import { extensionIdFromOrigin } from '../../src/modes/nmh_mode.js';
 
-const ctx = { hostVersion: 'test-1.2.3', pid: 4242 } as const;
-
-describe('respondToMessage', () => {
-  it('responds to a well-formed ping with pong + metadata', () => {
-    const r = respondToMessage({ kind: 'ping', id: 'abc' }, ctx);
-    expect(r).toEqual({ kind: 'pong', echo: 'abc', hostVersion: 'test-1.2.3', pid: 4242 });
+describe('extensionIdFromOrigin', () => {
+  it('extracts id from a typical chrome-extension origin', () => {
+    expect(extensionIdFromOrigin('chrome-extension://abcdefghijklmnop/')).toBe(
+      'abcdefghijklmnop',
+    );
   });
 
-  it('returns error envelope when message is not an object', () => {
-    expect(respondToMessage(null, ctx)).toEqual({ kind: 'error', reason: 'message-not-object' });
-    expect(respondToMessage('hi', ctx)).toEqual({ kind: 'error', reason: 'message-not-object' });
-    expect(respondToMessage(7, ctx)).toEqual({ kind: 'error', reason: 'message-not-object' });
+  it('accepts an origin without a trailing slash', () => {
+    expect(extensionIdFromOrigin('chrome-extension://abcdef')).toBe('abcdef');
   });
 
-  it('returns error envelope on unknown kind', () => {
-    expect(respondToMessage({ kind: 'frobnicate' }, ctx)).toEqual({
-      kind: 'error',
-      reason: 'unknown-kind',
-      got: 'frobnicate',
-    });
+  it('rejects an origin missing the chrome-extension scheme', () => {
+    expect(() => extensionIdFromOrigin('https://example.com/')).toThrow(
+      /cannot derive extensionId/,
+    );
   });
 
-  it('returns error envelope when ping is missing id', () => {
-    expect(respondToMessage({ kind: 'ping' }, ctx)).toEqual({
-      kind: 'error',
-      reason: 'unknown-kind',
-      got: 'ping',
-    });
+  it('rejects an empty origin', () => {
+    expect(() => extensionIdFromOrigin('')).toThrow(/cannot derive extensionId/);
   });
 
-  it('returns error envelope when ping id is not a string', () => {
-    expect(respondToMessage({ kind: 'ping', id: 42 }, ctx)).toEqual({
-      kind: 'error',
-      reason: 'unknown-kind',
-      got: 'ping',
-    });
+  it('rejects an origin with a path beyond the id', () => {
+    expect(() =>
+      extensionIdFromOrigin('chrome-extension://abc/extra/path'),
+    ).toThrow(/cannot derive extensionId/);
+  });
+
+  it('rejects an origin with port-style colon in the id position', () => {
+    expect(() => extensionIdFromOrigin('chrome-extension://host:8080/')).toThrow(
+      /cannot derive extensionId/,
+    );
   });
 });
