@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   okResponse,
   errorResponse,
+  type ToolContext,
   type ToolDef,
   type ToolResponse,
 } from '../tool_registry.js';
@@ -40,7 +41,10 @@ const safeLauncherPath = (): string | null => {
   }
 };
 
-export const hostStatusHandler = async (): Promise<ToolResponse> => {
+export const hostStatusHandler = async (
+  _args: Record<string, never>,
+  ctx: ToolContext,
+): Promise<ToolResponse> => {
   try {
     const statePath = defaultStatePath();
     const state = await loadHostState(statePath);
@@ -82,6 +86,8 @@ export const hostStatusHandler = async (): Promise<ToolResponse> => {
     const launcherPath = safeLauncherPath();
     const launcherOnDisk = launcherPath !== null && (await fileExists(launcherPath));
 
+    const activeConnections = ctx.ipcServer.listConnections();
+
     const data = {
       hostBinaryPath: process.argv[1] ?? '',
       stateFilePath: statePath,
@@ -91,9 +97,7 @@ export const hostStatusHandler = async (): Promise<ToolResponse> => {
       launcherOnDisk,
       installs: installReports,
       detectedBrowsers: installs.map((i) => i.browser),
-      activeConnections: [] as readonly { extensionId: string; connectedAt: string }[],
-      m3Note:
-        'activeConnections is always [] until the IPC bridge between MCP-mode and NMH-mode ships (scope-cut from M3 to M4).',
+      activeConnections,
     };
 
     const next_steps: string[] = [];
@@ -109,9 +113,13 @@ export const hostStatusHandler = async (): Promise<ToolResponse> => {
       next_steps.push(
         'Manifest exists on disk but the launcher script is missing. Re-run host_register_extension with an existing ID to refresh the launcher.',
       );
+    } else if (activeConnections.length === 0) {
+      next_steps.push(
+        'Manifest is installed and at least one extension ID is registered, but no NMH instance is currently connected. Ask the user to reload the extension at chrome://extensions so Chrome respawns the NMH; activeConnections will populate once the SW reconnects.',
+      );
     } else {
       next_steps.push(
-        'Manifest is installed, launcher is present, and at least one extension ID is registered. Once IPC is wired (M4), activeConnections will populate; until then, run session_ping to surface the M3-skeleton state.',
+        `Manifest is installed, launcher is present, and ${activeConnections.length} NMH connection(s) are live. Call session_ping (optionally with extension_id) for a full round-trip via the IPC bridge.`,
       );
     }
     for (const r of installReports) {

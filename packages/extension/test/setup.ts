@@ -10,6 +10,10 @@ vi.stubGlobal('chrome', {
       postMessage: vi.fn(),
       disconnect: vi.fn(),
     }),
+    getManifest: vi.fn().mockReturnValue({ version: '0.0.0-test' }),
     lastError: undefined,
+  },
+  tabs: {
+    query: vi.fn().mockResolvedValue([{ id: 7, active: true }]),
   },
 });

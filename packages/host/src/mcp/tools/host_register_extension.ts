@@ -136,7 +136,7 @@ export const hostRegisterExtensionHandler = async (
         'New extension ID registered. Tell the user: "Reload the PWA Debug Layer extension at chrome://extensions (click the circular reload icon on its card)" so Chrome re-reads allowed_origins.',
       );
       next_steps.push(
-        'After ~3s, call host_status to confirm the manifestPathsOnDisk list includes the written path. (activeConnections still always [] in M3-skeleton; full round-trip lands when IPC ships in M4.)',
+        'After ~3s, call host_status to confirm the manifestPathsOnDisk list includes the written path and that activeConnections shows the NMH instance once the user has reloaded the extension. Then call session_ping for an end-to-end round-trip check.',
       );
     } else {
       next_steps.push(

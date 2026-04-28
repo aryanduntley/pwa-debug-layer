@@ -1,5 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { IpcServer } from './ipc/ipc_server.js';
+
+export type ToolContext = Readonly<{
+  ipcServer: IpcServer;
+  hostVersion: string;
+}>;
 
 export type ToolResponse = Readonly<{
   ok: boolean;
@@ -12,7 +18,10 @@ export type ToolDef<Args extends z.ZodRawShape = z.ZodRawShape> = Readonly<{
   name: string;
   description: string;
   inputSchema: Args;
-  handler: (args: z.infer<z.ZodObject<Args>>) => Promise<ToolResponse>;
+  handler: (
+    args: z.infer<z.ZodObject<Args>>,
+    ctx: ToolContext,
+  ) => Promise<ToolResponse>;
 }>;
 
 export const okResponse = (
@@ -30,6 +39,7 @@ export const errorResponse = (
 export const registerTools = (
   server: McpServer,
   tools: readonly ToolDef[],
+  ctx: ToolContext,
 ): void => {
   for (const tool of tools) {
     // The SDK's registerTool generics are tied to the per-call inputSchema; we
@@ -42,7 +52,7 @@ export const registerTools = (
         inputSchema: tool.inputSchema,
       },
       async (args: unknown) => {
-        const response = await tool.handler(args as never);
+        const response = await tool.handler(args as never, ctx);
         return {
           content: [
             { type: 'text' as const, text: JSON.stringify(response, null, 2) },

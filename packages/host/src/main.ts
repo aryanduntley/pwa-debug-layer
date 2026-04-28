@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { runNmhMode } from './modes/nmh_mode.js';
 import { runMcpMode } from './modes/mcp_mode.js';
 
@@ -19,7 +21,19 @@ export const main = async (userArgs: readonly string[] = process.argv.slice(2)):
   await runMcpMode();
 };
 
-main().catch((err) => {
-  process.stderr.write(`[pwa-debug-host] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-  process.exit(1);
-});
+const isEntryPoint = (): boolean => {
+  const entry = process.argv[1];
+  if (typeof entry !== 'string' || entry === '') return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
+  } catch {
+    return false;
+  }
+};
+
+if (isEntryPoint()) {
+  main().catch((err) => {
+    process.stderr.write(`[pwa-debug-host] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+}

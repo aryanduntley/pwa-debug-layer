@@ -5,7 +5,26 @@ import {
   okResponse,
   errorResponse,
   type ToolDef,
+  type ToolContext,
 } from '../../src/mcp/tool_registry.js';
+import type { IpcServer } from '../../src/mcp/ipc/ipc_server.js';
+
+const stubIpcServer: IpcServer = Object.freeze({
+  close: async () => {},
+  sendTo: () => Object.freeze({ ok: true as const }),
+  request: async () =>
+    Object.freeze({
+      type: 'response' as const,
+      requestId: 'stub',
+      payload: {},
+    }),
+  listConnections: () => Object.freeze([]),
+});
+
+const stubCtx: ToolContext = Object.freeze({
+  ipcServer: stubIpcServer,
+  hostVersion: '0.0.0-test',
+});
 
 describe('okResponse / errorResponse', () => {
   it('okResponse builds the success envelope and freezes it', () => {
@@ -55,7 +74,7 @@ describe('registerTools', () => {
         okResponse({ echoed: args.id }, ['call other tool next']),
     };
 
-    registerTools(fakeServer, [tool]);
+    registerTools(fakeServer, [tool], stubCtx);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]!.name).toBe('test_tool');

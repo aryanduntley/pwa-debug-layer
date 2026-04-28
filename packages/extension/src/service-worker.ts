@@ -1,3 +1,5 @@
+import { isSwRequestEnvelope, routeRequest } from './request_router.js';
+
 const HOST_NAME = 'com.pwa_debug.host';
 
 const logSetupHint = (extId: string, errorMessage?: string): void => {
@@ -23,6 +25,27 @@ const connectNativeHost = (): void => {
   }
 
   port.onMessage.addListener((msg) => {
+    if (isSwRequestEnvelope(msg)) {
+      routeRequest(msg).then(
+        (response) => {
+          try {
+            port.postMessage(response);
+          } catch (err) {
+            console.warn(
+              '[pwa-debug/sw] postMessage failed:',
+              (err as Error).message,
+            );
+          }
+        },
+        (err: Error) => {
+          console.warn(
+            '[pwa-debug/sw] routeRequest rejected (should not happen):',
+            err.message,
+          );
+        },
+      );
+      return;
+    }
     console.log('[pwa-debug/sw] from host:', msg);
   });
 
@@ -37,13 +60,6 @@ const connectNativeHost = (): void => {
       console.log('[pwa-debug/sw] native port disconnected (clean)');
     }
   });
-
-  try {
-    port.postMessage({ kind: 'ping', id: `boot-${Date.now()}` });
-    console.log('[pwa-debug/sw] ping sent to native host');
-  } catch (e) {
-    console.warn('[pwa-debug/sw] failed to send initial ping:', (e as Error).message);
-  }
 };
 
 export const bootstrap = (): void => {
