@@ -1,3 +1,6 @@
+import { dispatchToTab } from './sw_tab_dispatch/sw_tab_dispatch.js';
+import type { SessionPingPayload } from './page_bridge/page_dispatch.js';
+
 export type SwRequestEnvelope = {
   readonly type: 'request';
   readonly requestId: string;
@@ -25,6 +28,27 @@ export const isSwRequestEnvelope = (m: unknown): m is SwRequestEnvelope => {
   );
 };
 
+type SessionPingResult = {
+  readonly extensionVersion: string;
+  readonly attachedTabId: number | null;
+  readonly pageWorld: SessionPingPayload | null;
+  readonly pageWorldError?: string;
+};
+
+const fetchPageWorld = async (
+  tabId: number,
+): Promise<{ pageWorld: SessionPingPayload | null; pageWorldError?: string }> => {
+  try {
+    const response = await dispatchToTab(tabId, { tool: 'session_ping' });
+    if (response.error) {
+      return { pageWorld: null, pageWorldError: response.error.message };
+    }
+    return { pageWorld: response.payload as SessionPingPayload };
+  } catch (err) {
+    return { pageWorld: null, pageWorldError: (err as Error).message };
+  }
+};
+
 const handleSessionPing: RequestHandler = async () => {
   const tabs = await chrome.tabs.query({
     active: true,
@@ -32,7 +56,19 @@ const handleSessionPing: RequestHandler = async () => {
   });
   const attachedTabId = tabs[0]?.id ?? null;
   const extensionVersion = chrome.runtime.getManifest().version;
-  return { extensionVersion, attachedTabId };
+  const pageWorldResult =
+    attachedTabId !== null
+      ? await fetchPageWorld(attachedTabId)
+      : { pageWorld: null, pageWorldError: 'no active tab' };
+  const result: SessionPingResult = {
+    extensionVersion,
+    attachedTabId,
+    pageWorld: pageWorldResult.pageWorld,
+    ...(pageWorldResult.pageWorldError !== undefined
+      ? { pageWorldError: pageWorldResult.pageWorldError }
+      : {}),
+  };
+  return result;
 };
 
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({

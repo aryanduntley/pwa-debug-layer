@@ -58,6 +58,33 @@ const readPayloadNumber = (payload: unknown, key: string): number | null => {
   return typeof v === 'number' ? v : null;
 };
 
+type PageWorldSnapshot = {
+  readonly url: string;
+  readonly title: string;
+  readonly readyState: 'loading' | 'interactive' | 'complete';
+};
+
+const readPageWorld = (payload: unknown): PageWorldSnapshot | null => {
+  if (payload === null || typeof payload !== 'object') return null;
+  const v = (payload as Record<string, unknown>)['pageWorld'];
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'object') return null;
+  const obj = v as Record<string, unknown>;
+  const url = obj['url'];
+  const title = obj['title'];
+  const readyState = obj['readyState'];
+  if (typeof url !== 'string') return null;
+  if (typeof title !== 'string') return null;
+  if (
+    readyState !== 'loading' &&
+    readyState !== 'interactive' &&
+    readyState !== 'complete'
+  ) {
+    return null;
+  }
+  return Object.freeze({ url, title, readyState });
+};
+
 export const sessionPingHandler = async (
   args: z.infer<z.ZodObject<typeof inputSchema>>,
   ctx: ToolContext,
@@ -101,23 +128,35 @@ export const sessionPingHandler = async (
     );
   }
 
+  const pageWorld = readPageWorld(response.payload);
+  const pageWorldError = readPayloadString(response.payload, 'pageWorldError');
+
   const data = {
     hostVersion: ctx.hostVersion,
     extensionVersion: readPayloadString(response.payload, 'extensionVersion'),
     attachedTabId: readPayloadNumber(response.payload, 'attachedTabId'),
     extensionId: target.extensionId,
     latencyMs,
+    pageWorld,
+    ...(pageWorldError !== null ? { pageWorldError } : {}),
   };
 
-  return okResponse(data, [
-    'Round-trip MCP→IPC→NMH→SW completed. extensionVersion and attachedTabId reflect the SW response — if either is null, the SW responder may not yet implement that field.',
-  ]);
+  const nextSteps: string[] = [
+    'Round-trip MCP→IPC→NMH→SW→CS→page-world completed. extensionVersion and attachedTabId reflect the SW response; pageWorld carries url/title/readyState read from the active tab. If pageWorld is null and pageWorldError is set, the SW round-trip succeeded but the page-bridge half failed — see the next hint.',
+  ];
+  if (pageWorld === null) {
+    nextSteps.push(
+      'pageWorld is null. Most likely cause: the page tab loaded before the content_scripts entries attached (rare with run_at:document_start, but happens on chrome:// pages and the chrome web store where content scripts cannot run). Try a normal http(s) tab. Less likely: the content script crashed — check the page tab DevTools console (NOT the SW console) for [pwa-debug/cs] and [pwa-debug/page] log lines and any errors.',
+    );
+  }
+
+  return okResponse(data, nextSteps);
 };
 
 export const sessionPingTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'session_ping',
   description:
-    'Sends a ping through the full MCP → IPC → NMH → SW chain and returns the round-trip metadata: { hostVersion, extensionVersion, attachedTabId, extensionId, latencyMs }. With no args, targets the single connected NMH (errors if zero or multiple). Pass extension_id to target a specific extension. CALL host_status FIRST to see which extensions are currently connected.',
+    "Sends a ping through the full MCP → IPC → NMH → SW → CS → page-world chain and returns the round-trip metadata: { hostVersion, extensionVersion, attachedTabId, extensionId, latencyMs, pageWorld, pageWorldError? }. pageWorld is { url, title, readyState } read live from the active tab's MAIN-world page-world script — data the SW alone cannot produce. pageWorld is null with pageWorldError set when the SW round-trip succeeded but the page-bridge half failed (no active tab, content script not attached, page-world timeout). With no args, targets the single connected NMH (errors if zero or multiple). Pass extension_id to target a specific extension. CALL host_status FIRST to see which extensions are currently connected.",
   inputSchema,
   handler: sessionPingHandler,
 });

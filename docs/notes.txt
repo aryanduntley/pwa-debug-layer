@@ -1,0 +1,23 @@
+Steps for item 57:                                                       
+                                                            
+  1. Reload the extension at chrome://extensions (extension id             
+  ecjfpagbncgmjcobenecoihnjgcekmfo).
+  2. Fully quit and relaunch Claude Code — per note 40, the MCP-mode host  
+  is long-lived and only picks up the new dist/main.js on relaunch.        
+  3. Open any normal http(s) tab (e.g. https://example.com or any of your
+  PWAs). chrome://, the extension store, and about:blank won't work because
+   content scripts can't attach there.                      
+  4. From the new Claude Code session, call mcp__pwa-debug__session_ping   
+  (no args).                                                               
+   
+  Expected — ok:true with:                                                 
+  data.pageWorld = { url: "<that tab's URL>", title: "<that tab's title>",
+  readyState: "complete" }                                                 
+  data.pageWorldError absent                                               
+                                                                           
+  Plus the M4 fields (hostVersion, extensionVersion, attachedTabId,        
+  extensionId, latencyMs).                                                 
+   
+  If pageWorld is null, the response's next_steps will say "check the page 
+  tab DevTools (NOT the SW console) for [pwa-debug/cs] and [pwa-debug/page]
+   log lines" — paste those if you see issues.    

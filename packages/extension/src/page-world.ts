@@ -1,3 +1,6 @@
+import { isInboundCsToPage } from './page_bridge/protocol.js';
+import { dispatchPageRequest } from './page_bridge/page_dispatch.js';
+
 type FrameworkHookProbe = {
   readonly react: boolean;
   readonly vue: boolean;
@@ -67,7 +70,26 @@ const merge = (
   redux: early.redux,
 });
 
+const installBridgeListener = (): void => {
+  window.addEventListener('message', (event) => {
+    if (!isInboundCsToPage(event)) return;
+    dispatchPageRequest(event.data).then(
+      (response) => {
+        window.postMessage(response, window.location.origin);
+      },
+      (err: Error) => {
+        console.warn(
+          '[pwa-debug/page] dispatchPageRequest rejected (should not happen):',
+          err.message,
+        );
+      },
+    );
+  });
+};
+
 export const bootstrap = (): void => {
+  installBridgeListener();
+
   const early = probeGlobals();
   console.log('[pwa-debug/page] world=MAIN, hooks(early)=', early);
 

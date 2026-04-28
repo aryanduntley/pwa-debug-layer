@@ -4,6 +4,7 @@ vi.stubGlobal('chrome', {
   runtime: {
     id: 'test-extension-id-aabbccddeeff00112233445566778899',
     onInstalled: { addListener: vi.fn() },
+    onMessage: { addListener: vi.fn() },
     connectNative: vi.fn().mockReturnValue({
       onMessage: { addListener: vi.fn() },
       onDisconnect: { addListener: vi.fn() },
@@ -15,5 +16,12 @@ vi.stubGlobal('chrome', {
   },
   tabs: {
     query: vi.fn().mockResolvedValue([{ id: 7, active: true }]),
+    sendMessage: vi.fn().mockResolvedValue({
+      payload: {
+        url: 'https://test.example/',
+        title: 'Test Page',
+        readyState: 'complete',
+      },
+    }),
   },
 });
