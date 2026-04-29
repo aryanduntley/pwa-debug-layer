@@ -1,31 +1,41 @@
-Suite: 87 extension tests + 161 host tests = 248 total, all green. pnpm  
-  -r build clean. dist/ rebuilt with the new captures wired in.            
-                                                                           
-  New tracked structure:                                                   
-  - Module 8 captures/ (4 files): types, serializer, console capture,
-  integration test                                                         
-  - Module 9 sw_event_sink/ (2 files): sink + test
-  - Modified: protocol.ts, cs_dispatcher.ts, page-world.ts,                
-  service-worker.ts                                                        
-                                                                           
-  Manual smoke (note 47, deferred on task 7):                              
-                                                                           
-  1. Reload extension at chrome://extensions (id                           
-  ecjfpagbncgmjcobenecoihnjgcekmfo).                                       
-  2. Open chainsale.app tab with Brave Shields off (per note 45).          
-  3. Open both the page DevTools (F12) and SW console.                     
-  4. Run console.log('hello', { x: 1 }) in the page DevTools.              
-  5. Expect SW console to show [pwa-debug/sw] event console { kind:        
-  'console', level: 'log', args: ['hello', { x: 1 }], ts, frameUrl,        
-  frameKey: 'top' } and the page DevTools to keep showing the original log.
-  6. Try console.warn('boom') — SW event should include a stack field.     
-  7. Try console.log('big', 'x'.repeat(20000)) — args[1] should be { 
-  __type: 'Truncated', approxSize: ~20002, max: 16384 }.                   
-   
-  When all three pass, I'll close note 47, task 7, milestone 9, and Path 2 
-  advances to M10.
+ Path 9 renamed "Public Release Orchestration & Documentation" with       
+  architecture-locked description. Was just "Installer and Documentation";
+  scope expanded to cover the launcher tool + chrome-devtools-mcp          
+  coexistence model.                                        
+                                                                         
+  Note 48 (evolution, ref Path 9) — full record of the 8 architecture      
+  decisions made today: standalone MCP (no proxy), launcher tool with three
+   modes, chrome-devtools-mcp detection-not-required, extension presence   
+  checks per mode, extension dist bundled with host npm package,
+  system-default browser auto-detect, pdl_* naming, Chrome process-level 
+  debug-port constraint accepted as fundamental.
 
-  Watchdog flagged one item to ignore:                                     
-  packages/extension/vitest.config.ts.timestamp-*.mjs — that's a
-  vitest-generated temp file, not real source. Already gitignored. No      
-  action needed.      
+  Note 49 (research, ref Path 9) — debug-findings reference for Path 9     
+  implementation: configuration gotchas (--disable-extensions Puppeteer
+  default, .mcp.json restart-required, debug-port process lock, Brave's IPC
+   relay behavior), what AI can/can't see without chrome-devtools-mcp,
+  verification probe sequence (host_status → curl :9222 → session_ping), 
+  known failure mode (CS doesn't re-inject after extension reload), what we
+   tested in .mcp.json today and reverted.
+
+  Note 47 updated — appended today's smoke-test attempt: host_status ✅,   
+  curl :9222 empty (port silently dropped on Brave's IPC relay),
+  session_ping returned pageWorld:null with the "Receiving end does not    
+  exist" error on both chainsale tabs after focus changes. Diagnosis +
+  next-attempt sequence (hard-refresh chainsale → re-ping → if still null,
+  capture page DevTools [pwa-debug/cs]/[pwa-debug/page] lines) is in the
+  note.
+
+  5 new milestones on Path 9 (M14–M18):
+  - M14: Browser binary discovery & system-default detection
+  - M15: pdl_launch_browser — mode='existing' (graceful degradation triad) 
+  - M16: pdl_launch_browser — sandbox-persistent + sandbox-temp modes     
+  - M17: pdl_check_setup + pdl_browser_status + pdl_install_extension tools
+  - M18: Setup matrix README + chrome-devtools-mcp coexistence docs        
+                                                                           
+  Still pending: Task 7 (M9 smoke), milestone 9 not closed. Path 2 (Core   
+  Capture) remains active. Path 9 work picks up after Path 2 wraps, or     
+  pulls forward when you decide.                                           
+                                                                           
+  When you want to resume, the smoke test reproduces from note 47's        
+  appended sequence — hard-refresh chainsale and we re-ping.   
