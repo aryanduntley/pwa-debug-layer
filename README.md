@@ -151,6 +151,19 @@ When the round-trip works you'll see in the SW console (`Inspect views: service 
 [pwa-debug/sw] hello …          (5s after connect — host-pushed message proving bidirectional flow)
 ```
 
+## Troubleshooting
+
+### `session_ping` returns `pageWorld: null` with `pageWorldError: "Could not establish connection. Receiving end does not exist."`
+
+The SW round-trip succeeded but the page-bridge half failed: the active tab has no content script listening. Check, in order:
+
+1. **Brave Shields (or another per-site blocker) is blocking the content script.** This is the trickiest case because the SW still sees the tab as available — only the static `content_scripts` injection silently fails. In Brave: click the lion icon in the address bar and toggle Shields **down** for the site (or set Trackers & ads blocking to "Standard"/"Allow"). Other Chromium browsers can produce the same symptom via uBlock Origin Lite, AdGuard, or strict site settings — disable them for the page and retry.
+2. **The tab predates the latest extension reload.** Static `content_scripts` registered in `manifest.json` only attach on navigation, not retroactively. Refresh the tab (Ctrl+R) after reloading the extension at `chrome://extensions`.
+3. **The page is `chrome://`, the extension store, `about:blank`, or a PDF viewer.** Content scripts cannot run on these. Open a normal `http(s)` tab.
+4. **The wrong tab is active.** The SW currently picks the tab via `chrome.tabs.query({active:true, lastFocusedWindow:true})`. If you have multiple browser windows open, make sure the window holding the tab you want is the most recently focused one.
+
+To confirm the content script *did* attach, open the page tab's DevTools (F12 on the page itself, **not** the SW console) and look for `[pwa-debug/cs] attached at <url>` in the Console.
+
 ## MCP tool surface
 
 ### Available today (host management)

@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   PAGE_BRIDGE_NS,
+  encodeEvent,
   encodeRequest,
   encodeResponse,
   isInboundCsToPage,
+  isInboundPageEvent,
   isInboundPageToCs,
 } from '../../src/page_bridge/protocol.js';
 
@@ -124,8 +126,63 @@ describe('isInboundPageToCs', () => {
     expect(isInboundPageToCs(makeEvent(env))).toBe(false);
   });
 
+  it("rejects page-event direction so request/response correlation isn't crossed with fire-and-forget events", () => {
+    const env = encodeEvent({ kind: 'console', level: 'log', args: [] });
+    expect(isInboundPageToCs(makeEvent(env))).toBe(false);
+  });
+
   it('rejects wrong source', () => {
     const env = encodeResponse({ requestId: 'r1' });
     expect(isInboundPageToCs(makeEvent(env, null))).toBe(false);
+  });
+});
+
+describe('encodeEvent', () => {
+  it('stamps page-event envelope and freezes the result', () => {
+    const env = encodeEvent({ kind: 'console', level: 'log', args: [] });
+    expect(env.ns).toBe(PAGE_BRIDGE_NS);
+    expect(env.dir).toBe('page-event');
+    expect(env.event).toEqual({ kind: 'console', level: 'log', args: [] });
+    expect(Object.isFrozen(env)).toBe(true);
+  });
+
+  it('preserves arbitrary typed event payloads (generic)', () => {
+    const env = encodeEvent<{ a: number }>({ a: 1 });
+    expect(env.event).toEqual({ a: 1 });
+  });
+});
+
+describe('isInboundPageEvent', () => {
+  it('accepts a well-formed page-event envelope', () => {
+    const env = encodeEvent({ any: 'thing' });
+    expect(isInboundPageEvent(makeEvent(env))).toBe(true);
+  });
+
+  it('rejects events from a non-window source (cross-frame postMessage spoof)', () => {
+    const env = encodeEvent({ any: 'thing' });
+    expect(isInboundPageEvent(makeEvent(env, null))).toBe(false);
+  });
+
+  it('rejects wrong namespace', () => {
+    expect(
+      isInboundPageEvent(
+        makeEvent({ ns: 'other', dir: 'page-event', event: {} }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects request/response directions so the SW relay doesn't double-handle them", () => {
+    expect(
+      isInboundPageEvent(makeEvent(encodeRequest({ requestId: 'r1', tool: 't' }))),
+    ).toBe(false);
+    expect(
+      isInboundPageEvent(makeEvent(encodeResponse({ requestId: 'r1' }))),
+    ).toBe(false);
+  });
+
+  it('rejects envelopes missing the event field', () => {
+    expect(
+      isInboundPageEvent(makeEvent({ ns: PAGE_BRIDGE_NS, dir: 'page-event' })),
+    ).toBe(false);
   });
 });

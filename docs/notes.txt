@@ -1,23 +1,31 @@
-Steps for item 57:                                                       
-                                                            
-  1. Reload the extension at chrome://extensions (extension id             
-  ecjfpagbncgmjcobenecoihnjgcekmfo).
-  2. Fully quit and relaunch Claude Code — per note 40, the MCP-mode host  
-  is long-lived and only picks up the new dist/main.js on relaunch.        
-  3. Open any normal http(s) tab (e.g. https://example.com or any of your
-  PWAs). chrome://, the extension store, and about:blank won't work because
-   content scripts can't attach there.                      
-  4. From the new Claude Code session, call mcp__pwa-debug__session_ping   
-  (no args).                                                               
-   
-  Expected — ok:true with:                                                 
-  data.pageWorld = { url: "<that tab's URL>", title: "<that tab's title>",
-  readyState: "complete" }                                                 
-  data.pageWorldError absent                                               
+Suite: 87 extension tests + 161 host tests = 248 total, all green. pnpm  
+  -r build clean. dist/ rebuilt with the new captures wired in.            
                                                                            
-  Plus the M4 fields (hostVersion, extensionVersion, attachedTabId,        
-  extensionId, latencyMs).                                                 
+  New tracked structure:                                                   
+  - Module 8 captures/ (4 files): types, serializer, console capture,
+  integration test                                                         
+  - Module 9 sw_event_sink/ (2 files): sink + test
+  - Modified: protocol.ts, cs_dispatcher.ts, page-world.ts,                
+  service-worker.ts                                                        
+                                                                           
+  Manual smoke (note 47, deferred on task 7):                              
+                                                                           
+  1. Reload extension at chrome://extensions (id                           
+  ecjfpagbncgmjcobenecoihnjgcekmfo).                                       
+  2. Open chainsale.app tab with Brave Shields off (per note 45).          
+  3. Open both the page DevTools (F12) and SW console.                     
+  4. Run console.log('hello', { x: 1 }) in the page DevTools.              
+  5. Expect SW console to show [pwa-debug/sw] event console { kind:        
+  'console', level: 'log', args: ['hello', { x: 1 }], ts, frameUrl,        
+  frameKey: 'top' } and the page DevTools to keep showing the original log.
+  6. Try console.warn('boom') — SW event should include a stack field.     
+  7. Try console.log('big', 'x'.repeat(20000)) — args[1] should be { 
+  __type: 'Truncated', approxSize: ~20002, max: 16384 }.                   
    
-  If pageWorld is null, the response's next_steps will say "check the page 
-  tab DevTools (NOT the SW console) for [pwa-debug/cs] and [pwa-debug/page]
-   log lines" — paste those if you see issues.    
+  When all three pass, I'll close note 47, task 7, milestone 9, and Path 2 
+  advances to M10.
+
+  Watchdog flagged one item to ignore:                                     
+  packages/extension/vitest.config.ts.timestamp-*.mjs — that's a
+  vitest-generated temp file, not real source. Already gitignored. No      
+  action needed.      

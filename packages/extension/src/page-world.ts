@@ -1,5 +1,14 @@
-import { isInboundCsToPage } from './page_bridge/protocol.js';
+import {
+  encodeEvent,
+  isInboundCsToPage,
+} from './page_bridge/protocol.js';
 import { dispatchPageRequest } from './page_bridge/page_dispatch.js';
+import {
+  installConsoleCapture,
+  type Disposer,
+  type FrameMeta,
+} from './captures/capture_console.js';
+import type { CapturedEvent } from './captures/types.js';
 
 type FrameworkHookProbe = {
   readonly react: boolean;
@@ -87,8 +96,24 @@ const installBridgeListener = (): void => {
   });
 };
 
+const computeFrameMeta = (): FrameMeta => ({
+  frameUrl: window.location.href,
+  frameKey: window === window.top ? 'top' : window.location.href,
+});
+
+const installCaptures = (frame: FrameMeta): Disposer => {
+  const emit = (event: CapturedEvent): void => {
+    window.postMessage(encodeEvent(event), window.location.origin);
+  };
+  return installConsoleCapture(emit, frame);
+};
+
 export const bootstrap = (): void => {
   installBridgeListener();
+
+  const frame = computeFrameMeta();
+  installCaptures(frame);
+  console.log('[pwa-debug/page] captures installed for frame', frame);
 
   const early = probeGlobals();
   console.log('[pwa-debug/page] world=MAIN, hooks(early)=', early);

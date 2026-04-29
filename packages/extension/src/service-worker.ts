@@ -1,6 +1,19 @@
 import { isSwRequestEnvelope, routeRequest } from './request_router.js';
+import {
+  createEventSink,
+  isPageEventSwMessage,
+  type EventSink,
+} from './sw_event_sink/sw_event_sink.js';
+import type { CapturedEvent } from './captures/types.js';
 
 const HOST_NAME = 'com.pwa_debug.host';
+
+const installEventSinkListener = (sink: EventSink): void => {
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!isPageEventSwMessage(msg)) return;
+    sink.handle(msg.event as CapturedEvent);
+  });
+};
 
 const logSetupHint = (extId: string, errorMessage?: string): void => {
   const reason = errorMessage ? `: ${errorMessage}` : '';
@@ -68,6 +81,12 @@ export const bootstrap = (): void => {
   });
   console.log(`[pwa-debug/sw] id=${chrome.runtime.id}`);
   console.log('[pwa-debug/sw] up');
+  const sink = createEventSink({
+    logger: (event) => {
+      console.log('[pwa-debug/sw] event', event.kind, event);
+    },
+  });
+  installEventSinkListener(sink);
   connectNativeHost();
 };
 

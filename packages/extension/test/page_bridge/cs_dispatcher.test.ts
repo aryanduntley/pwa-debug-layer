@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  PAGE_EVENT_SW_TAG,
   createCsDispatcher,
   isCsToolRequest,
   type CsToolResponse,
+  type PageEventSwMessage,
 } from '../../src/page_bridge/cs_dispatcher.js';
 import {
   PAGE_BRIDGE_NS,
+  encodeEvent,
   encodeResponse,
   type PageBridgeRequestEnvelope,
 } from '../../src/page_bridge/protocol.js';
@@ -150,5 +153,45 @@ describe('createCsDispatcher', () => {
     dispatcher.dispose();
     vi.advanceTimersByTime(2000);
     expect(sendResponse).not.toHaveBeenCalled();
+  });
+
+  it('forwards inbound page-event envelopes to the SW with the unwrapped event', () => {
+    const forwarded: PageEventSwMessage[] = [];
+    const dispatcher = createCsDispatcher({
+      forwardEventToSw: (msg) => forwarded.push(msg),
+    });
+    const event = { kind: 'console', level: 'log', args: ['hi'] };
+    dispatcher.handlePageMessage(makePageMessageEvent(encodeEvent(event)));
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]?.tag).toBe(PAGE_EVENT_SW_TAG);
+    expect(forwarded[0]?.event).toEqual(event);
+  });
+
+  it("does not cross page-event traffic with request/response correlation (sendResponse stays untouched)", () => {
+    captureLastPostedRequest();
+    const forwarded: PageEventSwMessage[] = [];
+    const dispatcher = createCsDispatcher({
+      generateRequestId: () => 'req-only',
+      forwardEventToSw: (msg) => forwarded.push(msg),
+    });
+    const sendResponse = vi.fn();
+    dispatcher.handleSwRequest({ tool: 'session_ping' }, sendResponse);
+    // A page-event flows in BEFORE the response — must not satisfy the pending request.
+    dispatcher.handlePageMessage(
+      makePageMessageEvent(encodeEvent({ kind: 'console', level: 'log', args: [] })),
+    );
+    expect(sendResponse).not.toHaveBeenCalled();
+    expect(forwarded).toHaveLength(1);
+  });
+
+  it('non-namespaced events are ignored (no forward, no response)', () => {
+    const forwarded: PageEventSwMessage[] = [];
+    const dispatcher = createCsDispatcher({
+      forwardEventToSw: (msg) => forwarded.push(msg),
+    });
+    dispatcher.handlePageMessage(
+      makePageMessageEvent({ ns: 'other', dir: 'page-event', event: {} }),
+    );
+    expect(forwarded).toHaveLength(0);
   });
 });

@@ -1,8 +1,17 @@
 import {
   encodeRequest,
+  isInboundPageEvent,
   isInboundPageToCs,
+  type PageBridgeEventEnvelope,
   type PageBridgeResponseEnvelope,
 } from './protocol.js';
+
+export const PAGE_EVENT_SW_TAG = 'pwa-debug-page-event' as const;
+
+export type PageEventSwMessage = {
+  readonly tag: typeof PAGE_EVENT_SW_TAG;
+  readonly event: unknown;
+};
 
 export type CsToolRequest = {
   readonly tool: string;
@@ -28,9 +37,19 @@ export type CsDispatcher = {
 export type CsDispatcherInput = {
   readonly timeoutMs?: number;
   readonly generateRequestId?: () => string;
+  readonly forwardEventToSw?: (message: PageEventSwMessage) => void;
 };
 
 const DEFAULT_TIMEOUT_MS = 4000;
+
+const defaultForwardEventToSw = (message: PageEventSwMessage): void => {
+  try {
+    chrome.runtime.sendMessage(message);
+  } catch {
+    // chrome.runtime missing (test env) or messaging port closed; events are
+    // fire-and-forget so dropping is acceptable.
+  }
+};
 
 export const isCsToolRequest = (m: unknown): m is CsToolRequest => {
   if (m === null || typeof m !== 'object') return false;
@@ -49,6 +68,7 @@ export const createCsDispatcher = (
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const generateRequestId =
     input.generateRequestId ?? (() => crypto.randomUUID());
+  const forwardEventToSw = input.forwardEventToSw ?? defaultForwardEventToSw;
   const pending = new Map<string, PendingEntry>();
 
   const finish = (requestId: string, response: CsToolResponse): void => {
@@ -85,16 +105,22 @@ export const createCsDispatcher = (
   };
 
   const handlePageMessage = (event: MessageEvent): void => {
-    if (!isInboundPageToCs(event)) return;
-    const env = event.data as PageBridgeResponseEnvelope;
-    const response: CsToolResponse = {};
-    if (env.payload !== undefined) {
-      (response as { payload?: unknown }).payload = env.payload;
+    if (isInboundPageToCs(event)) {
+      const env = event.data as PageBridgeResponseEnvelope;
+      const response: CsToolResponse = {};
+      if (env.payload !== undefined) {
+        (response as { payload?: unknown }).payload = env.payload;
+      }
+      if (env.error !== undefined) {
+        (response as { error?: { message: string } }).error = env.error;
+      }
+      finish(env.requestId, response);
+      return;
     }
-    if (env.error !== undefined) {
-      (response as { error?: { message: string } }).error = env.error;
+    if (isInboundPageEvent(event)) {
+      const env = event.data as PageBridgeEventEnvelope<unknown>;
+      forwardEventToSw({ tag: PAGE_EVENT_SW_TAG, event: env.event });
     }
-    finish(env.requestId, response);
   };
 
   const dispose = (): void => {
