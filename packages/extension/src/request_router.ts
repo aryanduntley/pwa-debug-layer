@@ -1,5 +1,10 @@
 import { dispatchToTab } from './sw_tab_dispatch/sw_tab_dispatch.js';
 import type { SessionPingPayload } from './page_bridge/page_dispatch.js';
+import type {
+  EventSink,
+  GetRecentFilter,
+  GetRecentResult,
+} from './sw_event_sink/sw_event_sink.js';
 
 export type SwRequestEnvelope = {
   readonly type: 'request';
@@ -16,7 +21,14 @@ export type SwResponseEnvelope = {
   readonly error?: { readonly message: string };
 };
 
-type RequestHandler = (env: SwRequestEnvelope) => Promise<unknown>;
+export type RouterContext = {
+  readonly sink: EventSink;
+};
+
+type RequestHandler = (
+  env: SwRequestEnvelope,
+  ctx: RouterContext,
+) => Promise<unknown>;
 
 export const isSwRequestEnvelope = (m: unknown): m is SwRequestEnvelope => {
   if (m === null || typeof m !== 'object') return false;
@@ -71,8 +83,30 @@ const handleSessionPing: RequestHandler = async () => {
   return result;
 };
 
+const sanitizeRecentFilter = (raw: unknown): GetRecentFilter => {
+  if (raw === null || typeof raw !== 'object') return {};
+  const r = raw as Record<string, unknown>;
+  const kinds = Array.isArray(r['kinds'])
+    ? (r['kinds'] as unknown[]).filter((k): k is string => typeof k === 'string')
+    : undefined;
+  const sinceMs = typeof r['sinceMs'] === 'number' ? r['sinceMs'] : undefined;
+  const limit = typeof r['limit'] === 'number' ? r['limit'] : undefined;
+  return {
+    ...(kinds !== undefined ? { kinds } : {}),
+    ...(sinceMs !== undefined ? { sinceMs } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+};
+
+const handleRecentEvents: RequestHandler = async (env, ctx) => {
+  const filter = sanitizeRecentFilter(env.payload);
+  const result: GetRecentResult = ctx.sink.getRecent(filter);
+  return result;
+};
+
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   session_ping: handleSessionPing,
+  recent_events: handleRecentEvents,
 });
 
 const errorResponse = (
@@ -97,13 +131,14 @@ const okResponse = (
 
 export const routeRequest = async (
   env: SwRequestEnvelope,
+  ctx: RouterContext,
 ): Promise<SwResponseEnvelope> => {
   const handler = HANDLERS[env.tool];
   if (!handler) {
     return errorResponse(env.requestId, `unknown tool: ${env.tool}`);
   }
   try {
-    const payload = await handler(env);
+    const payload = await handler(env, ctx);
     return okResponse(env.requestId, payload);
   } catch (err) {
     return errorResponse(env.requestId, (err as Error).message);

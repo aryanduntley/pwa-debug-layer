@@ -150,4 +150,20 @@ describe('installConsoleCapture', () => {
     expect(() => console.log('hi')).not.toThrow();
     spy.mockRestore();
   });
+
+  it('skips emit for internal [pwa-debug/...] logs (call-through preserved)', () => {
+    const calls: unknown[][] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      calls.push(args);
+    };
+    dispose = installConsoleCapture((e) => received.push(e), FRAME);
+    console.log('[pwa-debug/page] captures installed for frame', { x: 1 });
+    console.log('user log');
+    console.log('[pwa-debug/cs] attached at https://x');
+    expect(received.map((e) => e.args[0])).toEqual(['user log']);
+    // Call-through unaffected: all 3 still hit the original.
+    expect(calls.length).toBe(3);
+    console.log = originalLog;
+  });
 });

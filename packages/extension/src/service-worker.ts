@@ -25,7 +25,7 @@ const logSetupHint = (extId: string, errorMessage?: string): void => {
   );
 };
 
-const connectNativeHost = (): void => {
+const connectNativeHost = (sink: EventSink): void => {
   const extId = chrome.runtime.id;
   console.log(`[pwa-debug/sw] connecting to native host: ${HOST_NAME}`);
 
@@ -39,7 +39,7 @@ const connectNativeHost = (): void => {
 
   port.onMessage.addListener((msg) => {
     if (isSwRequestEnvelope(msg)) {
-      routeRequest(msg).then(
+      routeRequest(msg, { sink }).then(
         (response) => {
           try {
             port.postMessage(response);
@@ -87,7 +87,7 @@ export const bootstrap = (): void => {
     },
   });
   installEventSinkListener(sink);
-  connectNativeHost();
+  connectNativeHost(sink);
 };
 
 bootstrap();

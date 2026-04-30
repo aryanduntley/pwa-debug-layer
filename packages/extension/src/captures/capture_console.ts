@@ -1,4 +1,5 @@
 import { serializeArgs } from './serialize.js';
+import { isInternalLog, stripExtensionFrames } from './filter.js';
 import type { ConsoleCapturedEvent, ConsoleLevel } from './types.js';
 
 export type Disposer = () => void;
@@ -28,8 +29,7 @@ const DEFAULT_STACK_LEVELS: readonly ConsoleLevel[] = ['warn', 'error', 'trace']
 const captureStack = (): string | undefined => {
   const stack = new Error().stack;
   if (stack === undefined) return undefined;
-  const lines = stack.split('\n');
-  return lines.slice(1).join('\n');
+  return stripExtensionFrames(stack);
 };
 
 export const buildConsoleEvent = (
@@ -78,6 +78,7 @@ export const installConsoleCapture = (
       try {
         original.apply(console, args);
       } finally {
+        if (isInternalLog(args)) return;
         try {
           const opts =
             maxBytes === undefined

@@ -1,41 +1,72 @@
- Path 9 renamed "Public Release Orchestration & Documentation" with       
-  architecture-locked description. Was just "Installer and Documentation";
-  scope expanded to cover the launcher tool + chrome-devtools-mcp          
-  coexistence model.                                        
-                                                                         
-  Note 48 (evolution, ref Path 9) — full record of the 8 architecture      
-  decisions made today: standalone MCP (no proxy), launcher tool with three
-   modes, chrome-devtools-mcp detection-not-required, extension presence   
-  checks per mode, extension dist bundled with host npm package,
-  system-default browser auto-detect, pdl_* naming, Chrome process-level 
-  debug-port constraint accepted as fundamental.
+Session 2026-04-29 wrap-up — sidequest 1 (SW events via MCP) almost done.
 
-  Note 49 (research, ref Path 9) — debug-findings reference for Path 9     
-  implementation: configuration gotchas (--disable-extensions Puppeteer
-  default, .mcp.json restart-required, debug-port process lock, Brave's IPC
-   relay behavior), what AI can/can't see without chrome-devtools-mcp,
-  verification probe sequence (host_status → curl :9222 → session_ping), 
-  known failure mode (CS doesn't re-inject after extension reload), what we
-   tested in .mcp.json today and reverted.
+WHAT LANDED THIS SESSION
+========================
+M9 console smoke (note 47) ran green: hard-refresh chainsale + Brave Shields off
+got past the prior Receiving-end-does-not-exist failure; console.log/warn/big-truncate
+all produced correctly-shaped ConsoleCapturedEvents in the SW. Note 47 closed.
 
-  Note 47 updated — appended today's smoke-test attempt: host_status ✅,   
-  curl :9222 empty (port silently dropped on Brave's IPC relay),
-  session_ping returned pageWorld:null with the "Receiving end does not    
-  exist" error on both chainsale tabs after focus changes. Diagnosis +
-  next-attempt sequence (hard-refresh chainsale → re-ping → if still null,
-  capture page DevTools [pwa-debug/cs]/[pwa-debug/page] lines) is in the
-  note.
+Decided M9 stays as planned (envelope + console + network producers). Task 7
+(console) closed; Task 8 created for fetch + XHR + WebSocket producers.
 
-  5 new milestones on Path 9 (M14–M18):
-  - M14: Browser binary discovery & system-default detection
-  - M15: pdl_launch_browser — mode='existing' (graceful degradation triad) 
-  - M16: pdl_launch_browser — sandbox-persistent + sandbox-temp modes     
-  - M17: pdl_check_setup + pdl_browser_status + pdl_install_extension tools
-  - M18: Setup matrix README + chrome-devtools-mcp coexistence docs        
-                                                                           
-  Still pending: Task 7 (M9 smoke), milestone 9 not closed. Path 2 (Core   
-  Capture) remains active. Path 9 work picks up after Path 2 wraps, or     
-  pulls forward when you decide.                                           
-                                                                           
-  When you want to resume, the smoke test reproduces from note 47's        
-  appended sequence — hard-refresh chainsale and we re-ping.   
+Sidequest 1 created off Task 8 — pulls forward a slice of M11 (in-memory ring
+buffer + IPC handler + host MCP tool) so AI can read SW events directly. Also
+folds in note 50's two capture-quality fixes (own-log filter, stack-frame strip).
+
+Sidequest 1 status: 5/6 items shipped, green, dist/ rebuilt clean.
+  - Item 75: ring buffer in createEventSink (default 200, getRecent with kinds /
+    sinceMs / limit filters; frozen snapshot decoupled from live buffer).
+  - Item 76: SW request handler 'recent_events' wired through routeRequest.
+    Refactored routeRequest to take a RouterContext threaded from
+    service-worker.ts bootstrap (rather than module-level mutable state).
+  - Item 77: host MCP tool 'recent_events' under packages/host/src/mcp/tools/
+    recent_events.ts. Extracted shared resolveTarget to target_resolution.ts so
+    session_ping + recent_events both reuse it (DRY). Registered in tools/index.ts.
+  - Item 78: own-log filter — packages/extension/src/captures/filter.ts exports
+    isInternalLog(args), wired into capture_console.ts emit path.
+  - Item 79: stack-frame strip — same filter.ts exports stripExtensionFrames(stack),
+    captureStack pipes Error().stack through it before attaching to warn/error.
+Tests: extension 116 (was 99), host 172 (was 161). Typecheck clean both packages.
+
+WHAT'S DEFERRED (item 80 → note 67)
+====================================
+Manual smoke of recent_events end-to-end. Code is on disk, dist/ is rebuilt,
+but the new MCP tool only becomes visible to Claude after a full Claude Code
+relaunch (MCP-mode host is long-lived per note 40 — conversation reload won't
+pick up new tool registrations).
+
+Resume sequence (next session):
+  1. chrome://extensions → reload pwa-debug card.
+  2. FULLY QUIT and relaunch Claude Code.
+  3. Hard-refresh chainsale.app on a Brave window with Shields off.
+  4. In page DevTools console run:
+       console.log('alpha'); console.warn('beta'); console.log('gamma', { x: 1 });
+  5. Tell Claude "ready" → Claude calls mcp__pwa-debug__recent_events directly.
+
+Expected response: 3 ConsoleCapturedEvents, no '[pwa-debug/page]' bootstrap
+entries (own-log filter), beta's stack starts at the user frame at <anonymous>:1:9
+(stripExtensionFrames), stats.bufferSize: 200, stats.perKind.console >= 3.
+
+Once green: update_note(67, completed) → update_item(80, completed) →
+update_sidequest(1, completed) → Task 8 (network producers) unpaused → begin
+Task 8 work loop.
+
+PROJECT STATE AT END OF SESSION
+================================
+Path 2 active. M9 active.
+  Task 7 (console producer): completed 2026-04-29.
+  Task 8 (network producers fetch/XHR/WebSocket, 8 items): pending,
+    waiting on sidequest 1 to close.
+  Sidequest 1 (SW events via MCP, 6 items): in_progress, only item 80
+    (manual smoke) outstanding.
+
+Path 9 still has the M14-M18 launcher work queued (notes 48 + 49). Picks up
+after Path 2 wraps, or pulls forward if you decide.
+
+KEY NOTES TO READ ON RESUME
+============================
+  - Note 67 (deferred, ref item 80): full smoke instructions + diagnostic ladder.
+  - Note 52 (task_context, ref sidequest 1): file/function manifest from this session.
+  - Note 51 (evolution, ref M9): chrome-devtools-mcp coexistence decision matrix.
+  - Note 48 (evolution, ref Path 9) + Note 49 (research, ref Path 9): launcher
+    architecture decisions, still relevant when Path 2 wraps.
