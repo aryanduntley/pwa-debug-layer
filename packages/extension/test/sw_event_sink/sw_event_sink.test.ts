@@ -188,6 +188,66 @@ describe('createEventSink ring buffer', () => {
   });
 });
 
+describe('createEventSink kind-agnostic tally for M9 Task 8 net producers', () => {
+  it('accumulates fetch / xhr / websocket independently in perKind', () => {
+    const sink = createEventSink();
+    sink.handle(makeForeignEvent('fetch', 1));
+    sink.handle(makeForeignEvent('fetch', 2));
+    sink.handle(makeForeignEvent('xhr', 3));
+    sink.handle(makeForeignEvent('websocket', 4));
+    sink.handle(makeForeignEvent('websocket', 5));
+    sink.handle(makeForeignEvent('websocket', 6));
+    sink.handle(makeConsoleEvent('log', 7));
+
+    const stats = sink.getStats();
+    expect(stats.totalReceived).toBe(7);
+    expect(stats.perKind['console']).toBe(1);
+    expect(stats.perKind['fetch']).toBe(2);
+    expect(stats.perKind['xhr']).toBe(1);
+    expect(stats.perKind['websocket']).toBe(3);
+  });
+
+  it('getRecent filters cleanly between net producer kinds (no cross-talk)', () => {
+    const sink = createEventSink({ bufferSize: 20 });
+    sink.handle(makeForeignEvent('fetch', 1));
+    sink.handle(makeForeignEvent('xhr', 2));
+    sink.handle(makeForeignEvent('websocket', 3));
+    sink.handle(makeForeignEvent('fetch', 4));
+    sink.handle(makeForeignEvent('xhr', 5));
+
+    expect(
+      sink.getRecent({ kinds: ['fetch'] }).events.map((e) => e.ts),
+    ).toEqual([1, 4]);
+    expect(
+      sink.getRecent({ kinds: ['xhr'] }).events.map((e) => e.ts),
+    ).toEqual([2, 5]);
+    expect(
+      sink.getRecent({ kinds: ['websocket'] }).events.map((e) => e.ts),
+    ).toEqual([3]);
+    expect(
+      sink.getRecent({ kinds: ['fetch', 'websocket'] })
+        .events.map((e) => e.ts),
+    ).toEqual([1, 3, 4]);
+  });
+
+  it('mixed-kind buffer overflow drops oldest regardless of kind', () => {
+    const sink = createEventSink({ bufferSize: 4 });
+    sink.handle(makeForeignEvent('fetch', 1));
+    sink.handle(makeForeignEvent('xhr', 2));
+    sink.handle(makeConsoleEvent('log', 3));
+    sink.handle(makeForeignEvent('websocket', 4));
+    sink.handle(makeForeignEvent('fetch', 5));
+
+    const result = sink.getRecent();
+    expect(result.events.map((e) => e.ts)).toEqual([2, 3, 4, 5]);
+    expect(result.stats.totalReceived).toBe(5);
+    expect(result.stats.perKind['fetch']).toBe(2);
+    expect(result.stats.perKind['xhr']).toBe(1);
+    expect(result.stats.perKind['console']).toBe(1);
+    expect(result.stats.perKind['websocket']).toBe(1);
+  });
+});
+
 describe('isPageEventSwMessage', () => {
   it('accepts well-formed page-event SW messages', () => {
     expect(

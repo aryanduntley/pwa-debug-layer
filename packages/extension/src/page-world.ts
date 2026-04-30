@@ -8,6 +8,9 @@ import {
   type Disposer,
   type FrameMeta,
 } from './captures/capture_console.js';
+import { installFetchCapture } from './captures/capture_fetch.js';
+import { installXhrCapture } from './captures/capture_xhr.js';
+import { installWebSocketCapture } from './captures/capture_websocket.js';
 import type { CapturedEvent } from './captures/types.js';
 
 type FrameworkHookProbe = {
@@ -101,19 +104,43 @@ const computeFrameMeta = (): FrameMeta => ({
   frameKey: window === window.top ? 'top' : window.location.href,
 });
 
-const installCaptures = (frame: FrameMeta): Disposer => {
+type CaptureKinds = {
+  readonly console: boolean;
+  readonly fetch: boolean;
+  readonly xhr: boolean;
+  readonly websocket: boolean;
+};
+
+const installCaptures = (
+  frame: FrameMeta,
+): { readonly dispose: Disposer; readonly kinds: CaptureKinds } => {
   const emit = (event: CapturedEvent): void => {
     window.postMessage(encodeEvent(event), window.location.origin);
   };
-  return installConsoleCapture(emit, frame);
+  const kinds: CaptureKinds = {
+    console: typeof console !== 'undefined',
+    fetch: typeof globalThis.fetch === 'function',
+    xhr: typeof globalThis.XMLHttpRequest === 'function',
+    websocket: typeof globalThis.WebSocket === 'function',
+  };
+  const disposers: Disposer[] = [
+    installConsoleCapture(emit, frame),
+    installFetchCapture(emit, frame),
+    installXhrCapture(emit, frame),
+    installWebSocketCapture(emit, frame),
+  ];
+  const dispose: Disposer = () => {
+    for (const d of disposers) d();
+  };
+  return { dispose, kinds };
 };
 
 export const bootstrap = (): void => {
   installBridgeListener();
 
   const frame = computeFrameMeta();
-  installCaptures(frame);
-  console.log('[pwa-debug/page] captures installed for frame', frame);
+  const { kinds } = installCaptures(frame);
+  console.log('[pwa-debug/page] captures installed', { frame, kinds });
 
   const early = probeGlobals();
   console.log('[pwa-debug/page] world=MAIN, hooks(early)=', early);
