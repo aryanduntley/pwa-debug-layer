@@ -207,6 +207,27 @@ describe('createEventSink kind-agnostic tally for M9 Task 8 net producers', () =
     expect(stats.perKind['websocket']).toBe(3);
   });
 
+  it("accepts kind:'dom_mutation' from M10 Task 9 — kind-agnostic perKind tally", () => {
+    const sink = createEventSink();
+    sink.handle(makeForeignEvent('dom_mutation', 1));
+    sink.handle(makeForeignEvent('dom_mutation', 2));
+    sink.handle(makeForeignEvent('dom_mutation', 3));
+    sink.handle(makeForeignEvent('fetch', 4));
+    sink.handle(makeConsoleEvent('log', 5));
+
+    const stats = sink.getStats();
+    expect(stats.totalReceived).toBe(5);
+    expect(stats.perKind['dom_mutation']).toBe(3);
+    expect(stats.perKind['fetch']).toBe(1);
+    expect(stats.perKind['console']).toBe(1);
+
+    expect(
+      sink
+        .getRecent({ kinds: ['dom_mutation'] })
+        .events.map((e) => e.ts),
+    ).toEqual([1, 2, 3]);
+  });
+
   it('getRecent filters cleanly between net producer kinds (no cross-talk)', () => {
     const sink = createEventSink({ bufferSize: 20 });
     sink.handle(makeForeignEvent('fetch', 1));

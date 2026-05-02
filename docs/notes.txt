@@ -1,0 +1,76 @@
+Task 9 closed. M10 progress: DOM mutation slice ✅, lifecycle slice still    
+  planned.       
+                                                                               
+  Proposing Task 10 split: M10's full scope is "DOM mutation + SW lifecycle    
+  producers". The lifecycle work has two distinct shapes that don't share a    
+  bootstrap, so I'd split it the same way M9 split (envelope+console /         
+  network):                                                                    
+
+  Task 10 — Page-world lifecycle producer (~7 items)                           
+  - Surface: pageshow/pagehide/visibilitychange/beforeunload listeners +
+  history.pushState/replaceState patches + popstate                            
+  - New: LifecycleCapturedEvent (subkind union) + installLifecycleCapture(emit,
+   frame, opts?) in captures/capture_lifecycle.ts                              
+  - Tagged source: 'page' for host-side correlation later                      
+  - Tests: unit (8), integration with dom_mutation+console no cross-talk, SW
+  sink regression, manual smoke (page reload, in-page link nav via pushState,  
+  alt-tab to trigger visibility)                                               
+                                                                               
+  Task 11 — SW-side lifecycle producer (~6 items)                              
+  - Surface: chrome.tabs.onUpdated, chrome.webNavigation.onCommitted,        
+  chrome.webNavigation.onHistoryStateUpdated, chrome.tabs.onRemoved            
+  - Different shape from M9 producers: SW context, no page-bridge involvement —
+   feeds sink.handle() directly. Tagged source: 'sw' with tabId.               
+  - New file likely under packages/extension/src/sw_lifecycle/sw_lifecycle.ts. 
+  Composed at SW bootstrap.                                                   
+  - Tests: unit (mock chrome.tabs/webNavigation), SW sink regression with both 
+  source tags, manual smoke (reload tab, in-page nav, close tab)              
+                                                                               
+  After both ship, M10 closes and M11 (host ring buffers + persistence) becomes
+   active.               
+
+   Note. asking me to enter js into console.
+
+===============================================================================
+NEXT SESSION — feature gap identified 2026-05-01
+===============================================================================
+
+Problem: For Task 9's smoke test, AI had to ask the user to paste a console
+script and run it manually. AI cannot self-trigger page-world JS, so smoke
+verification is human-in-the-loop. This will get worse as more producers ship
+(lifecycle in M10, framework state in M12, shadow/iframe in M13) — every smoke
+will need a paste step.
+
+Existing surface:
+- chrome-devtools-mcp has evaluate_script via CDP. Single-CDP-attacher
+  constraint means using it conflicts with the user's open DevTools.
+- pwa-debug already has the page-bridge half built: SW <-> CS <-> page-world
+  request/response chain via window.postMessage envelope (page_bridge/
+  protocol.ts + page_dispatch.ts). Adding an eval handler in page-world
+  reuses the existing wire — no CDP, no conflict with the user's DevTools.
+
+Proposed: pwa_debug_evaluate MCP tool (page-world JS evaluator)
+- Tool args: { extension_id?, expression: string, timeout_ms?, await_promise? }
+- Wire: MCP -> IPC -> NMH -> SW -> CS -> page-world dispatcher (existing path).
+- page-world handler: new branch in page_dispatch alongside session_ping —
+  call new Function('return ('+expression+')')() with try/catch, optional
+  await on Promise return, serialize result via captures/serialize.ts (same
+  16KB cap + cycle protection + DOM tagging).
+- Returns: { value, truncated?, durationMs, error? }.
+- Justification vs. blueprint "zero tool-surface duplication":
+  Page-world eval is materially different from chrome-devtools-mcp evaluate —
+  no CDP, MAIN-world context with framework globals visible, can coexist with
+  user's DevTools open. Same justification as keeping console+fetch producers
+  per note 51.
+
+Decide on next session whether to:
+(a) Sidequest this off Task 10 (or before Task 10) so future producer smokes
+    are AI-driven.
+(b) Defer to a dedicated milestone after M10 (likely between M10 and M11).
+(c) Add as M10b alongside event listener tracking (which was already
+    deferred — both are page-world surface additions and could share a
+    milestone).
+
+Lean: (a) — small scope (~5 items: tool def + page-world handler + dispatch
+branch + unit tests + manual smoke), unblocks Task 10/11 smokes immediately,
+and removes the human-paste loop for all subsequent capture work.
