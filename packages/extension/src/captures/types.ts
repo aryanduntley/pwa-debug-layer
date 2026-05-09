@@ -102,9 +102,83 @@ export type DomMutationCaptureOptions = {
   readonly maxPatchesPerEvent?: number;
 };
 
+export type PageLifecycleSubkind =
+  | 'pageshow'
+  | 'pagehide'
+  | 'visibilitychange'
+  | 'beforeunload'
+  | 'navigation'
+  | 'popstate';
+
+export type PageLifecyclePayload =
+  | { readonly subkind: 'pageshow'; readonly persisted: boolean }
+  | { readonly subkind: 'pagehide'; readonly persisted: boolean }
+  | {
+      readonly subkind: 'visibilitychange';
+      readonly visibilityState: 'visible' | 'hidden';
+    }
+  | { readonly subkind: 'beforeunload' }
+  | {
+      readonly subkind: 'navigation';
+      readonly method: 'pushState' | 'replaceState';
+      readonly url: string;
+      readonly title?: string;
+      readonly state?: unknown;
+    }
+  | {
+      readonly subkind: 'popstate';
+      readonly url: string;
+      readonly state?: unknown;
+    };
+
+export type SwLifecycleSubkind =
+  | 'navigation_committed'
+  | 'history_state_updated'
+  | 'tab_status'
+  | 'tab_removed';
+
+export type SwLifecyclePayload =
+  | {
+      readonly subkind: 'navigation_committed';
+      readonly tabId: number;
+      readonly frameId: number;
+      readonly url: string;
+      readonly transitionType?: string;
+      readonly transitionQualifiers?: readonly string[];
+    }
+  | {
+      readonly subkind: 'history_state_updated';
+      readonly tabId: number;
+      readonly frameId: number;
+      readonly url: string;
+      readonly transitionType?: string;
+      readonly transitionQualifiers?: readonly string[];
+    }
+  | {
+      readonly subkind: 'tab_status';
+      readonly tabId: number;
+      readonly status: 'loading' | 'complete';
+    }
+  | {
+      readonly subkind: 'tab_removed';
+      readonly tabId: number;
+      readonly isWindowClosing: boolean;
+    };
+
+export type LifecycleSubkind = PageLifecycleSubkind | SwLifecycleSubkind;
+
+export type LifecycleCapturedEvent =
+  | (CaptureMeta & { readonly kind: 'lifecycle'; readonly source: 'page' } & PageLifecyclePayload)
+  | (CaptureMeta & { readonly kind: 'lifecycle'; readonly source: 'sw' } & SwLifecyclePayload);
+
+export type LifecycleCaptureOptions = {
+  readonly enabled?: Partial<Record<PageLifecycleSubkind, boolean>>;
+};
+
 export type CapturedEvent =
   | ConsoleCapturedEvent
   | FetchCapturedEvent
   | XhrCapturedEvent
   | WebSocketCapturedEvent
-  | DomMutationCapturedEvent;
+  | DomMutationCapturedEvent
+  | LifecycleCapturedEvent;

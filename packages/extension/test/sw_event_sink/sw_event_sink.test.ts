@@ -228,6 +228,100 @@ describe('createEventSink kind-agnostic tally for M9 Task 8 net producers', () =
     ).toEqual([1, 2, 3]);
   });
 
+  it("accepts kind:'lifecycle' from M10 Task 11 — kind-agnostic perKind tally + getRecent filter", () => {
+    const sink = createEventSink();
+    sink.handle({
+      kind: 'lifecycle',
+      source: 'page',
+      subkind: 'navigation',
+      method: 'pushState',
+      url: 'https://x/a',
+      ts: 1,
+      frameUrl: 'https://x',
+      frameKey: 'top',
+    } as unknown as CapturedEvent);
+    sink.handle({
+      kind: 'lifecycle',
+      source: 'page',
+      subkind: 'pageshow',
+      persisted: false,
+      ts: 2,
+      frameUrl: 'https://x',
+      frameKey: 'top',
+    } as unknown as CapturedEvent);
+    sink.handle(makeForeignEvent('dom_mutation', 3));
+    sink.handle(makeConsoleEvent('log', 4));
+
+    const stats = sink.getStats();
+    expect(stats.totalReceived).toBe(4);
+    expect(stats.perKind['lifecycle']).toBe(2);
+    expect(stats.perKind['dom_mutation']).toBe(1);
+    expect(stats.perKind['console']).toBe(1);
+
+    const lifecycleOnly = sink.getRecent({ kinds: ['lifecycle'] });
+    expect(lifecycleOnly.events.map((e) => e.ts)).toEqual([1, 2]);
+    expect(lifecycleOnly.events.every((e) => e.kind === 'lifecycle')).toBe(true);
+  });
+
+  it("M10 Task 12: mixed source:'page' + source:'sw' lifecycle events tally under one perKind.lifecycle counter", () => {
+    const sink = createEventSink();
+    // source:'page' (Task 11)
+    sink.handle({
+      kind: 'lifecycle',
+      source: 'page',
+      subkind: 'pageshow',
+      persisted: false,
+      ts: 1,
+      frameUrl: 'https://x',
+      frameKey: 'top',
+    } as unknown as CapturedEvent);
+    sink.handle({
+      kind: 'lifecycle',
+      source: 'page',
+      subkind: 'navigation',
+      method: 'pushState',
+      url: 'https://x/a',
+      ts: 2,
+      frameUrl: 'https://x',
+      frameKey: 'top',
+    } as unknown as CapturedEvent);
+    // source:'sw' (Task 12)
+    sink.handle({
+      kind: 'lifecycle',
+      source: 'sw',
+      subkind: 'navigation_committed',
+      tabId: 5,
+      frameId: 0,
+      url: 'https://x/a',
+      ts: 3,
+      frameUrl: 'https://x/a',
+      frameKey: 'top',
+    } as unknown as CapturedEvent);
+    sink.handle({
+      kind: 'lifecycle',
+      source: 'sw',
+      subkind: 'tab_status',
+      tabId: 5,
+      status: 'complete',
+      ts: 4,
+      frameUrl: 'https://x',
+      frameKey: 'top',
+    } as unknown as CapturedEvent);
+
+    // Single perKind counter regardless of source — sink stays kind-agnostic.
+    const stats = sink.getStats();
+    expect(stats.totalReceived).toBe(4);
+    expect(stats.perKind['lifecycle']).toBe(4);
+
+    // getRecent({ kinds:['lifecycle'] }) returns events from BOTH sources.
+    const recent = sink.getRecent({ kinds: ['lifecycle'] });
+    expect(recent.events.map((e) => e.ts)).toEqual([1, 2, 3, 4]);
+    const sources = recent.events.map(
+      (e) => (e as { source: string }).source,
+    );
+    expect(sources).toEqual(['page', 'page', 'sw', 'sw']);
+  });
+
   it('getRecent filters cleanly between net producer kinds (no cross-talk)', () => {
     const sink = createEventSink({ bufferSize: 20 });
     sink.handle(makeForeignEvent('fetch', 1));

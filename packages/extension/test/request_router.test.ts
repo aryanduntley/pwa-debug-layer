@@ -246,6 +246,117 @@ describe('routeRequest — recent_events', () => {
   });
 });
 
+describe('routeRequest — evaluate', () => {
+  it('routes via active tab when tab_id is absent and forwards page-world payload verbatim', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { value: 42, durationMs: 1 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-eval-1',
+        tool: 'evaluate',
+        payload: { expression: '40+2' },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.payload).toEqual({ value: 42, durationMs: 1 });
+    // Confirm active-tab path: chrome.tabs.query was used to resolve tabId
+    expect(vi.mocked(chrome.tabs.query)).toHaveBeenCalled();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(7);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'evaluate',
+      payload: { expression: '40+2' },
+    });
+  });
+
+  it('routes to a specific tab when payload.tab_id is provided (skips active-tab lookup)', async () => {
+    const queryMock = vi.mocked(chrome.tabs.query);
+    const queryCallsBefore = queryMock.mock.calls.length;
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { value: 'tab-99', durationMs: 2 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-eval-2',
+        tool: 'evaluate',
+        payload: {
+          expression: 'document.title',
+          tab_id: 99,
+          await_promise: true,
+          timeout_ms: 1000,
+        },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.payload).toEqual({ value: 'tab-99', durationMs: 2 });
+    // No active-tab lookup when tab_id is provided
+    expect(queryMock.mock.calls.length).toBe(queryCallsBefore);
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(99);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'evaluate',
+      payload: {
+        expression: 'document.title',
+        await_promise: true,
+        timeout_ms: 1000,
+      },
+    });
+  });
+
+  it('returns an error envelope when no active tab is present', async () => {
+    vi.mocked(chrome.tabs.query).mockResolvedValueOnce([]);
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-eval-3',
+        tool: 'evaluate',
+        payload: { expression: '1+1' },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toBe('no active tab');
+  });
+
+  it('surfaces a CS-side page-bridge error.message into the SW error envelope', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValueOnce({
+      error: { message: 'page-bridge timeout after 4000ms (tool=evaluate)' },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-eval-4',
+        tool: 'evaluate',
+        payload: { expression: '1+1' },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/page-bridge timeout/);
+  });
+
+  it('rejects malformed payload (no expression) with a descriptive error envelope', async () => {
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-eval-5',
+        tool: 'evaluate',
+        payload: { tab_id: 7 },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/payload must be/);
+  });
+});
+
 describe('routeRequest — error paths', () => {
   it('returns an error envelope for an unknown tool', async () => {
     const r = await routeRequest(

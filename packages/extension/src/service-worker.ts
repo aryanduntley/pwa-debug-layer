@@ -4,6 +4,7 @@ import {
   isPageEventSwMessage,
   type EventSink,
 } from './sw_event_sink/sw_event_sink.js';
+import { createSwLifecycleProducer } from './sw_lifecycle/sw_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
 
 const HOST_NAME = 'com.pwa_debug.host';
@@ -87,6 +88,7 @@ export const bootstrap = (): void => {
     },
   });
   installEventSinkListener(sink);
+  createSwLifecycleProducer({ sink });
   connectNativeHost(sink);
 };
 

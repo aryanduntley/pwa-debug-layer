@@ -1,4 +1,7 @@
-import { dispatchToTab } from './sw_tab_dispatch/sw_tab_dispatch.js';
+import {
+  dispatchToTab,
+  dispatchToActiveTab,
+} from './sw_tab_dispatch/sw_tab_dispatch.js';
 import type { SessionPingPayload } from './page_bridge/page_dispatch.js';
 import type {
   EventSink,
@@ -104,9 +107,60 @@ const handleRecentEvents: RequestHandler = async (env, ctx) => {
   return result;
 };
 
+type EvaluateRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: {
+    readonly expression: string;
+    readonly timeout_ms?: number;
+    readonly await_promise?: boolean;
+  };
+};
+
+const sanitizeEvaluateInput = (raw: unknown): EvaluateRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const expression = r['expression'];
+  if (typeof expression !== 'string' || expression.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  return {
+    tabId,
+    payload: {
+      expression,
+      ...(typeof r['timeout_ms'] === 'number' && r['timeout_ms'] > 0
+        ? { timeout_ms: r['timeout_ms'] as number }
+        : {}),
+      ...(typeof r['await_promise'] === 'boolean'
+        ? { await_promise: r['await_promise'] as boolean }
+        : {}),
+    },
+  };
+};
+
+const handleEvaluate: RequestHandler = async (env) => {
+  const sanitized = sanitizeEvaluateInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'evaluate: payload must be { expression: non-empty string, tab_id?, timeout_ms?, await_promise? }',
+    );
+  }
+  const csReq = { tool: 'evaluate', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   session_ping: handleSessionPing,
   recent_events: handleRecentEvents,
+  evaluate: handleEvaluate,
 });
 
 const errorResponse = (

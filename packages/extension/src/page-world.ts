@@ -12,6 +12,7 @@ import { installFetchCapture } from './captures/capture_fetch.js';
 import { installXhrCapture } from './captures/capture_xhr.js';
 import { installWebSocketCapture } from './captures/capture_websocket.js';
 import { installDomMutationCapture } from './captures/capture_dom_mutation.js';
+import { installLifecycleCapture } from './captures/capture_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
 
 type FrameworkHookProbe = {
@@ -111,6 +112,7 @@ type CaptureKinds = {
   readonly xhr: boolean;
   readonly websocket: boolean;
   readonly dom_mutation: boolean;
+  readonly lifecycle: boolean;
 };
 
 const installCaptures = (
@@ -127,6 +129,10 @@ const installCaptures = (
     dom_mutation:
       typeof MutationObserver !== 'undefined' &&
       typeof document !== 'undefined',
+    lifecycle:
+      typeof window !== 'undefined' &&
+      typeof document !== 'undefined' &&
+      typeof history?.pushState === 'function',
   };
   const disposers: Disposer[] = [
     installConsoleCapture(emit, frame),
@@ -134,6 +140,7 @@ const installCaptures = (
     installXhrCapture(emit, frame),
     installWebSocketCapture(emit, frame),
     installDomMutationCapture(emit, frame),
+    installLifecycleCapture(emit, frame),
   ];
   const dispose: Disposer = () => {
     for (const d of disposers) d();
