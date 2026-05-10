@@ -6,8 +6,9 @@ import { hostListRegistrationsTool } from './host_list_registrations.js';
 import { hostResetTool } from './host_reset.js';
 import { sessionPingTool } from './session_ping.js';
 import { recentEventsTool } from './recent_events.js';
-import { captureDebugStatsTool } from './capture_debug_stats.js';
+import { consoleTailTool } from './console_tail.js';
 import { evaluateTool } from './evaluate.js';
+import { networkTailTool } from './network_tail.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
@@ -21,6 +22,7 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   hostResetTool,
   sessionPingTool,
   recentEventsTool,
-  captureDebugStatsTool,
+  consoleTailTool,
+  networkTailTool,
   evaluateTool,
 ] as unknown as readonly ToolDef[]);

@@ -9,6 +9,7 @@ packages/*/dist/
 
 # Test / coverage
 coverage/
+vitest.config.*.timestamp-*
 
 # Environment (never commit secrets)
 .env

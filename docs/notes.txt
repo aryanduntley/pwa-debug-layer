@@ -1,1 +1,236 @@
+================================================================================
+POST-RESTART RUNBOOK — confirm M12 + sidequest 2 landed, then decide what's next
+================================================================================
 
+Previous session closed M12 (console_tail + network_tail live-validated on
+chainsale.app, all A1-A4 cases passing) and ran sidequest 2 to retire
+capture_debug_stats. Items 1-5 of sidequest 2 are complete on disk + in the
+AIMFP DB; item 6 (live MCP-surface verify) is observability-only and is
+what this restart proves.
+
+After Claude Code finishes loading the freshly-built host (dist/main.js),
+call aimfp_run(is_new_session=true) and walk this in order.
+
+
+--------------------------------------------------------------------------------
+STEP 1 — Confirm the retired tool is gone from the MCP surface
+         (sidequest 2 item 199)
+--------------------------------------------------------------------------------
+
+The freshly-rebuilt dist/main.js no longer exports capture_debug_stats.
+Verify the agent sees the same.
+
+1A. Inspect the deferred-tools list in the session-start system reminder.
+    Should contain:
+        mcp__pwa-debug__console_tail
+        mcp__pwa-debug__network_tail
+    Should NOT contain:
+        mcp__pwa-debug__capture_debug_stats
+    If capture_debug_stats is still listed, the MCP server is serving a
+    stale binary. Confirm pnpm --filter @pwa-debug/host run build ran
+    cleanly last session (it did: 1.1s green) and that Claude Code
+    actually restarted, not just reconnected. Kill any stray host node
+    process and reload the extension card to force a fresh NMH spawn.
+
+1B. host_status → ok:true, manifest+launcher present. activeConnections
+    may be 0 until the extension reconnects (Chromium-family browsers
+    auto-respawn the NMH on first MCP call; if not, reload pwa-debug at
+    chrome://extensions once and host_status will populate).
+
+1C. Once activeConnections has 1 entry, fire a single console_tail with
+    no filter — should return ok:true (entries may be empty + lazy hint
+    if the target tab is quiet, or populated if traffic is flowing).
+    Bonus sanity: ToolSearch for capture_debug_stats should return
+    nothing (no schema to load).
+
+On 1A-1C passing:
+    update_item(199, status='completed')
+    add_note(note_type='task_context', reference_table='sidequests',
+             reference_id=2) with the observed confirmation.
+    Sidequest 2 is then 100% closed.
+
+On any check failing:
+    add_note(note_type='warning', reference_table='sidequests',
+             reference_id=2) with the actual symptom. Classify:
+      - build-artifact stale (rerun pnpm --filter @pwa-debug/host build)
+      - host caching (kill stray host node process; let Chrome respawn)
+      - extension-side (reload the extension card)
+
+
+--------------------------------------------------------------------------------
+STEP 2 — Choose between commit-and-stabilize OR start M13
+--------------------------------------------------------------------------------
+
+The working tree carries a large uncommitted slug.
+
+  M12 artifacts (new):
+    packages/shared/src/types/captured_event.ts        (file 124)
+    packages/shared/src/types/filter_spec.ts           (file 125)
+    packages/shared/src/types/wire_entries.ts          (file 126)
+    packages/host/src/captures_query/captures_query.ts (file 127)
+    packages/host/src/mcp/tools/console_tail.ts        (file 129)
+    packages/host/src/mcp/tools/_filter_helpers.ts     (file 131)
+    packages/host/src/mcp/tools/network_tail.ts        (file 132)
+    packages/host/test/captures_query/captures_query.test.ts (file 128)
+    packages/host/test/mcp/tools/console_tail.test.ts  (file 130)
+    packages/host/test/mcp/tools/network_tail.test.ts  (file 133)
+
+  M12 modifications:
+    packages/shared/src/index.ts                  — re-exports new types
+    packages/extension/src/captures/types.ts      — collapsed to re-export shim
+    packages/host/src/captures_in/captures_in.ts  — sequenceNumber + buffer(kind)
+    packages/host/test/captures_in/captures_in.test.ts — seq assertions
+    .gitignore                                    — vitest.config.*.timestamp-*
+
+  Sidequest 2 deletions:
+    packages/host/src/mcp/tools/capture_debug_stats.ts        (deleted)
+    packages/host/test/mcp/tools/capture_debug_stats.test.ts  (deleted)
+    packages/host/src/mcp/tools/index.ts          — drop import + TOOLS entry
+
+Recommendation (A): land one commit covering both M12 and the retirement.
+
+The two changes are causally linked — capture_debug_stats was always
+going to disappear once console_tail + network_tail shipped (note 85,
+deferred-trigger condition). Splitting them creates a "broken state"
+intermediate commit where the M11 diagnostic is removed but its
+replacement hasn't been validated; bundling avoids that.
+
+Suggested message:
+    M12: ship console_tail + network_tail MCP tools, retire capture_debug_stats
+
+    - Add shared types: CapturedEvent union, ConsoleEntry, NetworkEntry,
+      FilterSpec, Cursor (+ encode/decode runtime helpers).
+    - Add host captures_query module with tailWithFilter (filter spec
+      validation, regex compilation, cursor decode + sessionId guard,
+      pagination).
+    - Add console_tail + network_tail MCP tools backed by per-kind
+      CapturesIn buffers; both share _filter_helpers (zod schema +
+      FilterSpec conversion + error-to-response mapping).
+    - CapturesIn now stamps per-bucket monotonic sequenceNumber on
+      HostStoredEvent and exposes buffer(kind) for the new tool layer.
+    - Retire capture_debug_stats — the temporary M11 diagnostic
+      superseded by the new tail tools (note 85 deferred-trigger fired).
+
+    Live-validated end-to-end on chainsale.app (Chrome 148.0.0.0):
+    all M12 acceptance cases (A1-A4) green; 570 vitest passing
+    (delta -8 from the deleted test file).
+
+Alternative (B): split the commit (M12 first, retirement second) only
+if the user wants the audit trail to mirror the path/sidequest separation.
+
+After committing, advance to M13.
+
+
+--------------------------------------------------------------------------------
+STEP 3 — M13 decomposition sketch (for when commit is done)
+--------------------------------------------------------------------------------
+
+M13 = "Shadow DOM + same-origin iframe + cross-navigation acceptance test".
+This is the Path 2 EXIT criterion. Closing it ends Core Capture.
+
+Tech shape:
+- packages/extension/src/captures/walk_shadow.ts (new): observe document
+  AND any open shadow root by chaining a MutationObserver onto each
+  shadow's host element. Closed shadow roots stay out of scope (cannot
+  be reached without page cooperation; document that fact in the file
+  header).
+- Each producer in packages/extension/src/captures/ extends to walk
+  shadow roots. capture_dom_mutation.ts is the principal change.
+- manifest.json: content_scripts.all_frames flips to true. Cross-origin
+  iframes get the script too, but the page-world MAIN-world script in
+  cross-origin frames cannot reach the parent's framework hooks — events
+  from those frames get isCrossOrigin=true.
+- Frame identity: CS side uses chrome.runtime.sender.frameId; page-world
+  derives a stable frameKey via window.parent walk. Every CapturedEvent
+  gains frameId (number from CS) + frameKey (string from page-world).
+  ConsoleEntry/NetworkEntry already have frameUrl + frameKey — the new
+  frameId becomes a third tag.
+
+Acceptance (manual retest in Brave per M5 discipline):
+- Multi-frame test page with example.com + a same-origin iframe + an
+  open-shadow web component.
+- Cross-navigation behavior is the headline: events from BEFORE a
+  navigation must remain in the tail AFTER the nav (host buffer
+  persistence — that's the Core Capture promise the whole path exists
+  to prove).
+- Test page can be a tiny local HTML served via `python -m http.server`
+  or via a chainsale-style live target if it uses shadow components
+  (web3modal has shadow roots — chainsale already exercises that path).
+
+Candidate task split (proposed; refine when decomposing for real):
+  T-A: shadow DOM walk helper (walk_shadow.ts) — pure FP, unit-testable
+       without a browser. Either new AIMFP module captures_shadow or
+       absorbed into the existing captures module.
+  T-B: producer extensions — capture_dom_mutation tracks shadow roots.
+       capture_console / capture_xhr / capture_fetch / capture_websocket
+       already work regardless of frame, but the frameId/frameKey
+       tagging path needs to reach them too.
+  T-C: manifest + frame identity wiring — manifest.json all_frames=true,
+       CS-side frameId capture, page-world frameKey derivation.
+  T-D: integration tests (vitest with happy-dom shadow + same-origin
+       iframe) for the new pure walker + the tagging seam.
+  T-E: live-validation task (T24 analog) — multi-frame page + Brave
+       retest + cross-navigation persistence check. Closes M13 → Path 2.
+
+
+--------------------------------------------------------------------------------
+LEFTOVERS WORTH KNOWING ABOUT
+--------------------------------------------------------------------------------
+
+- .claude/settings.local.json:326 still has the permission allowlist
+  entry "mcp__pwa-debug__capture_debug_stats". Dead config after the
+  retirement. User-local file (not the checked-in settings), harmless
+  because the tool simply won't match anything. Worth a one-line edit
+  if the user wants it tidy, but no functional impact. A future
+  fewer-permission-prompts run would re-curate the list anyway.
+
+- FilterSpec.selectors stays in shared/types as a reserved field — DOM
+  tail tools (M13 or Path 3) will wire it. Do NOT delete prematurely.
+
+- CapturesIn.getStats and the CapturesInStats type (105) are still in
+  the codebase. M12 tail tools use buffer(kind) directly, not getStats.
+  The type currently has zero callers in production code but is left
+  in place for future diagnostics (eg. a host_diag MCP tool envisioned
+  for Path 11). If it bothers anyone, it's a one-line removal — but
+  that's a separate sidequest, not in scope here.
+
+- Watchdog process was reported "not_running" at the last aimfp_run
+  (is_new_session=true) call. If file-change monitoring matters for
+  the M13 work (lots of new files), re-call aimfp_run(is_new_session
+  =true) after restart and the watchdog should auto-start; if it
+  doesn't, that's its own troubleshooting tangent.
+
+- Known minor flake unchanged from M11 baseline:
+    packages/extension/test/captures/capture_dom_mutation.test.ts
+    packages/extension/test/captures/integration_dom.test.ts
+  Intermittent in parallel runs (happy-dom MutationObserver timing);
+  pass cleanly in isolation. Both are M13-adjacent — if they start
+  failing consistently during M13 work, suspect the shadow walker
+  first (it extends the same MutationObserver surface).
+
+
+--------------------------------------------------------------------------------
+RESUME COMMANDS (copy-paste for the next session)
+--------------------------------------------------------------------------------
+
+  # 0. Tool palette
+  aimfp_run(is_new_session=true)        # canonical session bootstrap
+  host_status                            # confirms M12 host is serving
+
+  # 1. Confirm capture_debug_stats is gone (sidequest 2 item 199)
+  #    Inspect the deferred-tools list in the session-start reminder.
+  #    No tool call strictly required unless host_status / console_tail
+  #    surface a problem.
+
+  # 2A. Commit M12 + cleanup (if Step 2 picks recommendation A)
+  git status
+  git diff --stat
+  git add packages/shared packages/host packages/extension/src/captures/types.ts .gitignore docs/notes.txt
+  git commit -m "M12: ship console_tail + network_tail MCP tools, retire capture_debug_stats ..."
+
+  # 2B. Start M13
+  get_milestones_by_path(2)              # confirms M13 is next + pending
+  # Then either project_task_decomposition or direct add_task per the
+  # M13 decomposition sketch in Step 3.
+
+End of runbook.

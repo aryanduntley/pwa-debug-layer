@@ -231,3 +231,63 @@ describe('createCapturesIn — tail forwarding + clear', () => {
     expect(stats.totals).toEqual({ received: 0, dropped: 0 });
   });
 });
+
+describe('createCapturesIn — per-bucket sequenceNumber stamping', () => {
+  it('first event in each bucket gets sequenceNumber=1', () => {
+    const ci = make();
+    ci.receive({
+      events: [
+        event('console', 1, { level: 'log' }),
+        event('fetch', 2, { phase: 'request' }),
+        event('dom_mutation', 3, { patches: [] }),
+        event('lifecycle', 4, { source: 'page', subkind: 'pageshow' }),
+      ],
+    });
+    expect(ci.tail('console')[0]?.sequenceNumber).toBe(1);
+    expect(ci.tail('network')[0]?.sequenceNumber).toBe(1);
+    expect(ci.tail('dom_mutations')[0]?.sequenceNumber).toBe(1);
+    expect(ci.tail('lifecycle')[0]?.sequenceNumber).toBe(1);
+  });
+
+  it('sequenceNumber is monotonic within a bucket and independent across buckets', () => {
+    const ci = make();
+    ci.receive({
+      events: [
+        event('console', 1, { level: 'log' }),
+        event('fetch', 2, { phase: 'request' }),
+        event('console', 3, { level: 'warn' }),
+        event('xhr', 4, { phase: 'request' }),
+        event('console', 5, { level: 'error' }),
+      ],
+    });
+    expect(ci.tail('console').map((e) => e.sequenceNumber)).toEqual([1, 2, 3]);
+    expect(ci.tail('network').map((e) => e.sequenceNumber)).toEqual([1, 2]);
+  });
+
+  it('dropped events do not advance the sequence counter', () => {
+    const ci = make();
+    ci.receive({
+      events: [
+        event('console', 1, { level: 'log' }),
+        { kind: 'console' } as unknown as HostCapturedEvent, // dropped: bad ts
+        event('console', 2, { level: 'warn' }),
+      ],
+    });
+    expect(ci.tail('console').map((e) => e.sequenceNumber)).toEqual([1, 2]);
+  });
+
+  it('clear() resets sequenceNumber so the next push starts at 1 again', () => {
+    const ci = make();
+    ci.receive({
+      events: [
+        event('console', 1, { level: 'log' }),
+        event('console', 2, { level: 'warn' }),
+        event('console', 3, { level: 'error' }),
+      ],
+    });
+    expect(ci.tail('console').map((e) => e.sequenceNumber)).toEqual([1, 2, 3]);
+    ci.clear();
+    ci.receive({ events: [event('console', 10, { level: 'log' })] });
+    expect(ci.tail('console')[0]?.sequenceNumber).toBe(1);
+  });
+});

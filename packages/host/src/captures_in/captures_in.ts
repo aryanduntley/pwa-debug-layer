@@ -16,6 +16,7 @@ export type HostStoredEvent = HostCapturedEvent & {
   readonly receivedAt: number;
   readonly sessionId: string;
   readonly extensionId: string;
+  readonly sequenceNumber: number;
 };
 
 export type BufferKind = 'console' | 'network' | 'dom_mutations' | 'lifecycle';
@@ -50,6 +51,7 @@ export interface CapturesIn {
     kind: BufferKind,
     opts?: RingBufferTailOptions<HostStoredEvent>,
   ) => HostStoredEvent[];
+  readonly buffer: (kind: BufferKind) => RingBuffer<HostStoredEvent>;
   readonly getStats: () => CapturesInStats;
   readonly clear: () => void;
 }
@@ -105,6 +107,12 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     dom_mutations: 0,
     lifecycle: 0,
   };
+  const sequence: Record<BufferKind, number> = {
+    console: 0,
+    network: 0,
+    dom_mutations: 0,
+    lifecycle: 0,
+  };
   let droppedUnknown = 0;
 
   const receive = (input: CapturesInReceiveInput): void => {
@@ -127,11 +135,13 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
         dropped[bucket]++;
         continue;
       }
+      sequence[bucket]++;
       const stored: HostStoredEvent = {
         ...(event as HostCapturedEvent),
         receivedAt: getNow(),
         sessionId,
         extensionId,
+        sequenceNumber: sequence[bucket],
       };
       buffers[bucket].push(stored);
       received[bucket]++;
@@ -142,6 +152,9 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     kind: BufferKind,
     tailOpts?: RingBufferTailOptions<HostStoredEvent>,
   ): HostStoredEvent[] => buffers[kind].tail(tailOpts);
+
+  const buffer = (kind: BufferKind): RingBuffer<HostStoredEvent> =>
+    buffers[kind];
 
   const getStats = (): CapturesInStats => {
     const perKindEntries = BUFFER_KINDS.map(
@@ -180,11 +193,12 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
       buffers[k].clear();
       received[k] = 0;
       dropped[k] = 0;
+      sequence[k] = 0;
     }
     droppedUnknown = 0;
   };
 
-  return Object.freeze({ receive, tail, getStats, clear });
+  return Object.freeze({ receive, tail, buffer, getStats, clear });
 };
 
 export const CAPTURES_EVENT_TOOL = 'captures' as const;
