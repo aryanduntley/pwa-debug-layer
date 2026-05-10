@@ -1,11 +1,1 @@
-Watchdog clean, audit returned. One discrepancy to investigate:
-  incomplete_tasks: 1 despite Task 12 closing. Let me identify it before
-  ending.
 
-  Called aimfp (ctrl+o to expand)
-
-● That's pre-existing work — Task 6 in M6 ("Probe-based discriminator + typed
-  pageWorldError code"), created 2026-04-28, never started. Not
-  session-relevant; it's a stale page-world-error-classification refinement
-  queued from much earlier work. Leaving it as-is — user can pick it up
-  whenever.

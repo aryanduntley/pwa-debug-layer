@@ -1,0 +1,271 @@
+import { randomUUID } from 'node:crypto';
+import {
+  createRingBuffer,
+  type RingBuffer,
+  type RingBufferTailOptions,
+} from '../host_buffers/host_buffers.js';
+import type { IpcEventEnvelope } from '../mcp/ipc/envelope.js';
+
+export type HostCapturedEvent = {
+  readonly ts: number;
+  readonly kind: string;
+  readonly [key: string]: unknown;
+};
+
+export type HostStoredEvent = HostCapturedEvent & {
+  readonly receivedAt: number;
+  readonly sessionId: string;
+  readonly extensionId: string;
+};
+
+export type BufferKind = 'console' | 'network' | 'dom_mutations' | 'lifecycle';
+
+export interface CapturesInOptions {
+  readonly extensionId: string;
+  readonly capacityPerKind?: number;
+  readonly getNow?: () => number;
+  readonly sessionId?: string;
+}
+
+export interface CapturesInReceiveInput {
+  readonly events: readonly HostCapturedEvent[];
+}
+
+export interface CapturesInStats {
+  readonly perKind: Readonly<
+    Record<
+      BufferKind,
+      { readonly received: number; readonly dropped: number; readonly size: number }
+    >
+  >;
+  readonly droppedUnknown: number;
+  readonly totals: { readonly received: number; readonly dropped: number };
+  readonly sessionId: string;
+  readonly extensionId: string;
+}
+
+export interface CapturesIn {
+  readonly receive: (input: CapturesInReceiveInput) => void;
+  readonly tail: (
+    kind: BufferKind,
+    opts?: RingBufferTailOptions<HostStoredEvent>,
+  ) => HostStoredEvent[];
+  readonly getStats: () => CapturesInStats;
+  readonly clear: () => void;
+}
+
+const DEFAULT_CAPACITY_PER_KIND = 5000;
+
+const BUFFER_KINDS: readonly BufferKind[] = [
+  'console',
+  'network',
+  'dom_mutations',
+  'lifecycle',
+];
+
+const kindToBucket = (kind: string): BufferKind | undefined => {
+  switch (kind) {
+    case 'console':
+      return 'console';
+    case 'fetch':
+    case 'xhr':
+    case 'websocket':
+      return 'network';
+    case 'dom_mutation':
+      return 'dom_mutations';
+    case 'lifecycle':
+      return 'lifecycle';
+    default:
+      return undefined;
+  }
+};
+
+export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
+  const extensionId = opts.extensionId;
+  const capacity = opts.capacityPerKind ?? DEFAULT_CAPACITY_PER_KIND;
+  const getNow = opts.getNow ?? Date.now;
+  const sessionId = opts.sessionId ?? randomUUID();
+
+  const buffers: Record<BufferKind, RingBuffer<HostStoredEvent>> = {
+    console: createRingBuffer<HostStoredEvent>({ capacity }),
+    network: createRingBuffer<HostStoredEvent>({ capacity }),
+    dom_mutations: createRingBuffer<HostStoredEvent>({ capacity }),
+    lifecycle: createRingBuffer<HostStoredEvent>({ capacity }),
+  };
+
+  const received: Record<BufferKind, number> = {
+    console: 0,
+    network: 0,
+    dom_mutations: 0,
+    lifecycle: 0,
+  };
+  const dropped: Record<BufferKind, number> = {
+    console: 0,
+    network: 0,
+    dom_mutations: 0,
+    lifecycle: 0,
+  };
+  let droppedUnknown = 0;
+
+  const receive = (input: CapturesInReceiveInput): void => {
+    for (const event of input.events) {
+      if (event === null || typeof event !== 'object') {
+        droppedUnknown++;
+        continue;
+      }
+      const e = event as Record<string, unknown>;
+      if (typeof e.kind !== 'string') {
+        droppedUnknown++;
+        continue;
+      }
+      const bucket = kindToBucket(e.kind);
+      if (bucket === undefined) {
+        droppedUnknown++;
+        continue;
+      }
+      if (typeof e.ts !== 'number' || !Number.isFinite(e.ts)) {
+        dropped[bucket]++;
+        continue;
+      }
+      const stored: HostStoredEvent = {
+        ...(event as HostCapturedEvent),
+        receivedAt: getNow(),
+        sessionId,
+        extensionId,
+      };
+      buffers[bucket].push(stored);
+      received[bucket]++;
+    }
+  };
+
+  const tail = (
+    kind: BufferKind,
+    tailOpts?: RingBufferTailOptions<HostStoredEvent>,
+  ): HostStoredEvent[] => buffers[kind].tail(tailOpts);
+
+  const getStats = (): CapturesInStats => {
+    const perKindEntries = BUFFER_KINDS.map(
+      (k): [BufferKind, { received: number; dropped: number; size: number }] => [
+        k,
+        Object.freeze({
+          received: received[k],
+          dropped: dropped[k],
+          size: buffers[k].size(),
+        }),
+      ],
+    );
+    const perKind = Object.freeze(
+      Object.fromEntries(perKindEntries) as Record<
+        BufferKind,
+        { received: number; dropped: number; size: number }
+      >,
+    );
+    let totalReceived = 0;
+    let totalDropped = droppedUnknown;
+    for (const k of BUFFER_KINDS) {
+      totalReceived += received[k];
+      totalDropped += dropped[k];
+    }
+    return Object.freeze({
+      perKind,
+      droppedUnknown,
+      totals: Object.freeze({ received: totalReceived, dropped: totalDropped }),
+      sessionId,
+      extensionId,
+    });
+  };
+
+  const clear = (): void => {
+    for (const k of BUFFER_KINDS) {
+      buffers[k].clear();
+      received[k] = 0;
+      dropped[k] = 0;
+    }
+    droppedUnknown = 0;
+  };
+
+  return Object.freeze({ receive, tail, getStats, clear });
+};
+
+export const CAPTURES_EVENT_TOOL = 'captures' as const;
+
+export interface CapturesIntakeEventPayload {
+  readonly events: readonly HostCapturedEvent[];
+}
+
+export interface CapturesRegistryOptions {
+  readonly capacityPerKind?: number;
+  readonly getNow?: () => number;
+}
+
+export interface CapturesRegistry {
+  readonly getOrCreate: (extensionId: string) => CapturesIn;
+  readonly get: (extensionId: string) => CapturesIn | undefined;
+  readonly list: () => readonly { readonly extensionId: string; readonly captures: CapturesIn }[];
+  readonly clear: () => void;
+}
+
+export interface CapturesEventDispatchHooks {
+  readonly onMismatch?: (message: string) => void;
+  readonly onInvalid?: (message: string) => void;
+}
+
+export const createCapturesRegistry = (
+  opts: CapturesRegistryOptions = {},
+): CapturesRegistry => {
+  const map = new Map<string, CapturesIn>();
+
+  const getOrCreate = (extensionId: string): CapturesIn => {
+    const existing = map.get(extensionId);
+    if (existing !== undefined) return existing;
+    const created = createCapturesIn({
+      extensionId,
+      ...(opts.capacityPerKind !== undefined && { capacityPerKind: opts.capacityPerKind }),
+      ...(opts.getNow !== undefined && { getNow: opts.getNow }),
+    });
+    map.set(extensionId, created);
+    return created;
+  };
+
+  const get = (extensionId: string): CapturesIn | undefined => map.get(extensionId);
+
+  const list = (): readonly { readonly extensionId: string; readonly captures: CapturesIn }[] =>
+    Object.freeze(
+      Array.from(map.entries(), ([extensionId, captures]) =>
+        Object.freeze({ extensionId, captures }),
+      ),
+    );
+
+  const clear = (): void => {
+    map.clear();
+  };
+
+  return Object.freeze({ getOrCreate, get, list, clear });
+};
+
+const isIntakePayload = (v: unknown): v is CapturesIntakeEventPayload => {
+  if (v === null || typeof v !== 'object') return false;
+  return Array.isArray((v as { events?: unknown }).events);
+};
+
+export const dispatchCapturesEvent = (
+  registry: CapturesRegistry,
+  extensionId: string,
+  env: IpcEventEnvelope,
+  hooks?: CapturesEventDispatchHooks,
+): void => {
+  if (env.tool !== CAPTURES_EVENT_TOOL) return;
+  if (env.extensionId !== undefined && env.extensionId !== extensionId) {
+    hooks?.onMismatch?.(
+      `dispatchCapturesEvent: envelope.extensionId=${env.extensionId} does not match connection.extensionId=${extensionId}; dropping`,
+    );
+    return;
+  }
+  if (!isIntakePayload(env.payload)) {
+    hooks?.onInvalid?.(
+      `dispatchCapturesEvent: invalid intake payload from ${extensionId}; dropping`,
+    );
+    return;
+  }
+  registry.getOrCreate(extensionId).receive({ events: env.payload.events });
+};

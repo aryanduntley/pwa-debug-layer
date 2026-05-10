@@ -1,6 +1,7 @@
 import {
   dispatchToTab,
   dispatchToActiveTab,
+  dispatchToTabClassified,
 } from './sw_tab_dispatch/sw_tab_dispatch.js';
 import type { SessionPingPayload } from './page_bridge/page_dispatch.js';
 import type {
@@ -8,6 +9,7 @@ import type {
   GetRecentFilter,
   GetRecentResult,
 } from './sw_event_sink/sw_event_sink.js';
+import type { PageWorldErrorCode } from './sw_health_probe/sw_health_probe.js';
 
 export type SwRequestEnvelope = {
   readonly type: 'request';
@@ -47,21 +49,33 @@ type SessionPingResult = {
   readonly extensionVersion: string;
   readonly attachedTabId: number | null;
   readonly pageWorld: SessionPingPayload | null;
-  readonly pageWorldError?: string;
+  readonly pageWorldError?: PageWorldErrorCode;
+  readonly pageWorldErrorMessage?: string;
+  readonly pageWorldSelfHealed?: boolean;
 };
 
-const fetchPageWorld = async (
-  tabId: number,
-): Promise<{ pageWorld: SessionPingPayload | null; pageWorldError?: string }> => {
-  try {
-    const response = await dispatchToTab(tabId, { tool: 'session_ping' });
-    if (response.error) {
-      return { pageWorld: null, pageWorldError: response.error.message };
-    }
-    return { pageWorld: response.payload as SessionPingPayload };
-  } catch (err) {
-    return { pageWorld: null, pageWorldError: (err as Error).message };
+type FetchPageWorldResult = {
+  readonly pageWorld: SessionPingPayload | null;
+  readonly pageWorldError?: PageWorldErrorCode;
+  readonly pageWorldErrorMessage?: string;
+  readonly pageWorldSelfHealed?: boolean;
+};
+
+const fetchPageWorld = async (tabId: number): Promise<FetchPageWorldResult> => {
+  const result = await dispatchToTabClassified(tabId, { tool: 'session_ping' });
+  if (result.ok) {
+    const payload = result.response.payload as SessionPingPayload | undefined;
+    return {
+      pageWorld: payload ?? null,
+      ...(result.selfHealed ? { pageWorldSelfHealed: true } : {}),
+    };
   }
+  return {
+    pageWorld: null,
+    pageWorldError: result.code,
+    pageWorldErrorMessage: result.message,
+    ...(result.selfHealed ? { pageWorldSelfHealed: true } : {}),
+  };
 };
 
 const handleSessionPing: RequestHandler = async () => {
@@ -71,16 +85,26 @@ const handleSessionPing: RequestHandler = async () => {
   });
   const attachedTabId = tabs[0]?.id ?? null;
   const extensionVersion = chrome.runtime.getManifest().version;
-  const pageWorldResult =
+  const pageWorldResult: FetchPageWorldResult =
     attachedTabId !== null
       ? await fetchPageWorld(attachedTabId)
-      : { pageWorld: null, pageWorldError: 'no active tab' };
+      : {
+          pageWorld: null,
+          pageWorldError: 'no_active_tab',
+          pageWorldErrorMessage: 'no active tab',
+        };
   const result: SessionPingResult = {
     extensionVersion,
     attachedTabId,
     pageWorld: pageWorldResult.pageWorld,
     ...(pageWorldResult.pageWorldError !== undefined
       ? { pageWorldError: pageWorldResult.pageWorldError }
+      : {}),
+    ...(pageWorldResult.pageWorldErrorMessage !== undefined
+      ? { pageWorldErrorMessage: pageWorldResult.pageWorldErrorMessage }
+      : {}),
+    ...(pageWorldResult.pageWorldSelfHealed
+      ? { pageWorldSelfHealed: true }
       : {}),
   };
   return result;

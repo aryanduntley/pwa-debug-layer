@@ -8,6 +8,9 @@ import { createSwLifecycleProducer } from './sw_lifecycle/sw_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
 
 const HOST_NAME = 'com.pwa_debug.host';
+const CAPTURES_EVENT_TOOL = 'captures';
+
+type PortRef = { current: chrome.runtime.Port | null };
 
 const installEventSinkListener = (sink: EventSink): void => {
   chrome.runtime.onMessage.addListener((msg) => {
@@ -26,7 +29,7 @@ const logSetupHint = (extId: string, errorMessage?: string): void => {
   );
 };
 
-const connectNativeHost = (sink: EventSink): void => {
+const connectNativeHost = (sink: EventSink, portRef: PortRef): void => {
   const extId = chrome.runtime.id;
   console.log(`[pwa-debug/sw] connecting to native host: ${HOST_NAME}`);
 
@@ -37,6 +40,8 @@ const connectNativeHost = (sink: EventSink): void => {
     logSetupHint(extId, (e as Error).message);
     return;
   }
+
+  portRef.current = port;
 
   port.onMessage.addListener((msg) => {
     if (isSwRequestEnvelope(msg)) {
@@ -64,6 +69,7 @@ const connectNativeHost = (sink: EventSink): void => {
   });
 
   port.onDisconnect.addListener(() => {
+    portRef.current = null;
     const err = chrome.runtime.lastError;
     const msg = err?.message ?? '';
     if (/not found|forbidden|access/i.test(msg)) {
@@ -82,14 +88,37 @@ export const bootstrap = (): void => {
   });
   console.log(`[pwa-debug/sw] id=${chrome.runtime.id}`);
   console.log('[pwa-debug/sw] up');
+
+  const portRef: PortRef = { current: null };
+  const extensionId = chrome.runtime.id;
+
+  const sendEventEnvelope = (events: readonly CapturedEvent[]): void => {
+    const port = portRef.current;
+    if (port === null) return;
+    try {
+      port.postMessage({
+        type: 'event',
+        tool: CAPTURES_EVENT_TOOL,
+        extensionId,
+        payload: { events },
+      });
+    } catch (err) {
+      console.warn(
+        '[pwa-debug/sw] event flush postMessage failed:',
+        (err as Error).message,
+      );
+    }
+  };
+
   const sink = createEventSink({
     logger: (event) => {
       console.log('[pwa-debug/sw] event', event.kind, event);
     },
+    forwardEvents: sendEventEnvelope,
   });
   installEventSinkListener(sink);
   createSwLifecycleProducer({ sink });
-  connectNativeHost(sink);
+  connectNativeHost(sink, portRef);
 };
 
 bootstrap();

@@ -9,6 +9,7 @@ import type {
   IpcRequestEnvelope,
   IpcResponseEnvelope,
 } from '../../../src/mcp/ipc/envelope.js';
+import { createCapturesRegistry } from '../../../src/captures_in/captures_in.js';
 
 type FakeOpts = {
   readonly connections?: readonly IpcConnectionInfo[];
@@ -46,7 +47,11 @@ const buildCtx = (opts: FakeOpts = {}): ToolContext => {
         { extensionId: 'aaa', connectedAt: 1, lastSeenAt: 1 },
       ],
   });
-  return Object.freeze({ ipcServer: fake, hostVersion: '0.0.0-test' });
+  return Object.freeze({
+    ipcServer: fake,
+    hostVersion: '0.0.0-test',
+    capturesRegistry: createCapturesRegistry(),
+  });
 };
 
 describe('recentEventsHandler — happy path', () => {

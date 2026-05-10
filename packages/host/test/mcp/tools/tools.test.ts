@@ -17,6 +17,7 @@ import type {
   IpcRequestEnvelope,
   IpcResponseEnvelope,
 } from '../../../src/mcp/ipc/envelope.js';
+import { createCapturesRegistry } from '../../../src/captures_in/captures_in.js';
 
 let xdgDir: string;
 
@@ -54,6 +55,7 @@ const buildFakeCtx = (opts: FakeIpcServerOpts = {}): {
   const ctx: ToolContext = Object.freeze({
     ipcServer: fake,
     hostVersion: '0.0.0-test',
+    capturesRegistry: createCapturesRegistry(),
   });
   return { ctx, requests };
 };

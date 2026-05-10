@@ -6,6 +6,7 @@ import { hostListRegistrationsTool } from './host_list_registrations.js';
 import { hostResetTool } from './host_reset.js';
 import { sessionPingTool } from './session_ping.js';
 import { recentEventsTool } from './recent_events.js';
+import { captureDebugStatsTool } from './capture_debug_stats.js';
 import { evaluateTool } from './evaluate.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
@@ -20,5 +21,6 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   hostResetTool,
   sessionPingTool,
   recentEventsTool,
+  captureDebugStatsTool,
   evaluateTool,
 ] as unknown as readonly ToolDef[]);

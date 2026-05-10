@@ -7,6 +7,10 @@ import { registerTools } from '../mcp/tool_registry.js';
 import { TOOLS } from '../mcp/tools/index.js';
 import { createIpcServer } from '../mcp/ipc/ipc_server.js';
 import { defaultSocketPath, socketParentDir } from '../mcp/ipc/socket_path.js';
+import {
+  createCapturesRegistry,
+  dispatchCapturesEvent,
+} from '../captures_in/captures_in.js';
 
 const FALLBACK_VERSION = '0.0.0';
 
@@ -42,7 +46,15 @@ export const runMcpMode = async (): Promise<void> => {
   }
 
   const hostVersion = await readHostVersion();
-  const ipcServer = await createIpcServer({ socketPath });
+  const capturesRegistry = createCapturesRegistry();
+  const ipcServer = await createIpcServer({
+    socketPath,
+    onEvent: (extensionId, env) =>
+      dispatchCapturesEvent(capturesRegistry, extensionId, env, {
+        onMismatch: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
+        onInvalid: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
+      }),
+  });
 
   try {
     const server = new McpServer({
@@ -50,7 +62,7 @@ export const runMcpMode = async (): Promise<void> => {
       version: '0.0.0-m4',
     });
 
-    registerTools(server, TOOLS, { ipcServer, hostVersion });
+    registerTools(server, TOOLS, { ipcServer, hostVersion, capturesRegistry });
 
     const transport = new StdioServerTransport();
     await server.connect(transport);

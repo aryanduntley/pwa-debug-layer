@@ -165,11 +165,22 @@ export type SwLifecyclePayload =
       readonly isWindowClosing: boolean;
     };
 
-export type LifecycleSubkind = PageLifecycleSubkind | SwLifecycleSubkind;
+export type CsLifecycleSubkind = 'pagehide';
+
+export type CsLifecyclePayload = {
+  readonly subkind: 'pagehide';
+  readonly persisted: boolean;
+};
+
+export type LifecycleSubkind =
+  | PageLifecycleSubkind
+  | SwLifecycleSubkind
+  | CsLifecycleSubkind;
 
 export type LifecycleCapturedEvent =
   | (CaptureMeta & { readonly kind: 'lifecycle'; readonly source: 'page' } & PageLifecyclePayload)
-  | (CaptureMeta & { readonly kind: 'lifecycle'; readonly source: 'sw' } & SwLifecyclePayload);
+  | (CaptureMeta & { readonly kind: 'lifecycle'; readonly source: 'sw' } & SwLifecyclePayload)
+  | (CaptureMeta & { readonly kind: 'lifecycle'; readonly source: 'cs' } & CsLifecyclePayload);
 
 export type LifecycleCaptureOptions = {
   readonly enabled?: Partial<Record<PageLifecycleSubkind, boolean>>;

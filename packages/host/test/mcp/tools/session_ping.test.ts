@@ -9,6 +9,7 @@ import type {
   IpcRequestEnvelope,
   IpcResponseEnvelope,
 } from '../../../src/mcp/ipc/envelope.js';
+import { createCapturesRegistry } from '../../../src/captures_in/captures_in.js';
 
 type FakeOpts = {
   readonly connections?: readonly IpcConnectionInfo[];
@@ -33,7 +34,11 @@ const buildCtx = (opts: FakeOpts = {}): ToolContext => {
         { extensionId: 'aaa', connectedAt: 1, lastSeenAt: 1 },
       ],
   });
-  return Object.freeze({ ipcServer: fake, hostVersion: '0.0.0-test' });
+  return Object.freeze({
+    ipcServer: fake,
+    hostVersion: '0.0.0-test',
+    capturesRegistry: createCapturesRegistry(),
+  });
 };
 
 describe('sessionPingHandler — pageWorld surfacing', () => {
@@ -63,13 +68,14 @@ describe('sessionPingHandler — pageWorld surfacing', () => {
     expect(d.pageWorldError).toBeUndefined();
   });
 
-  it('passes through pageWorldError when the SW reports a page-bridge failure', async () => {
+  it("passes through typed pageWorldError + pageWorldErrorMessage when SW reports a page-bridge failure", async () => {
     const ctx = buildCtx({
       responsePayload: {
         extensionVersion: '1.2.3',
         attachedTabId: 42,
         pageWorld: null,
-        pageWorldError: 'no active tab',
+        pageWorldError: 'no_active_tab',
+        pageWorldErrorMessage: 'no active tab',
       },
     });
     const r = await sessionPingHandler({}, ctx);
@@ -77,10 +83,34 @@ describe('sessionPingHandler — pageWorld surfacing', () => {
     const d = r.data as {
       pageWorld: unknown;
       pageWorldError?: string;
+      pageWorldErrorMessage?: string;
     };
     expect(d.pageWorld).toBeNull();
-    expect(d.pageWorldError).toBe('no active tab');
-    expect(r.next_steps.join(' ')).toMatch(/pageWorld is null/);
+    expect(d.pageWorldError).toBe('no_active_tab');
+    expect(d.pageWorldErrorMessage).toBe('no active tab');
+    // next_steps should now reference the typed-code-specific imperative, not generic
+    expect(r.next_steps.join(' ')).toMatch(/focus a regular browser tab/);
+  });
+
+  it('drops unknown pageWorldError values (defensive: not in typed union)', async () => {
+    const ctx = buildCtx({
+      responsePayload: {
+        extensionVersion: '1.2.3',
+        attachedTabId: 42,
+        pageWorld: null,
+        pageWorldError: 'some_unknown_code',
+      },
+    });
+    const r = await sessionPingHandler({}, ctx);
+    const d = r.data as {
+      pageWorld: unknown;
+      pageWorldError?: string;
+    };
+    expect(d.pageWorld).toBeNull();
+    expect(d.pageWorldError).toBeUndefined();
+    expect(r.next_steps.join(' ')).toMatch(
+      /pageWorld is null but no typed pageWorldError/,
+    );
   });
 
   it('returns pageWorld:null when the field is absent from the SW response', async () => {
@@ -90,7 +120,24 @@ describe('sessionPingHandler — pageWorld surfacing', () => {
     const r = await sessionPingHandler({}, ctx);
     const d = r.data as { pageWorld: unknown };
     expect(d.pageWorld).toBeNull();
-    expect(r.next_steps.join(' ')).toMatch(/pageWorld is null/);
+    expect(r.next_steps.join(' ')).toMatch(
+      /pageWorld is null but no typed pageWorldError/,
+    );
+  });
+
+  it('exposes pageWorldSelfHealed:true and emits the self-heal info hint', async () => {
+    const ctx = buildCtx({
+      responsePayload: {
+        extensionVersion: '1.2.3',
+        attachedTabId: 42,
+        pageWorld: { url: 'https://x', title: 't', readyState: 'complete' },
+        pageWorldSelfHealed: true,
+      },
+    });
+    const r = await sessionPingHandler({}, ctx);
+    const d = r.data as { pageWorldSelfHealed?: boolean };
+    expect(d.pageWorldSelfHealed).toBe(true);
+    expect(r.next_steps.join(' ')).toMatch(/pageWorldSelfHealed:true/);
   });
 
   it('returns pageWorld:null when readyState is malformed', async () => {

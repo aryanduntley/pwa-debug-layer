@@ -153,16 +153,21 @@ When the round-trip works you'll see in the SW console (`Inspect views: service 
 
 ## Troubleshooting
 
-### `session_ping` returns `pageWorld: null` with `pageWorldError: "Could not establish connection. Receiving end does not exist."`
+### `session_ping` returns `pageWorld: null` with a typed `pageWorldError`
 
-The SW round-trip succeeded but the page-bridge half failed: the active tab has no content script listening. Check, in order:
+`session_ping` reports failure modes as **typed codes** in `pageWorldError` (machine-readable) plus the original chrome-runtime string in `pageWorldErrorMessage` (for logs). The MCP `next_steps[]` field carries imperative, code-specific guidance — AI clients should relay it verbatim. Tabs that simply predated the extension reload (the most common dev-loop friction) are auto-recovered by the SW via `chrome.scripting.executeScript`; when that succeeds, `pageWorld` is populated and `pageWorldSelfHealed: true` appears alongside it. The table below is the canonical mapping (single source of truth: `NEXT_STEPS_BY_CODE` in `packages/host/src/mcp/tools/session_ping.ts`).
 
-1. **Brave Shields (or another per-site blocker) is blocking the content script.** This is the trickiest case because the SW still sees the tab as available — only the static `content_scripts` injection silently fails. In Brave: click the lion icon in the address bar and toggle Shields **down** for the site (or set Trackers & ads blocking to "Standard"/"Allow"). Other Chromium browsers can produce the same symptom via uBlock Origin Lite, AdGuard, or strict site settings — disable them for the page and retry.
-2. **The tab predates the latest extension reload.** Static `content_scripts` registered in `manifest.json` only attach on navigation, not retroactively. Refresh the tab (Ctrl+R) after reloading the extension at `chrome://extensions`.
-3. **The page is `chrome://`, the extension store, `about:blank`, or a PDF viewer.** Content scripts cannot run on these. Open a normal `http(s)` tab.
-4. **The wrong tab is active.** The SW currently picks the tab via `chrome.tabs.query({active:true, lastFocusedWindow:true})`. If you have multiple browser windows open, make sure the window holding the tab you want is the most recently focused one.
+| `pageWorldError` | What it means | What to do |
+|---|---|---|
+| *(absent)* with `pageWorldSelfHealed: true` | The static content script was missing on the active tab; the SW silently re-injected `content-script.js` + `page-world.js` and retried. No action needed. | Informational only. |
+| `cs_not_attached_refresh_tab` | Auto-recovery was attempted but did not stick (page rejected the injection or reloaded mid-flight). | Hard-refresh the page tab (Ctrl+Shift+R) and retry. If it repeats, reload the extension at `chrome://extensions` then hard-refresh. |
+| `page_blocks_scripts` | A content blocker is rejecting the script (Brave Shields, uBlock Origin, AdGuard, or similar). Site CSP is also possible. | **Brave:** click the lion icon → set Shields **Down** for the site → refresh → retry. **uBlock Origin / similar:** disable for this site → refresh → retry. If neither, the site's own CSP is blocking and pwa-debug cannot bypass it. |
+| `page_world_blocked` | The content script attached but the MAIN-world page-world bridge cannot be reached — the site's Content-Security-Policy blocks the inline script tag. | Site-level restriction; cannot bypass. Console + network capture may still work via the content-script side, but live page-world reads (state, evaluate) will not. |
+| `restricted_url` | The active tab is on a URL browsers do not allow extensions to touch (`chrome://`, `chromewebstore.google.com`, `about:`, `devtools://`, `file://`, `view-source:`, etc.). | Switch focus to a regular `http(s)` tab of the PWA, then retry. |
+| `no_active_tab` | No active `http(s)` tab is focused (DevTools window or extension popup may be focused instead). | Focus a regular browser tab and retry. |
+| `cs_inject_failed` | The auto-recovery `chrome.scripting.executeScript` itself failed. The extension cannot reach this tab. | Reload the extension at `chrome://extensions` and hard-refresh the page (Ctrl+Shift+R). If it persists, the URL may be one the browser blocks all extensions from — check the address bar. |
 
-To confirm the content script *did* attach, open the page tab's DevTools (F12 on the page itself, **not** the SW console) and look for `[pwa-debug/cs] attached at <url>` in the Console.
+To confirm the content script attached after a successful round-trip, open the page tab's DevTools (F12 on the page itself, **not** the SW console) and look for `[pwa-debug/cs] attached at <url>` in the Console.
 
 ## MCP tool surface
 

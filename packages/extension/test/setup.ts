@@ -15,7 +15,9 @@ vi.stubGlobal('chrome', {
     lastError: undefined,
   },
   tabs: {
-    query: vi.fn().mockResolvedValue([{ id: 7, active: true }]),
+    query: vi.fn().mockResolvedValue([
+      { id: 7, active: true, url: 'https://test.example/' },
+    ]),
     sendMessage: vi.fn().mockResolvedValue({
       payload: {
         url: 'https://test.example/',
@@ -23,5 +25,13 @@ vi.stubGlobal('chrome', {
         readyState: 'complete',
       },
     }),
+    get: vi
+      .fn()
+      .mockResolvedValue({ id: 7, active: true, url: 'https://test.example/' }),
+  },
+  scripting: {
+    executeScript: vi
+      .fn()
+      .mockResolvedValue([{ result: '__pwa_debug_probe__' }]),
   },
 });

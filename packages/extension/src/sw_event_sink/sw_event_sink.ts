@@ -3,9 +3,15 @@ import {
   type PageEventSwMessage,
 } from '../page_bridge/cs_dispatcher.js';
 import type { CapturedEvent } from '../captures/types.js';
+import {
+  createBatchAccumulator,
+  type BatchAccumulator,
+} from './batch_accumulator.js';
 
 const DEFAULT_BUFFER_SIZE = 200;
 const DEFAULT_LIMIT = 50;
+const DEFAULT_FORWARD_MAX_SIZE = 50;
+const DEFAULT_FORWARD_MAX_MS = 100;
 
 export type EventSinkStats = {
   readonly totalReceived: number;
@@ -28,11 +34,16 @@ export type EventSink = {
   readonly handle: (event: CapturedEvent) => void;
   readonly getStats: () => EventSinkStats;
   readonly getRecent: (filter?: GetRecentFilter) => GetRecentResult;
+  readonly flushNow: () => void;
+  readonly dispose: () => void;
 };
 
 export type EventSinkInput = {
   readonly logger?: (event: CapturedEvent) => void;
   readonly bufferSize?: number;
+  readonly forwardEvents?: (events: readonly CapturedEvent[]) => void;
+  readonly forwardMaxSize?: number;
+  readonly forwardMaxMs?: number;
 };
 
 export const createEventSink = (input: EventSinkInput = {}): EventSink => {
@@ -45,6 +56,15 @@ export const createEventSink = (input: EventSinkInput = {}): EventSink => {
   let writeIndex = 0;
   const perKind: Record<string, number> = {};
   let totalReceived = 0;
+
+  const forwardAcc: BatchAccumulator<CapturedEvent> | undefined =
+    input.forwardEvents !== undefined
+      ? createBatchAccumulator<CapturedEvent>({
+          maxSize: input.forwardMaxSize ?? DEFAULT_FORWARD_MAX_SIZE,
+          maxMs: input.forwardMaxMs ?? DEFAULT_FORWARD_MAX_MS,
+          flush: input.forwardEvents,
+        })
+      : undefined;
 
   const snapshotStats = (): EventSinkStats =>
     Object.freeze({
@@ -68,6 +88,9 @@ export const createEventSink = (input: EventSinkInput = {}): EventSink => {
       } catch {
         // Logger failures must not interrupt event ingestion.
       }
+    }
+    if (forwardAcc !== undefined) {
+      forwardAcc.push(event);
     }
   };
 
@@ -110,7 +133,15 @@ export const createEventSink = (input: EventSinkInput = {}): EventSink => {
     });
   };
 
-  return Object.freeze({ handle, getStats, getRecent });
+  const flushNow = (): void => {
+    forwardAcc?.flushNow();
+  };
+
+  const dispose = (): void => {
+    forwardAcc?.dispose();
+  };
+
+  return Object.freeze({ handle, getStats, getRecent, flushNow, dispose });
 };
 
 export const isPageEventSwMessage = (

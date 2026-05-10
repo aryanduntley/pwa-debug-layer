@@ -99,7 +99,7 @@ describe('routeRequest — session_ping', () => {
     });
   });
 
-  it('returns pageWorld:null + pageWorldError when no active tab', async () => {
+  it("returns pageWorld:null + pageWorldError:'no_active_tab' (typed) when no active tab", async () => {
     const queryMock = vi.mocked(chrome.tabs.query);
     queryMock.mockResolvedValueOnce([]);
     const r = await routeRequest(
@@ -114,17 +114,31 @@ describe('routeRequest — session_ping', () => {
       attachedTabId: number | null;
       pageWorld: unknown;
       pageWorldError?: string;
+      pageWorldErrorMessage?: string;
     };
     expect(p.attachedTabId).toBeNull();
     expect(p.pageWorld).toBeNull();
-    expect(p.pageWorldError).toBe('no active tab');
+    expect(p.pageWorldError).toBe('no_active_tab');
+    expect(p.pageWorldErrorMessage).toBe('no active tab');
   });
 
-  it('returns pageWorld:null + pageWorldError when chrome.tabs.sendMessage rejects', async () => {
+  it('self-heals when sendMessage rejects but probe + reinject succeed (returns pageWorld + pageWorldSelfHealed:true)', async () => {
     const sendMock = vi.mocked(chrome.tabs.sendMessage);
-    sendMock.mockRejectedValueOnce(
-      new Error('Could not establish connection. Receiving end does not exist.'),
-    );
+    sendMock
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.',
+        ),
+      )
+      .mockResolvedValueOnce({
+        payload: {
+          url: 'https://test.example/',
+          title: 'Test Page',
+          readyState: 'complete',
+        },
+      });
+    // setup.ts default chrome.scripting.executeScript returns [{result:'__pwa_debug_probe__'}]
+    // — probe returns scripts_run, then 2 inject calls also resolve via default mock.
     const r = await routeRequest(
       {
         type: 'request',
@@ -135,15 +149,79 @@ describe('routeRequest — session_ping', () => {
     );
     const p = r.payload as {
       attachedTabId: number | null;
+      pageWorld: { url: string } | null;
+      pageWorldError?: string;
+      pageWorldSelfHealed?: boolean;
+    };
+    expect(p.attachedTabId).toBe(7);
+    expect(p.pageWorld?.url).toBe('https://test.example/');
+    expect(p.pageWorldError).toBeUndefined();
+    expect(p.pageWorldSelfHealed).toBe(true);
+  });
+
+  it("returns typed code 'cs_not_attached_refresh_tab' when self-heal retry still fails", async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock
+      .mockRejectedValueOnce(new Error('Could not establish connection.'))
+      .mockRejectedValueOnce(new Error('Could not establish connection (retry).'));
+    const r = await routeRequest(
+      { type: 'request', requestId: 'r3b', tool: 'session_ping' },
+      makeCtx(),
+    );
+    const p = r.payload as {
+      pageWorld: unknown;
+      pageWorldError?: string;
+      pageWorldErrorMessage?: string;
+      pageWorldSelfHealed?: boolean;
+    };
+    expect(p.pageWorld).toBeNull();
+    expect(p.pageWorldError).toBe('cs_not_attached_refresh_tab');
+    expect(p.pageWorldErrorMessage).toMatch(/retry/);
+    expect(p.pageWorldSelfHealed).toBe(true);
+  });
+
+  it("returns typed code 'page_blocks_scripts' when probe throws after sendMessage rejects", async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockRejectedValueOnce(
+      new Error('Could not establish connection.'),
+    );
+    vi.mocked(chrome.scripting.executeScript).mockRejectedValueOnce(
+      new Error('Cannot access contents of url'),
+    );
+    const r = await routeRequest(
+      { type: 'request', requestId: 'r3c', tool: 'session_ping' },
+      makeCtx(),
+    );
+    const p = r.payload as {
+      pageWorld: unknown;
+      pageWorldError?: string;
+      pageWorldErrorMessage?: string;
+    };
+    expect(p.pageWorld).toBeNull();
+    expect(p.pageWorldError).toBe('page_blocks_scripts');
+    expect(p.pageWorldErrorMessage).toMatch(/Could not establish connection/);
+  });
+
+  it("returns typed code 'restricted_url' when sendMessage rejects on a chrome:// tab (no probe needed)", async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockRejectedValueOnce(
+      new Error('Could not establish connection.'),
+    );
+    vi.mocked(chrome.tabs.get).mockResolvedValueOnce({
+      id: 7,
+      url: 'chrome://extensions',
+    } as chrome.tabs.Tab);
+    const r = await routeRequest(
+      { type: 'request', requestId: 'r3d', tool: 'session_ping' },
+      makeCtx(),
+    );
+    const p = r.payload as {
       pageWorld: unknown;
       pageWorldError?: string;
     };
-    expect(p.attachedTabId).toBe(7);
     expect(p.pageWorld).toBeNull();
-    expect(p.pageWorldError).toMatch(/Could not establish connection/);
+    expect(p.pageWorldError).toBe('restricted_url');
   });
 
-  it('returns pageWorld:null + pageWorldError when CS reports an error', async () => {
+  it("returns typed code 'page_world_blocked' when CS reports an error envelope (page-bridge timeout)", async () => {
     const sendMock = vi.mocked(chrome.tabs.sendMessage);
     sendMock.mockResolvedValueOnce({
       error: { message: 'page-bridge timeout after 4000ms (tool=session_ping)' },
@@ -159,9 +237,11 @@ describe('routeRequest — session_ping', () => {
     const p = r.payload as {
       pageWorld: unknown;
       pageWorldError?: string;
+      pageWorldErrorMessage?: string;
     };
     expect(p.pageWorld).toBeNull();
-    expect(p.pageWorldError).toMatch(/page-bridge timeout/);
+    expect(p.pageWorldError).toBe('page_world_blocked');
+    expect(p.pageWorldErrorMessage).toMatch(/page-bridge timeout/);
   });
 });
 

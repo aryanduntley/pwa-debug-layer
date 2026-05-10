@@ -8,6 +8,7 @@ import {
   type ToolContext,
 } from '../../src/mcp/tool_registry.js';
 import type { IpcServer } from '../../src/mcp/ipc/ipc_server.js';
+import { createCapturesRegistry } from '../../src/captures_in/captures_in.js';
 
 const stubIpcServer: IpcServer = Object.freeze({
   close: async () => {},
@@ -24,6 +25,7 @@ const stubIpcServer: IpcServer = Object.freeze({
 const stubCtx: ToolContext = Object.freeze({
   ipcServer: stubIpcServer,
   hostVersion: '0.0.0-test',
+  capturesRegistry: createCapturesRegistry(),
 });
 
 describe('okResponse / errorResponse', () => {
