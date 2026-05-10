@@ -1,19 +1,4 @@
 {
-  "generated_at": "2026-05-10T19:31:13Z",
-  "reminders": [
-    {
-      "type": "file_deleted",
-      "severity": "warning",
-      "file": "packages/host/src/mcp/tools/capture_debug_stats.ts",
-      "message": "DB-registered file no longer exists on disk. Consider updating database records.",
-      "timestamp": "2026-05-10T19:31:13Z"
-    },
-    {
-      "type": "file_deleted",
-      "severity": "warning",
-      "file": "packages/host/test/mcp/tools/capture_debug_stats.test.ts",
-      "message": "DB-registered file no longer exists on disk. Consider updating database records.",
-      "timestamp": "2026-05-10T19:31:13Z"
-    }
-  ]
+  "generated_at": "2026-05-10T19:45:23Z",
+  "reminders": []
 }
