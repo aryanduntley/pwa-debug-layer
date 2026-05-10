@@ -1,5 +1,12 @@
+// DOM mutation producer. Observes `document` directly for light-DOM mutations
+// and composes attachShadowObserver from walk_shadow to cover open shadow root
+// content; closed shadows are excluded per spec (see walk_shadow.ts header).
+// Both surfaces feed the same onRecords pipeline so mutations coalesce into a
+// single DomMutationCapturedEvent batch regardless of which side fired them.
+
 import { createNodeIdAllocator, type NodeIdAllocator } from './node_ids.js';
 import { summarizeNode } from './dom_serialize.js';
+import { attachShadowObserver } from './walk_shadow.js';
 import type { Disposer, FrameMeta } from './capture_console.js';
 import type {
   DomMutationCapturedEvent,
@@ -148,9 +155,17 @@ export const installDomMutationCapture = (
     return () => {};
   }
 
+  const shadowDispose = attachShadowObserver({
+    root: document,
+    onMutation: (records) => {
+      onRecords(records);
+    },
+  });
+
   return () => {
     if (disposed) return;
     disposed = true;
+    shadowDispose();
     observer.disconnect();
     if (timer !== null) {
       clearTimeout(timer);

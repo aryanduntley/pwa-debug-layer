@@ -357,4 +357,55 @@ describe('captures integration: lifecycle + console + dom_mutation on shared emi
       beforeStats.perKind['lifecycle'] ?? 0,
     );
   });
+
+  it('shadow content mutation produces dom_mutation only — no cross-tag with console / lifecycle', async () => {
+    const { emit, sink } = buildPipeline();
+
+    disposers = [
+      installConsoleCapture(emit, FRAME, { now: () => 1 }),
+      installDomMutationCapture(emit, FRAME, { coalesceWindowMs: COALESCE_MS }),
+      installLifecycleCapture(emit, FRAME),
+    ];
+
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    await wait(WAIT_MS);
+
+    console.log('shadow-integration');
+    shadow.appendChild(document.createElement('span'));
+    history.pushState({ s: 1 }, '', '/shadow-integration');
+    await wait(WAIT_MS);
+
+    const recent = sink.getRecent({
+      kinds: ['console', 'dom_mutation', 'lifecycle'],
+    });
+    const consoleEvts = recent.events.filter((e) => e.kind === 'console');
+    const domEvts = recent.events.filter((e) => e.kind === 'dom_mutation');
+    const lifecycleEvts = recent.events.filter((e) => e.kind === 'lifecycle');
+
+    expect(consoleEvts.length).toBeGreaterThanOrEqual(1);
+    expect(domEvts.length).toBeGreaterThanOrEqual(1);
+    expect(lifecycleEvts.length).toBeGreaterThanOrEqual(1);
+
+    const sawShadowSpan = domEvts
+      .flatMap(
+        (e) =>
+          (
+            e as {
+              patches: ReadonlyArray<{
+                kind: string;
+                added?: ReadonlyArray<{ tagName: string }>;
+              }>;
+            }
+          ).patches,
+      )
+      .filter((p) => p.kind === 'childList')
+      .some((p) => (p.added ?? []).some((a) => a.tagName === 'SPAN'));
+    expect(sawShadowSpan).toBe(true);
+
+    for (const e of consoleEvts) expect(e.kind).toBe('console');
+    for (const e of domEvts) expect(e.kind).toBe('dom_mutation');
+    for (const e of lifecycleEvts) expect(e.kind).toBe('lifecycle');
+  });
 });

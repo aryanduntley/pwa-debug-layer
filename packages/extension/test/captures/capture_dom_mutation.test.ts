@@ -220,4 +220,92 @@ describe('installDomMutationCapture', () => {
     await flushed();
     expect(received).toHaveLength(0);
   });
+
+  it('emits a dom_mutation event for content added inside an open shadow root', async () => {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    await flushed();
+    received.length = 0;
+
+    const span = document.createElement('span');
+    shadow.appendChild(span);
+    await flushed();
+
+    expect(received.length).toBeGreaterThanOrEqual(1);
+    const event = received[0]!;
+    expect(event.kind).toBe('dom_mutation');
+    const sawSpan = event.patches
+      .filter((p): p is Extract<DomMutationPatch, { kind: 'childList' }> =>
+        p.kind === 'childList',
+      )
+      .some((p) => p.added.some((a) => a.tagName === 'SPAN'));
+    expect(sawSpan).toBe(true);
+  });
+
+  it('emits a dom_mutation event for content added inside a nested shadow root', async () => {
+    const outer = document.createElement('div');
+    const outerShadow = outer.attachShadow({ mode: 'open' });
+    const inner = document.createElement('div');
+    const innerShadow = inner.attachShadow({ mode: 'open' });
+    outerShadow.appendChild(inner);
+    document.body.appendChild(outer);
+    await flushed();
+    received.length = 0;
+
+    const p = document.createElement('p');
+    innerShadow.appendChild(p);
+    await flushed();
+
+    const sawP = received
+      .flatMap((e) => e.patches)
+      .filter((pa): pa is Extract<DomMutationPatch, { kind: 'childList' }> =>
+        pa.kind === 'childList',
+      )
+      .some((pa) => pa.added.some((a) => a.tagName === 'P'));
+    expect(sawP).toBe(true);
+  });
+
+  it('picks up shadows attached after install and captures their content mutations', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    await flushed();
+    received.length = 0;
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    // Trigger a host mutation so attachShadowObserver's host observer rescans.
+    host.appendChild(document.createElement('em'));
+    await flushed();
+    received.length = 0;
+
+    const span = document.createElement('span');
+    shadow.appendChild(span);
+    await flushed();
+
+    const sawSpan = received
+      .flatMap((e) => e.patches)
+      .filter((p): p is Extract<DomMutationPatch, { kind: 'childList' }> =>
+        p.kind === 'childList',
+      )
+      .some((p) => p.added.some((a) => a.tagName === 'SPAN'));
+    expect(sawSpan).toBe(true);
+  });
+
+  it('disposer disconnects shadow observers — post-dispose shadow mutations do not emit', async () => {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    await flushed();
+    shadow.appendChild(document.createElement('span'));
+    await flushed();
+    expect(received.length).toBeGreaterThan(0);
+
+    dispose!();
+    dispose = undefined;
+    received.length = 0;
+
+    shadow.appendChild(document.createElement('em'));
+    await flushed();
+    expect(received).toHaveLength(0);
+  });
 });
