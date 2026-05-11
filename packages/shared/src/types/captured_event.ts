@@ -2,6 +2,8 @@ export type CaptureMeta = {
   readonly ts: number;
   readonly frameUrl: string;
   readonly frameKey: string;
+  readonly frameId?: number;
+  readonly isCrossOrigin?: boolean;
 };
 
 export type ConsoleLevel =

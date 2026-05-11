@@ -46,6 +46,7 @@ export const installLifecycleCapture = (
       ts: now(),
       frameUrl: frame.frameUrl,
       frameKey: frame.frameKey,
+      ...(frame.isCrossOrigin !== undefined ? { isCrossOrigin: frame.isCrossOrigin } : {}),
       ...payload,
     }) as LifecycleCapturedEvent;
 

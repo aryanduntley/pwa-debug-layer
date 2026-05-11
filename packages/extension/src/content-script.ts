@@ -3,14 +3,9 @@ import {
   isCsToolRequest,
   PAGE_EVENT_SW_TAG,
 } from './page_bridge/cs_dispatcher.js';
-import type { FrameMeta } from './captures/capture_console.js';
 import type { LifecycleCapturedEvent } from './captures/types.js';
 import { installCsLifecycleCapture } from './captures/capture_cs_lifecycle.js';
-
-const computeFrameMeta = (): FrameMeta => ({
-  frameUrl: window.location.href,
-  frameKey: window === window.top ? 'top' : window.location.href,
-});
+import { computeFrameMeta } from './frame_meta/frame_meta.js';
 
 export const bootstrap = (): void => {
   const dispatcher = createCsDispatcher();

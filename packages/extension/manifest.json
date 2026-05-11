@@ -14,14 +14,14 @@
       "js": ["content-script.js"],
       "run_at": "document_start",
       "world": "ISOLATED",
-      "all_frames": false
+      "all_frames": true
     },
     {
       "matches": ["<all_urls>"],
       "js": ["page-world.js"],
       "run_at": "document_start",
       "world": "MAIN",
-      "all_frames": false
+      "all_frames": true
     }
   ],
   "permissions": ["scripting", "storage", "nativeMessaging", "webNavigation", "tabs"],

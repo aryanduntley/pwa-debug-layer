@@ -6,6 +6,7 @@ import {
 } from './sw_event_sink/sw_event_sink.js';
 import { createSwLifecycleProducer } from './sw_lifecycle/sw_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
+import { attachFrameId } from './frame_meta/attach_frame_id.js';
 
 const HOST_NAME = 'com.pwa_debug.host';
 const CAPTURES_EVENT_TOOL = 'captures';
@@ -13,9 +14,9 @@ const CAPTURES_EVENT_TOOL = 'captures';
 type PortRef = { current: chrome.runtime.Port | null };
 
 const installEventSinkListener = (sink: EventSink): void => {
-  chrome.runtime.onMessage.addListener((msg) => {
+  chrome.runtime.onMessage.addListener((msg, sender) => {
     if (!isPageEventSwMessage(msg)) return;
-    sink.handle(msg.event as CapturedEvent);
+    sink.handle(attachFrameId(msg.event as CapturedEvent, sender.frameId));
   });
 };
 

@@ -14,6 +14,7 @@ import { installWebSocketCapture } from './captures/capture_websocket.js';
 import { installDomMutationCapture } from './captures/capture_dom_mutation.js';
 import { installLifecycleCapture } from './captures/capture_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
+import { computeFrameMeta } from './frame_meta/frame_meta.js';
 
 type FrameworkHookProbe = {
   readonly react: boolean;
@@ -100,11 +101,6 @@ const installBridgeListener = (): void => {
     );
   });
 };
-
-const computeFrameMeta = (): FrameMeta => ({
-  frameUrl: window.location.href,
-  frameKey: window === window.top ? 'top' : window.location.href,
-});
 
 type CaptureKinds = {
   readonly console: boolean;

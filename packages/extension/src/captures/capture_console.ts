@@ -7,6 +7,8 @@ export type Disposer = () => void;
 export type FrameMeta = {
   readonly frameUrl: string;
   readonly frameKey: string;
+  readonly frameId?: number;
+  readonly isCrossOrigin?: boolean;
 };
 
 export type ConsoleCaptureOptions = {
@@ -53,6 +55,7 @@ export const buildConsoleEvent = (
     ts: opts.ts,
     frameUrl: frame.frameUrl,
     frameKey: frame.frameKey,
+    ...(frame.isCrossOrigin !== undefined ? { isCrossOrigin: frame.isCrossOrigin } : {}),
     level,
     args: serialized,
   };

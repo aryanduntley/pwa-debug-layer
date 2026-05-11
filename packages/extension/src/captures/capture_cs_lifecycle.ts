@@ -40,6 +40,7 @@ export const installCsLifecycleCapture = (
       ts: Date.now(),
       frameUrl: frame.frameUrl,
       frameKey: frame.frameKey,
+      ...(frame.isCrossOrigin !== undefined ? { isCrossOrigin: frame.isCrossOrigin } : {}),
     }) as LifecycleCapturedEvent;
     try {
       send(event);

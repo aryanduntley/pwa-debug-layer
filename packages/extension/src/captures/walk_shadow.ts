@@ -1,9 +1,14 @@
 // Open shadow roots only. Closed shadow roots are intentionally out of scope:
-// Element.shadowRoot returns null for closed mode per spec, and reaching them
-// would require monkey-patching Element.prototype.attachShadow at document_start
-// (would intercept BOTH modes' attachments). M13 milestone description excludes
-// that approach. See note 51 for the chrome-devtools-mcp gap matrix discussion
-// that originally raised closed-shadow walking as aspirational.
+// Element.shadowRoot returns null for closed mode per spec, so per-shadow
+// MutationObservers cannot attach to them even when discovered.
+//
+// M13 T-F adds a narrow Element.prototype.attachShadow patch (installAttachShadowPatch)
+// to fire shadow-attach notifications synchronously on creation regardless of mode.
+// We still skip closed shadows in the listener (init.mode === 'open' check) — the
+// patch is a TIMING fix for open shadows, not a closed-shadow capture mechanism.
+// Without the patch, walk_shadow misses shadows attached to a host that subsequently
+// receives zero light-DOM mutations (T-E real-Brave repro: m13-test.html shadow-host
+// got attachShadow + sr.innerHTML + setTimeout sr.appendChild with zero captures).
 //
 // Cross-frame walking is also out of scope here — iframe content is handled by
 // manifest content_scripts.all_frames=true plus frameId tagging (M13 T-C),
@@ -132,6 +137,17 @@ export const attachShadowObserver = (
 
   scanAndObserve(opts.root);
 
+  // T-F attachShadow patch: catch attach-after-insert cases where the host
+  // subsequently receives no light-DOM mutations. Synchronous on creation —
+  // the per-shadow MutationObserver attaches before any user-script content
+  // (sr.innerHTML / sr.appendChild) runs in the same tick.
+  const attachPatchDispose = installAttachShadowPatch((shadow) => {
+    if (disposed) return;
+    if (seen.has(shadow)) return;
+    notifyAttach(shadow);
+    observeShadow(shadow);
+  });
+
   // Host-tree observer: childList additions can introduce new shadow hosts.
   // attachShadow() itself fires no mutation, so detection rides on neighbouring
   // tree activity. Two paths covered:
@@ -178,5 +194,60 @@ export const attachShadowObserver = (
       observer.disconnect();
     }
     observers.length = 0;
+    attachPatchDispose();
+  };
+};
+
+const ATTACH_SHADOW_PATCH_MARKER = Symbol.for(
+  'pwa-debug:walk_shadow:attachShadowPatched',
+);
+const attachShadowListeners = new Set<ShadowAttachListener>();
+let originalAttachShadow:
+  | ((this: Element, init: ShadowRootInit) => ShadowRoot)
+  | null = null;
+
+export const installAttachShadowPatch = (
+  onAttach: ShadowAttachListener,
+): Disposer => {
+  if (typeof Element === 'undefined') return () => {};
+  const proto = Element.prototype as Element & {
+    [ATTACH_SHADOW_PATCH_MARKER]?: boolean;
+  };
+  if (proto[ATTACH_SHADOW_PATCH_MARKER] !== true) {
+    const raw = (Element.prototype as { attachShadow?: unknown }).attachShadow;
+    if (typeof raw !== 'function') return () => {};
+    originalAttachShadow = raw as (
+      this: Element,
+      init: ShadowRootInit,
+    ) => ShadowRoot;
+    Element.prototype.attachShadow = function patchedAttachShadow(
+      this: Element,
+      init: ShadowRootInit,
+    ): ShadowRoot {
+      const shadow = originalAttachShadow!.call(this, init);
+      if (init !== undefined && init.mode === 'open') {
+        for (const listener of attachShadowListeners) {
+          try {
+            listener(shadow);
+          } catch {
+            // listener failures must not break the host's attachShadow call
+          }
+        }
+      }
+      return shadow;
+    };
+    proto[ATTACH_SHADOW_PATCH_MARKER] = true;
+  }
+  attachShadowListeners.add(onAttach);
+  return () => {
+    attachShadowListeners.delete(onAttach);
+    if (attachShadowListeners.size === 0 && originalAttachShadow !== null) {
+      Element.prototype.attachShadow = originalAttachShadow;
+      const proto = Element.prototype as Element & {
+        [ATTACH_SHADOW_PATCH_MARKER]?: boolean;
+      };
+      delete proto[ATTACH_SHADOW_PATCH_MARKER];
+      originalAttachShadow = null;
+    }
   };
 };

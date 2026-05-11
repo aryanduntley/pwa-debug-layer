@@ -112,6 +112,7 @@ export const installDomMutationCapture = (
         ts: now(),
         frameUrl: frame.frameUrl,
         frameKey: frame.frameKey,
+        ...(frame.isCrossOrigin !== undefined ? { isCrossOrigin: frame.isCrossOrigin } : {}),
         patches: Object.freeze(patches),
       }) as DomMutationCapturedEvent,
     );

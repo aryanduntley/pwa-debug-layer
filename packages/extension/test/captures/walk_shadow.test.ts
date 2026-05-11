@@ -243,6 +243,69 @@ describe('attachShadowObserver', () => {
     }
   });
 
+  it('T-F: picks up shadows attached AFTER insertion when host has NO light-DOM mutations', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    await flushMutations();
+
+    const received: Array<{ records: MutationRecord[]; target: ShadowRoot }> =
+      [];
+    dispose = attachShadowObserver({
+      root: document.body,
+      onMutation: (records, target) => {
+        received.push({ records: [...records], target });
+      },
+    });
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p id="initial">initial content</p>';
+    await flushMutations();
+
+    const span = document.createElement('span');
+    span.textContent = 'post-attach';
+    shadow.appendChild(span);
+    await flushMutations();
+
+    expect(received.length).toBeGreaterThan(0);
+    const targets = received.map((r) => r.target);
+    expect(targets).toContain(shadow);
+    const sawSpan = received
+      .flatMap((r) => r.records)
+      .filter((r) => r.type === 'childList')
+      .some((r) => {
+        for (let i = 0; i < r.addedNodes.length; i++) {
+          const n = r.addedNodes[i];
+          if (
+            n !== undefined &&
+            n.nodeType === 1 &&
+            (n as Element).tagName === 'SPAN'
+          )
+            return true;
+        }
+        return false;
+      });
+    expect(sawSpan).toBe(true);
+  });
+
+  it('T-F: closed-shadow attach does NOT trigger the open-shadow listener', async () => {
+    let attachedCount = 0;
+    dispose = attachShadowObserver({
+      root: document.body,
+      onMutation: () => {},
+      onShadowAttach: () => {
+        attachedCount += 1;
+      },
+    });
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    await flushMutations();
+    host.attachShadow({ mode: 'closed' });
+    await flushMutations();
+
+    expect(attachedCount).toBe(0);
+  });
+
   it('swallows onMutation throws without breaking the observer loop', async () => {
     const host = document.createElement('div');
     const shadow = host.attachShadow({ mode: 'open' });
