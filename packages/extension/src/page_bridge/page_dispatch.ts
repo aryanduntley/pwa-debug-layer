@@ -4,6 +4,18 @@ import {
   type PageBridgeResponseEnvelope,
 } from './protocol.js';
 import { serializeArgs } from '../captures/serialize.js';
+import {
+  serializeTree,
+  type ReactTreeOptions,
+  type ReactTreeResult,
+} from '../react/serialize_tree.js';
+import { findReactRoots } from '../react/find_react_roots.js';
+import { resolveStableId } from '../react/resolve_stable_id.js';
+import {
+  serializeComponent,
+  type ReactComponentInfo,
+  type SerializeComponentOptions,
+} from '../react/serialize_component.js';
 
 export type SessionPingPayload = {
   readonly url: string;
@@ -157,9 +169,89 @@ export const evaluateHandler = async (
   });
 };
 
+export const readReactTreeInput = (raw: unknown): ReactTreeOptions => {
+  if (raw === null || typeof raw !== 'object') return Object.freeze({});
+  const r = raw as Record<string, unknown>;
+  const out: { rootIndex?: number; depthLimit?: number; maxNodes?: number } = {};
+  const rootIdx = r['root_index'];
+  if (typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0) {
+    out.rootIndex = rootIdx;
+  }
+  const depth = r['depth_limit'];
+  if (typeof depth === 'number' && Number.isInteger(depth) && depth > 0) {
+    out.depthLimit = depth;
+  }
+  const max = r['max_nodes'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxNodes = max;
+  }
+  return Object.freeze(out);
+};
+
+export const reactTreeHandler = (
+  env: PageBridgeRequestEnvelope,
+): ReactTreeResult => {
+  const options = readReactTreeInput(env.payload);
+  return serializeTree(document, options);
+};
+
+type ReactGetStateInternal = {
+  readonly stableId: string;
+  readonly rootIndex: number;
+  readonly options: SerializeComponentOptions;
+};
+
+export const readReactGetStateInput = (
+  raw: unknown,
+): ReactGetStateInternal | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const stableId = r['stable_id'];
+  if (typeof stableId !== 'string' || stableId.length === 0) return null;
+  const rootIdx = r['root_index'];
+  const rootIndex =
+    typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0
+      ? rootIdx
+      : 0;
+  const options: { includeProps?: boolean; includeHooks?: boolean } = {};
+  if (typeof r['include_props'] === 'boolean') options.includeProps = r['include_props'];
+  if (typeof r['include_hooks'] === 'boolean') options.includeHooks = r['include_hooks'];
+  return Object.freeze({ stableId, rootIndex, options: Object.freeze(options) });
+};
+
+export type ReactGetStateErrorPayload = {
+  readonly error: { readonly message: string };
+};
+
+export const reactGetStateHandler = (
+  env: PageBridgeRequestEnvelope,
+): ReactComponentInfo | ReactGetStateErrorPayload => {
+  const input = readReactGetStateInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'react_get_state: payload must be { stable_id: non-empty string, root_index?: number, include_props?: bool, include_hooks?: bool }',
+      }),
+    });
+  }
+  const roots = findReactRoots(document);
+  const fiber = resolveStableId(input.stableId, roots);
+  if (fiber === undefined) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `react_get_state: stable_id "${input.stableId}" did not resolve. Re-call react.tree to refresh ids (the tree shape may have changed) or verify root_index matches the root used when the id was computed.`,
+      }),
+    });
+  }
+  return serializeComponent(fiber, input.rootIndex, input.options);
+};
+
 const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   session_ping: () => sessionPingHandler(),
   evaluate: (env) => evaluateHandler(env),
+  react_tree: (env) => reactTreeHandler(env),
+  react_get_state: (env) => reactGetStateHandler(env),
 });
 
 export const dispatchPageRequest = async (

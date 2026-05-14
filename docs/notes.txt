@@ -1,0 +1,191 @@
+================================================================================
+Smoke test: react_tree + react_get_state against examples/react-pwa
+================================================================================
+
+These steps verify the M21 tools land correctly in real Brave against the M19
+fixture. They're a subset of M23 (the formal Brave smoke milestone); finishing
+M22 (findByText/findByRole) before doing the full M23 lets you smoke all four
+React tools in one pass. The steps below cover only react_tree and
+react_get_state.
+
+--------------------------------------------------------------------------------
+Pre-conditions
+--------------------------------------------------------------------------------
+
+1. Build the workspace.
+   $ pnpm -w build
+   (or: pnpm --filter @pwa-debug/shared run build &&
+        pnpm --filter @pwa-debug/host    run build &&
+        pnpm --filter @pwa-debug/extension run build)
+
+2. Bring up the React fixture.
+   $ cd examples/react-pwa
+   $ npm install          # only first time
+   $ npm run dev          # Vite serves on http://localhost:5173
+
+3. Brave side.
+   - Open brave://extensions, enable Developer mode.
+   - "Load unpacked" -> point at packages/extension/dist (or reload if already
+     loaded). Confirm the extension ID is registered with the host via
+     host_register_extension if not already.
+   - Open a tab to http://localhost:5173 and confirm the fixture renders:
+     Counter, TodoList (with todo-marker-A / todo-marker-B), UserProfile
+     (region role "user profile"), NestedSection > DeepChild.
+
+4. Baseline: call mcp__pwa-debug__host_status. activeConnections should be
+   non-empty; pageWorld.url should be the localhost:5173 URL.
+
+--------------------------------------------------------------------------------
+Smoke cases (run from Claude Code; or any MCP client against the host)
+--------------------------------------------------------------------------------
+
+A. react_tree default — full tree shape
+
+   Tool:    react_tree
+   Args:    {}
+   Expect:  ok:true. data.rootCount === 1. data.truncated === false.
+            data.roots[0].displayName === 'HostRoot'.
+            data.roots[0].children[0].displayName === 'App'.
+            App's children contain Counter, TodoList, UserProfile, NestedSection
+              (DeepChild appears under NestedSection).
+            Counter and TodoList both have hasHooks:true (they're function
+              components with useState/useReducer).
+            UserProfile.hasHooks should be false (props-only) UNLESS the impl
+              wraps a hook — verify against examples/react-pwa source.
+            Every node has stableId starting with 'root0/App[0]/...'.
+
+   Capture from data.roots[0].children[0].children:
+     - Counter's stableId (e.g. 'root0/App[0]/Counter[0]')
+     - TodoList's stableId
+     - UserProfile's stableId
+
+B. react_tree with depth_limit — should truncate
+
+   Tool:    react_tree
+   Args:    { "depth_limit": 1 }
+   Expect:  ok:true. data.truncated === true. The roots[] only goes 1 level
+            deep (HostRoot has children, but each child has empty children[]).
+
+C. react_get_state on Counter — useState hook + props
+
+   Tool:    react_get_state
+   Args:    { "stable_id": "<Counter stableId from A>" }
+   Expect:  ok:true.
+            data.displayName === 'Counter'.
+            data.props === { initial: 0, step: 1 }   (or whatever the fixture
+              passes — verify against examples/react-pwa/src/App.tsx).
+            data.hooks[0] === { type: 'state', index: 0, value: 0 }.
+            data.state should be ABSENT (Counter is a function component, not
+              a class component).
+            data.truncated should be absent/false.
+
+D. Subscription-free re-read after a render
+
+   In the browser, click the Counter increment button (or use:
+     evaluate({ "expression": "document.querySelector('button')?.click()" })
+   then wait ~50ms).
+
+   Tool:    react_get_state
+   Args:    { "stable_id": "<same Counter stableId>" }
+   Expect:  ok:true.
+            data.hooks[0].value is now 1 (or step, whatever the increment is).
+            Confirms M20 stableId identity survives re-renders and the page
+            world has no subscription leak.
+
+E. react_get_state on TodoList — useReducer state
+
+   Tool:    react_get_state
+   Args:    { "stable_id": "<TodoList stableId from A>" }
+   Expect:  ok:true.
+            data.hooks contains at least one entry of type 'state' whose value
+              is the todos array (state and reducer are conflated by design).
+            data.props === {} or the empty defaults.
+
+F. react_get_state with include_hooks:false
+
+   Tool:    react_get_state
+   Args:    { "stable_id": "<Counter stableId>", "include_hooks": false }
+   Expect:  ok:true.
+            data.hooks is undefined.
+            next_steps mentions "include_hooks:false suppressed the hooks field".
+
+G. react_get_state with a stale stable_id — tool-level error path
+
+   Tool:    react_get_state
+   Args:    { "stable_id": "root0/Nonexistent[0]" }
+   Expect:  ok:false.
+            error matches /did not resolve/.
+            next_steps mentions "re-call react.tree" guidance.
+
+H. react_tree with root_index out of range
+
+   Tool:    react_tree
+   Args:    { "root_index": 99 }
+   Expect:  ok:true.
+            data.rootCount === 1, data.roots === [].
+            next_steps mentions "out of range".
+
+I. react_get_state on UserProfile — props-only
+
+   Tool:    react_get_state
+   Args:    { "stable_id": "<UserProfile stableId>" }
+   Expect:  ok:true.
+            data.props.name === 'Alice', data.props.role === 'admin'
+              (verify against examples/react-pwa/src/App.tsx).
+            data.state undefined.
+            data.hooks either undefined or [] (depends on UserProfile impl).
+
+--------------------------------------------------------------------------------
+What "pass" means
+--------------------------------------------------------------------------------
+
+A-I all return the expected shape and pass through next_steps appropriately.
+A few details that would NOT count as failures (just deviations to document):
+
+- displayName 'Memo(Inner)' or 'ForwardRef(Inner)' instead of plain name if
+  the fixture wraps a component. That's correct M20 behavior.
+- 'state' vs 'reducer' tagging: useReducer hooks come back as type:'state' by
+  design (the heuristic conflates them; see M21 T3 close-out note).
+- 'context'-typed hooks won't appear; falls back to 'custom' if used.
+- truncated:true on small components would be unexpected — investigate if seen.
+
+--------------------------------------------------------------------------------
+On failure
+--------------------------------------------------------------------------------
+
+Classify before patching:
+
+1. Transport (host_status shows no connection) -> reload the extension at
+   brave://extensions and verify NMH respawned.
+
+2. NMH error envelope ("react_tree nmh error: page-bridge timeout") ->
+   page-world script likely not attached. Verify the fixture's URL is http(s)
+   (chrome://, brave://, and the chrome web store can't run page-world). Then
+   inspect the SW console at brave://extensions for [pwa-debug] errors.
+
+3. Tool-level error ("did not resolve") on a fresh tree -> the fiber walk
+   produced an unexpected shape. Inspect via:
+     evaluate({ "expression": "document.querySelector('#root')?.['__reactContainer$' + Object.keys(document.querySelector('#root')).find(k => k.startsWith('__reactContainer$')).slice('__reactContainer$'.length)]?.current?.tag" })
+   Should print 3 (HostRoot). If anything else, getRootFiber's container/fiber
+   dereference may need a tweak for this React version.
+
+4. Wrong stableId format (e.g. missing root0 prefix, or extra/missing
+   segments) -> walk fiber.return chain manually in evaluate() and compare
+   against computeStableId's expected output. Fix in compute_stable_id.ts.
+
+5. hasHooks/hasState heuristic wrong on a real component -> shape may differ
+   from synthetic test fixtures. Capture fiber.memoizedState shape via
+   evaluate() and adjust serialize_tree.ts hasStateFor / hasHooksFor.
+
+All deviations get an AIMFP add_note(note_type='warning' or 'task_context')
+attached to the relevant task or to M21 itself.
+
+--------------------------------------------------------------------------------
+Out of scope here
+--------------------------------------------------------------------------------
+
+- react.findByText and react.findByRole (M22 — not yet implemented).
+- Sibling-reorder identity (M23 acceptance case H) — needs key-bearing TodoList
+  reorder UX which is fine to smoke alongside this.
+- Cross-React-version (16/17/19) compatibility — Path 3 targets only the
+  fixture's React 18 build.

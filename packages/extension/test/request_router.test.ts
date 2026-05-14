@@ -437,6 +437,228 @@ describe('routeRequest — evaluate', () => {
   });
 });
 
+describe('routeRequest — react_tree', () => {
+  it('routes via active tab when tab_id is absent and forwards page-world payload verbatim', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { roots: [], truncated: false, rootCount: 0 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-rt-1',
+        tool: 'react_tree',
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.payload).toEqual({ roots: [], truncated: false, rootCount: 0 });
+    expect(vi.mocked(chrome.tabs.query)).toHaveBeenCalled();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(7);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_tree',
+      payload: {},
+    });
+  });
+
+  it('routes to a specific tab when payload.tab_id is provided and forwards options verbatim', async () => {
+    const queryMock = vi.mocked(chrome.tabs.query);
+    const queryCallsBefore = queryMock.mock.calls.length;
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { roots: [], truncated: true, rootCount: 1 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-rt-2',
+        tool: 'react_tree',
+        payload: {
+          tab_id: 99,
+          root_index: 0,
+          depth_limit: 4,
+          max_nodes: 50,
+        },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.payload).toEqual({ roots: [], truncated: true, rootCount: 1 });
+    expect(queryMock.mock.calls.length).toBe(queryCallsBefore);
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(99);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_tree',
+      payload: {
+        root_index: 0,
+        depth_limit: 4,
+        max_nodes: 50,
+      },
+    });
+  });
+
+  it('returns an error envelope when no active tab is present', async () => {
+    vi.mocked(chrome.tabs.query).mockResolvedValueOnce([]);
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-rt-3',
+        tool: 'react_tree',
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toBe('no active tab');
+  });
+
+  it('surfaces a CS-side page-bridge error.message into the SW error envelope', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValueOnce({
+      error: { message: 'page-bridge timeout after 4000ms (tool=react_tree)' },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-rt-4',
+        tool: 'react_tree',
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/page-bridge timeout/);
+  });
+
+  it('drops malformed numeric fields silently and forwards only well-formed ones', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { roots: [], truncated: false, rootCount: 0 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-rt-5',
+        tool: 'react_tree',
+        payload: {
+          root_index: -1,
+          depth_limit: 0,
+          max_nodes: 'not a number',
+        },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_tree',
+      payload: {},
+    });
+  });
+});
+
+describe('routeRequest — react_get_state', () => {
+  it('routes via active tab and forwards stable_id payload', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { stableId: 'root0/App[0]', displayName: 'App' },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-gs-1',
+        tool: 'react_get_state',
+        payload: { stable_id: 'root0/App[0]' },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(7);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_get_state',
+      payload: { stable_id: 'root0/App[0]' },
+    });
+  });
+
+  it('routes to a specific tab_id and forwards all options', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { stableId: 'root0/App[0]', displayName: 'App' },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-gs-2',
+        tool: 'react_get_state',
+        payload: {
+          tab_id: 42,
+          stable_id: 'root0/App[0]/Counter[0]',
+          root_index: 0,
+          include_props: true,
+          include_hooks: false,
+        },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(42);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_get_state',
+      payload: {
+        stable_id: 'root0/App[0]/Counter[0]',
+        root_index: 0,
+        include_props: true,
+        include_hooks: false,
+      },
+    });
+  });
+
+  it('rejects payloads missing stable_id', async () => {
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-gs-3',
+        tool: 'react_get_state',
+        payload: { tab_id: 7 },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/stable_id: non-empty string/);
+  });
+
+  it('rejects payloads with empty stable_id', async () => {
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-gs-4',
+        tool: 'react_get_state',
+        payload: { stable_id: '' },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/stable_id/);
+  });
+
+  it('surfaces a CS-side page-bridge error.message', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValueOnce({
+      error: { message: 'page-bridge timeout after 4000ms (tool=react_get_state)' },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-gs-5',
+        tool: 'react_get_state',
+        payload: { stable_id: 'root0' },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/page-bridge timeout/);
+  });
+});
+
 describe('routeRequest — error paths', () => {
   it('returns an error envelope for an unknown tool', async () => {
     const r = await routeRequest(

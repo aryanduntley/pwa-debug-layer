@@ -181,10 +181,115 @@ const handleEvaluate: RequestHandler = async (env) => {
   return response.payload;
 };
 
+type ReactTreeRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReactTreeInput = (raw: unknown): ReactTreeRouted | null => {
+  if (raw === undefined || raw === null) {
+    return { tabId: undefined, payload: {} };
+  }
+  if (typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = {};
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (
+    typeof r['depth_limit'] === 'number' &&
+    Number.isInteger(r['depth_limit']) &&
+    (r['depth_limit'] as number) > 0
+  ) {
+    payload['depth_limit'] = r['depth_limit'];
+  }
+  if (
+    typeof r['max_nodes'] === 'number' &&
+    Number.isInteger(r['max_nodes']) &&
+    (r['max_nodes'] as number) > 0
+  ) {
+    payload['max_nodes'] = r['max_nodes'];
+  }
+  return { tabId, payload };
+};
+
+const handleReactTree: RequestHandler = async (env) => {
+  const sanitized = sanitizeReactTreeInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'react_tree: payload must be an object with optional { tab_id?, root_index?, depth_limit?, max_nodes? }',
+    );
+  }
+  const csReq = { tool: 'react_tree', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type ReactGetStateRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReactGetStateInput = (raw: unknown): ReactGetStateRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const stableId = r['stable_id'];
+  if (typeof stableId !== 'string' || stableId.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { stable_id: stableId };
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (typeof r['include_props'] === 'boolean') payload['include_props'] = r['include_props'];
+  if (typeof r['include_hooks'] === 'boolean') payload['include_hooks'] = r['include_hooks'];
+  return { tabId, payload };
+};
+
+const handleReactGetState: RequestHandler = async (env) => {
+  const sanitized = sanitizeReactGetStateInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'react_get_state: payload must be { stable_id: non-empty string, tab_id?, root_index?, include_props?, include_hooks? }',
+    );
+  }
+  const csReq = { tool: 'react_get_state', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   session_ping: handleSessionPing,
   recent_events: handleRecentEvents,
   evaluate: handleEvaluate,
+  react_tree: handleReactTree,
+  react_get_state: handleReactGetState,
 });
 
 const errorResponse = (

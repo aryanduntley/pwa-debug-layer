@@ -9,6 +9,8 @@ import { recentEventsTool } from './recent_events.js';
 import { consoleTailTool } from './console_tail.js';
 import { evaluateTool } from './evaluate.js';
 import { networkTailTool } from './network_tail.js';
+import { reactTreeTool } from './react_tree.js';
+import { reactGetStateTool } from './react_get_state.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
@@ -25,4 +27,6 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   consoleTailTool,
   networkTailTool,
   evaluateTool,
+  reactTreeTool,
+  reactGetStateTool,
 ] as unknown as readonly ToolDef[]);
