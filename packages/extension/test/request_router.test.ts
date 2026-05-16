@@ -659,6 +659,234 @@ describe('routeRequest — react_get_state', () => {
   });
 });
 
+describe('routeRequest — react_find_by_text', () => {
+  it('routes via active tab and forwards the pattern payload', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { matches: [], truncated: false, rootCount: 0 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-ft-1',
+        tool: 'react_find_by_text',
+        payload: { pattern: 'todo' },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.payload).toEqual({ matches: [], truncated: false, rootCount: 0 });
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(7);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_find_by_text',
+      payload: { pattern: 'todo' },
+    });
+  });
+
+  it('routes to a specific tab_id and forwards exact/root_index/max_matches', async () => {
+    const queryMock = vi.mocked(chrome.tabs.query);
+    const queryCallsBefore = queryMock.mock.calls.length;
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { matches: [], truncated: true, rootCount: 1 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-ft-2',
+        tool: 'react_find_by_text',
+        payload: {
+          tab_id: 42,
+          pattern: 'Save',
+          exact: true,
+          root_index: 0,
+          max_matches: 5,
+        },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(queryMock.mock.calls.length).toBe(queryCallsBefore);
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(42);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_find_by_text',
+      payload: { pattern: 'Save', exact: true, root_index: 0, max_matches: 5 },
+    });
+  });
+
+  it('rejects payloads missing pattern', async () => {
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-ft-3',
+        tool: 'react_find_by_text',
+        payload: { tab_id: 7 },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/pattern: non-empty string/);
+  });
+
+  it('drops malformed numeric fields and forwards only the pattern', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { matches: [], truncated: false, rootCount: 0 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-ft-4',
+        tool: 'react_find_by_text',
+        payload: { pattern: 'x', root_index: -1, max_matches: 'lots' },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_find_by_text',
+      payload: { pattern: 'x' },
+    });
+    expect(
+      (callArgs?.[1] as { payload: Record<string, unknown> }).payload,
+    ).toEqual({ pattern: 'x' });
+  });
+
+  it('surfaces a CS-side page-bridge error.message', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValueOnce({
+      error: {
+        message: 'page-bridge timeout after 4000ms (tool=react_find_by_text)',
+      },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-ft-5',
+        tool: 'react_find_by_text',
+        payload: { pattern: 'x' },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/page-bridge timeout/);
+  });
+});
+
+describe('routeRequest — react_find_by_role', () => {
+  it('routes via active tab and forwards the role payload', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { matches: [], truncated: false, rootCount: 0 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-fr-1',
+        tool: 'react_find_by_role',
+        payload: { role: 'button' },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.payload).toEqual({ matches: [], truncated: false, rootCount: 0 });
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(7);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_find_by_role',
+      payload: { role: 'button' },
+    });
+  });
+
+  it('routes to a specific tab_id and forwards name/root_index/max_matches', async () => {
+    const queryMock = vi.mocked(chrome.tabs.query);
+    const queryCallsBefore = queryMock.mock.calls.length;
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { matches: [], truncated: true, rootCount: 1 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-fr-2',
+        tool: 'react_find_by_role',
+        payload: {
+          tab_id: 42,
+          role: 'textbox',
+          name: 'Email',
+          root_index: 0,
+          max_matches: 5,
+        },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    expect(queryMock.mock.calls.length).toBe(queryCallsBefore);
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(callArgs?.[0]).toBe(42);
+    expect(callArgs?.[1]).toMatchObject({
+      tool: 'react_find_by_role',
+      payload: { role: 'textbox', name: 'Email', root_index: 0, max_matches: 5 },
+    });
+  });
+
+  it('rejects payloads missing role', async () => {
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-fr-3',
+        tool: 'react_find_by_role',
+        payload: { tab_id: 7 },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/role: non-empty string/);
+  });
+
+  it('drops malformed numeric fields and forwards only the role', async () => {
+    const sendMock = vi.mocked(chrome.tabs.sendMessage);
+    sendMock.mockResolvedValueOnce({
+      payload: { matches: [], truncated: false, rootCount: 0 },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-fr-4',
+        tool: 'react_find_by_role',
+        payload: { role: 'img', root_index: -1, max_matches: 'lots' },
+      },
+      makeCtx(),
+    );
+    expect(r.error).toBeUndefined();
+    const callArgs = sendMock.mock.calls.at(-1);
+    expect(
+      (callArgs?.[1] as { payload: Record<string, unknown> }).payload,
+    ).toEqual({ role: 'img' });
+  });
+
+  it('surfaces a CS-side page-bridge error.message', async () => {
+    vi.mocked(chrome.tabs.sendMessage).mockResolvedValueOnce({
+      error: {
+        message: 'page-bridge timeout after 4000ms (tool=react_find_by_role)',
+      },
+    });
+    const r = await routeRequest(
+      {
+        type: 'request',
+        requestId: 'r-fr-5',
+        tool: 'react_find_by_role',
+        payload: { role: 'button' },
+      },
+      makeCtx(),
+    );
+    expect(r.payload).toBeUndefined();
+    expect(r.error?.message).toMatch(/page-bridge timeout/);
+  });
+});
+
 describe('routeRequest — error paths', () => {
   it('returns an error envelope for an unknown tool', async () => {
     const r = await routeRequest(

@@ -16,6 +16,8 @@ import {
   type ReactComponentInfo,
   type SerializeComponentOptions,
 } from '../react/serialize_component.js';
+import { findByText, type FindByTextResult } from '../react/find_by_text.js';
+import { findByRole, type FindByRoleResult } from '../react/find_by_role.js';
 
 export type SessionPingPayload = {
   readonly url: string;
@@ -247,11 +249,142 @@ export const reactGetStateHandler = (
   return serializeComponent(fiber, input.rootIndex, input.options);
 };
 
+export type ReactFindByTextInput = {
+  readonly pattern: string;
+  readonly exact: boolean;
+  readonly rootIndex?: number;
+  readonly maxMatches?: number;
+};
+
+export const readReactFindByTextInput = (
+  raw: unknown,
+): ReactFindByTextInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const out: {
+    pattern: string;
+    exact: boolean;
+    rootIndex?: number;
+    maxMatches?: number;
+  } = { pattern, exact: r['exact'] === true };
+  const rootIdx = r['root_index'];
+  if (typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0) {
+    out.rootIndex = rootIdx;
+  }
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxMatches = max;
+  }
+  return Object.freeze(out);
+};
+
+// Reuses the generic { error: { message } } shape exported as
+// ReactGetStateErrorPayload — tool-level errors are wire-successful by
+// convention (mirrors reactGetStateHandler).
+export const reactFindByTextHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindByTextResult | ReactGetStateErrorPayload => {
+  const input = readReactFindByTextInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'react_find_by_text: payload must be { pattern: non-empty string, exact?: bool, root_index?: number, max_matches?: number }',
+      }),
+    });
+  }
+  let regex: RegExp;
+  try {
+    regex = new RegExp(input.pattern);
+  } catch (err) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `react_find_by_text: invalid regex pattern: ${(err as Error).message}`,
+      }),
+    });
+  }
+  return findByText(document, regex, {
+    exact: input.exact,
+    ...(input.rootIndex !== undefined ? { rootIndex: input.rootIndex } : {}),
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+export type ReactFindByRoleInput = {
+  readonly role: string;
+  readonly name?: string;
+  readonly rootIndex?: number;
+  readonly maxMatches?: number;
+};
+
+export const readReactFindByRoleInput = (
+  raw: unknown,
+): ReactFindByRoleInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const out: {
+    role: string;
+    name?: string;
+    rootIndex?: number;
+    maxMatches?: number;
+  } = { role };
+  if (typeof r['name'] === 'string' && r['name'].length > 0) {
+    out.name = r['name'];
+  }
+  const rootIdx = r['root_index'];
+  if (typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0) {
+    out.rootIndex = rootIdx;
+  }
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxMatches = max;
+  }
+  return Object.freeze(out);
+};
+
+// Reuses the generic { error: { message } } shape (ReactGetStateErrorPayload);
+// tool-level errors are wire-successful by convention.
+export const reactFindByRoleHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindByRoleResult | ReactGetStateErrorPayload => {
+  const input = readReactFindByRoleInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'react_find_by_role: payload must be { role: non-empty string, name?: string, root_index?: number, max_matches?: number }',
+      }),
+    });
+  }
+  let nameRe: RegExp | undefined;
+  if (input.name !== undefined) {
+    try {
+      nameRe = new RegExp(input.name);
+    } catch (err) {
+      return Object.freeze({
+        error: Object.freeze({
+          message: `react_find_by_role: invalid name regex: ${(err as Error).message}`,
+        }),
+      });
+    }
+  }
+  return findByRole(document, input.role, nameRe, {
+    ...(input.rootIndex !== undefined ? { rootIndex: input.rootIndex } : {}),
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
 const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   session_ping: () => sessionPingHandler(),
   evaluate: (env) => evaluateHandler(env),
   react_tree: (env) => reactTreeHandler(env),
   react_get_state: (env) => reactGetStateHandler(env),
+  react_find_by_text: (env) => reactFindByTextHandler(env),
+  react_find_by_role: (env) => reactFindByRoleHandler(env),
 });
 
 export const dispatchPageRequest = async (

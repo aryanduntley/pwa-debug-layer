@@ -284,12 +284,122 @@ const handleReactGetState: RequestHandler = async (env) => {
   return response.payload;
 };
 
+type ReactFindByTextRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReactFindByTextInput = (
+  raw: unknown,
+): ReactFindByTextRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { pattern };
+  if (typeof r['exact'] === 'boolean') payload['exact'] = r['exact'];
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleReactFindByText: RequestHandler = async (env) => {
+  const sanitized = sanitizeReactFindByTextInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'react_find_by_text: payload must be { pattern: non-empty string, tab_id?, exact?, root_index?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'react_find_by_text', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type ReactFindByRoleRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReactFindByRoleInput = (
+  raw: unknown,
+): ReactFindByRoleRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { role };
+  if (typeof r['name'] === 'string' && r['name'].length > 0) {
+    payload['name'] = r['name'];
+  }
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleReactFindByRole: RequestHandler = async (env) => {
+  const sanitized = sanitizeReactFindByRoleInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'react_find_by_role: payload must be { role: non-empty string, tab_id?, name?, root_index?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'react_find_by_role', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   session_ping: handleSessionPing,
   recent_events: handleRecentEvents,
   evaluate: handleEvaluate,
   react_tree: handleReactTree,
   react_get_state: handleReactGetState,
+  react_find_by_text: handleReactFindByText,
+  react_find_by_role: handleReactFindByRole,
 });
 
 const errorResponse = (
