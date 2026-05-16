@@ -1,276 +1,38 @@
-================================================================================
-M23 — Brave acceptance smoke: react.tree + react.getState + react.findByText
-       + react.findByRole  (all four Path 3 tools, examples/react-pwa fixture)
-================================================================================
+note 129
+note 131
 
-This is the formal Path 3 exit smoke. M21 shipped react.tree/react.getState;
-M22 shipped react.findByText/react.findByRole. All four are verified here in
-one pass against the locked examples/react-pwa fixture.
+Session summary
 
-Path 3 exit criterion: Claude can fetch a React component's props+state+hooks
-by stable id on the examples/react-pwa target.
+  Goal: finish M23 (Path 3 exit smoke) + close Path 3. Outcome: partially
+  advanced; blocked on a real defect now fully root-caused and queued.
 
---------------------------------------------------------------------------------
-0. CRITICAL PREREQUISITE — why a Claude Code restart alone is not enough
---------------------------------------------------------------------------------
+  Done & verified:
+  - Started the M23 A–O smoke. Cases A, B, C PASS (item 314 ✅).
+  - Root-caused and fixed the React-18 createRoot defect in getRootFiber
+  (it assumed __reactContainer$ is a FiberRoot; it's actually the childless
+   double-buffered HostRoot fiber). Rebuilt as a robust 3-strategy resolver
+   (per your "check multiple ways, prefer the walkable result" direction).
+  SQ4 complete — react_tree now returns the full tree; typecheck clean,
+  get_root_fiber 10/10, suite 495/496.
 
-.mcp.json launches the pwa-debug MCP server as `node packages/host/dist/main.js`
-— the BUILT artifact, not TS source. Claude Code fetches the tool list once at
-MCP-connect (session start) and never hot-reloads it. So the four react_* tools
-only become callable after, IN THIS ORDER:
+  Honest corrections made this session:
+  - My initial crypto.randomUUID root-cause was a misdiagnosis (your "echo
+  it" test disproved it — it works fine). Corrected the record; SQ3
+  downgraded from "critical M23 blocker" to optional low-pri.
+  
+  Blocked → queued for next session:
+  - Cases D–O fail: react_get_state "did not resolve" — two confirmed
+  defects (note 130): (1) resolveStableId resolves the root via
+  getFiberForNode (only reads __reactFiber$, absent on #root); (2)
+  computeStableId↔resolveStableId aren't bijective for real
+  heterogeneous/numeric-key trees. Captured as SQ5 — Option A (critical,
+  pending, self-contained spec). M20-scheme amendment logged as evolution
+  note 132 per your approval.
 
-  1. Build:  pnpm -w build
-     (shared+host+extension; regenerates dist/main.js with react_tree,
-      react_get_state, react_find_by_text, react_find_by_role registered in
-      packages/host/src/mcp/tools/index.ts)
-     -- DONE at M22 close; redo if host/extension source changed since.
+  Parked (design complete, separate post-M23 milestone): host-backed
+  defect-free-method gateway + page-world session globals (notes 129, 131).
 
-  2. Reload the unpacked extension at brave://extensions
-     (rebuilt service-worker.js = request_router; page-world.js = page_dispatch
-      — they carry the new react_find_by_* handlers). MANUAL browser step.
-
-  3. Restart Claude Code
-     (relaunches the fresh dist/main.js and re-fetches tools/list).
-
-A Claude Code restart WITHOUT step 1 just relaunches the stale build. See
-AIMFP note #124 (milestone 23).
-
-Sanity check after restart: the tool list should now include
-mcp__pwa-debug__react_tree, react_get_state, react_find_by_text,
-react_find_by_role. If it does not, step 1 or 3 was skipped.
-
---------------------------------------------------------------------------------
-1. Pre-conditions
---------------------------------------------------------------------------------
-
-a. Build done (section 0 step 1).
-b. Fixture up:
-     cd examples/react-pwa
-     npm install        # first time only
-     npm run dev         # Vite serves http://localhost:5173
-c. Brave: brave://extensions -> Developer mode -> extension loaded/reloaded
-   from packages/extension/dist. Extension id registered with the host
-   (host_register_extension) if not already.
-d. Open a Brave tab to http://localhost:5173 — confirm the fixture renders:
-   "pwa-debug React fixture" heading, Counter (counter-marker: 0, - / +
-   buttons), todos (todo-marker-A, todo-marker-B), user-profile-marker,
-   nested-section, deep-child-marker.
-e. Baseline: mcp__pwa-debug__host_status -> activeConnections non-empty;
-   pageWorld.url is the localhost:5173 URL.
-
-Locked fixture shape (examples/react-pwa/README.md + src):
-  <App>                                        displayName 'App'
-    <div class="app">
-      <h1>pwa-debug React fixture</h1>
-      <Counter initial={0} step={1}/>          useState(0); <p>counter-marker: 0</p>, "-" then "+" buttons
-      <TodoList/>                              useReducer; INITIAL = [{id:1,'todo-marker-A',done:false},{id:2,'todo-marker-B',done:true}]; <li key={id}>
-      <UserProfile name="Alice" role="admin"/> <section role="region" aria-label="user profile">; props-only
-      <NestedSection/> -> <DeepChild/>          deep-child-marker
-
-Tool arg names are snake_case (zod boundary). Responses are
-{ ok, data:{ extensionId, tabId, ... }, next_steps:[...] }.
-
---------------------------------------------------------------------------------
-2. Smoke cases (run from Claude Code as MCP tool calls; user verifies)
---------------------------------------------------------------------------------
-
-A. Baseline connection
-   Tool: host_status   Args: {}
-   Expect: ok. activeConnections has the extension; pageWorld.url == :5173.
-
-B. react_tree default — tree shape
-   Tool: react_tree    Args: {}
-   Expect: ok. data.rootCount === 1. data.truncated === false (depth_limit 8,
-           max_nodes 200 are ample for this fixture).
-           data.roots[0].displayName === 'HostRoot'.
-           Its descendant component nodes include App, then under App's
-           wrapper <div> the components Counter, TodoList, UserProfile,
-           NestedSection (DeepChild under NestedSection). Host fibers (div,
-           section, h1, h2, p, ul, li, button, input, label) are interleaved
-           and appear as nodes with displayName === their tag name — this is
-           expected (react_tree emits every fiber).
-           hasHooks true for Counter (useState) and TodoList (useReducer);
-           UserProfile hasHooks/hasState both false (props-only).
-   CAPTURE the stableId of Counter, TodoList, UserProfile from the response
-   (e.g. root0/App[0]/.../Counter[0]). Do NOT hardcode — read them back.
-
-C. react_tree depth_limit truncates
-   Tool: react_tree    Args: { "depth_limit": 1 }
-   Expect: ok. data.truncated === true; nodes below depth 1 pruned.
-
-D. react_get_state on Counter — useState + props
-   Tool: react_get_state   Args: { "stable_id": "<Counter id from B>" }
-   Expect: ok. data.displayName === 'Counter'.
-           data.props === { initial: 0, step: 1 }.
-           data.hooks[0] === { type: 'state', index: 0, value: 0 }.
-           data.state absent (function component, not class).
-           data.truncated absent/false.
-
-E. Subscription-free re-read after a render
-   In the page, click Counter's "+" button:
-     evaluate({ "expression":
-       "Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='+').click()" })
-   wait ~50ms, then:
-   Tool: react_get_state   Args: { "stable_id": "<same Counter id>" }
-   Expect: ok. data.hooks[0].value === 1 (initial 0 + step 1). Proves M20
-           stableId identity survives re-render and no page-world subscription
-           leak. (Note: a bare document.querySelector('button') would hit
-           Counter's "-" button first and give -1 — use the "+"-text filter.)
-
-F. react_get_state on TodoList — useReducer state
-   Tool: react_get_state   Args: { "stable_id": "<TodoList id from B>" }
-   Expect: ok. data.hooks contains an entry of type 'state' whose value is the
-           todos array [{id:1,text:'todo-marker-A',done:false},
-           {id:2,text:'todo-marker-B',done:true}] (state/reducer conflated by
-           design — see M21 T3 note). data.props === {} or empty.
-
-G. react_get_state include_hooks:false
-   Tool: react_get_state   Args: { "stable_id": "<Counter id>", "include_hooks": false }
-   Expect: ok. data.hooks undefined. next_steps mentions include_hooks:false.
-
-H. react_get_state stale id — tool-level error path
-   Tool: react_get_state   Args: { "stable_id": "root0/Nope[0]" }
-   Expect: ok:false. error matches /did not resolve/.
-           next_steps mentions re-calling react.tree.
-
-I. react_tree root_index out of range
-   Tool: react_tree    Args: { "root_index": 99 }
-   Expect: ok. data.rootCount === 1, data.roots === [].
-           next_steps mentions "out of range".
-
-J. react_find_by_text — partial (substring) match
-   Tool: react_find_by_text   Args: { "pattern": "todo-marker-A" }
-   Expect: ok. data.matches non-empty. Matches are HOST fibers whose trimmed
-           textContent contains 'todo-marker-A' — because textContent is
-           cumulative, expect MULTIPLE matches: the innermost element (label
-           or li) AND every containing ancestor up to the app <div>
-           (displayName = tag: 'li','label','section','div', etc.). Each match
-           has { stableId, displayName, key?, matchedText:'todo-marker-A' }.
-           data.truncated === false (well under default max_matches 20).
-           This many-ancestor behavior is BY DESIGN (M22 matches any
-           HostComponent; no smallest-enclosing logic — out of scope).
-   Then: react_get_state({ stable_id: <one returned match id> }) -> ok;
-         returns that host element's props (host-level, expected).
-
-K. react_find_by_text — exact + max_matches + no-match + bad regex
-   Args: { "pattern": "counter-marker: 0", "exact": true }
-     -> ok. Matches only host nodes whose FULL trimmed text === 'counter-marker:
-        0' (the <p>). Fewer than the partial case (ancestors include sibling
-        text so their full text differs).
-   Args: { "pattern": "todo-marker", "max_matches": 1 }
-     -> ok. data.matches length 1, data.truncated === true.
-   Args: { "pattern": "zzz-no-such-text" }
-     -> ok. data.matches === []. next_steps gives no-match guidance.
-   Args: { "pattern": "(" }
-     -> ok:false. error matches /invalid regex pattern/. next_steps mentions
-        the regex is new RegExp (no flags).
-
-L. react_find_by_role — explicit role + accessible name
-   Tool: react_find_by_role   Args: { "role": "region", "name": "user profile" }
-   Expect: ok. data.matches has exactly the UserProfile <section>:
-           { stableId, displayName:'section', role:'region',
-             name:'user profile' }. (explicit role attr + aria-label name.)
-   Then react_get_state on that stableId -> ok (host section props).
-
-M. react_find_by_role — implicit roles + filters + errors
-   Args: { "role": "heading" }
-     -> ok. Matches the <h1> ("pwa-debug React fixture") and the <h2>s
-        ("todos", "user-profile-marker", "nested-section") — implicit role
-        from tag. displayName 'h1'/'h2'.
-   Args: { "role": "button" }
-     -> ok. Matches every <button> (Counter -, Counter +, each todo "x",
-        TodoList "add"). Spot-check count vs the rendered page.
-   Args: { "role": "region", "name": "no-such-name" }
-     -> ok. data.matches === []. next_steps no-match guidance.
-   Args: { "role": "button", "name": "(" }
-     -> ok:false. error matches /invalid name regex/.
-   Args: { "role": "button", "root_index": 99 }
-     -> ok. matches [], rootCount 1, next_steps mentions out of range.
-
-N. Resilience — stableId stable across an identity-preserving re-render
-   Re-run E's "+" click once more, then react_tree({}) again.
-   Expect: the Counter / TodoList / UserProfile stableIds captured in B
-           resolve to the SAME components (ids unchanged by re-render).
-           react_get_state on the old Counter id still works; hooks[0].value
-           now 2.
-
-O. Resilience — key-bearing identity survives sibling position change
-   The fixture reducer has add/toggle/remove (no explicit reorder). Remove the
-   first todo to shift the second's sibling position while its key stays:
-     evaluate({ "expression":
-       "(()=>{const li=Array.from(document.querySelectorAll('li')).find(l=>l.textContent.includes('todo-marker-A'));li&&li.querySelector('button').click();})()" })
-   wait ~50ms.
-   Expect: react_find_by_text({ pattern:'todo-marker-B' }) still finds it;
-           react_tree shows one <li> remaining; a stableId for the
-           todo-marker-B subtree continues to resolve via react_get_state
-           (key={2} keeps identity though it moved from index 1 to 0).
-
---------------------------------------------------------------------------------
-3. What "pass" means
---------------------------------------------------------------------------------
-
-A–O return the expected ok/shape and next_steps. Non-failure deviations to
-just document, not fail on:
-
-- displayName 'Memo(X)'/'ForwardRef(X)' if a component is wrapped — correct.
-- useReducer hooks reported as type:'state' (heuristic conflates state/reducer
-  — M21 T3 note).
-- findByText returning many ancestor matches for one marker — by design
-  (cumulative textContent; no smallest-enclosing scoping in M22).
-- findByRole host displayNames being tag names ('section','button','h2') not
-  the React component name — correct (M22 matches HostComponent fibers).
-- truncated:true only when a cap (depth_limit / max_nodes / max_matches) was
-  actually hit.
-
---------------------------------------------------------------------------------
-4. On failure — classify before patching
---------------------------------------------------------------------------------
-
-1. No connection (host_status empty) -> reload extension at brave://extensions;
-   verify NMH respawned; confirm Claude Code was restarted AFTER pnpm -w build.
-2. Tool not found (react_find_by_* missing from the tool list) -> stale build
-   or no Claude Code restart. Redo section 0 in order.
-3. NMH error envelope ("... nmh error: page-bridge timeout") -> page-world not
-   attached. Confirm the tab URL is http(s) (chrome://, brave://, web store
-   can't run page-world). Inspect the SW console at brave://extensions for
-   [pwa-debug] errors.
-4. Tool-level error ("did not resolve") on a fresh tree -> fiber walk shape
-   off; inspect __reactContainer$* on #root via evaluate; compare against
-   computeStableId in packages/extension/src/react/compute_stable_id.ts.
-5. findByText/findByRole wrong/empty when DOM clearly matches -> check
-   packages/extension/src/react/find.ts (walkAndFilter HostComponent gate /
-   implicitRoleForElement / computeAccessibleName) and find_by_text.ts /
-   find_by_role.ts. Capture the host node's textContent / role / aria-label
-   via evaluate and compare.
-6. Wrong stableId format (missing root0 prefix, extra/missing segments) ->
-   compute_stable_id.ts vs a manual fiber.return walk in evaluate().
-
---------------------------------------------------------------------------------
-5. Reporting (AIMFP)
---------------------------------------------------------------------------------
-
-All A–O pass:
-  add_note(note_type='task_context', reference_table='milestones',
-           reference_id=23) with Brave version + per-case observed shapes +
-           any documented deviations.
-  update_milestone(id=23, status='completed').
-  Then get_milestones_by_path(3): all M19-M23 completed ->
-  update_completion_path(id=3, status='completed'). Path 3 closes.
-
-Any case fails:
-  add_note(note_type='warning', reference_table='tasks', reference_id=<active
-  task id>) with exact tool input/output and the section-4 classification;
-  fix in-task or open a sidequest. Do NOT mark M23/Path 3 complete with a
-  failing case.
-
---------------------------------------------------------------------------------
-6. Out of scope (per M22/M23 milestones)
---------------------------------------------------------------------------------
-
-- Cross-React-version (16/17/19) — fixture's React 18 only.
-- React Concurrent Mode / Suspense / server hydration edge cases.
-- Full ARIA computed-name algorithm; aria-labelledby multi-id resolution
-  (M22 name = aria-label > first aria-labelledby ref > textContent).
-- Smallest-enclosing-component scoping for findByText (matches all
-  HostComponent ancestors by design).
-- find-by-test-id (data-testid) convenience tool — possible follow-up.
+  Next session order: SQ5 (Option A) → rebuild → you reload extension +
+  hard-refresh :5173 → resume smoke Case D→O (⚠️  stableIds change format,
+  e.g. Counter[1]→Counter[0] — recapture fresh) → SQ3 → M23 reporting +
+  close Path 3. Vite :5173 left running (yours).

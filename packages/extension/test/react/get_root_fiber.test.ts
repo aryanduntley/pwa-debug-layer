@@ -29,6 +29,23 @@ const makeEl = (props: Record<string, unknown>): Element => {
   return el as unknown as Element;
 };
 
+// DOM-like fake exposing querySelectorAll so the descendant-fiber strategy
+// can be exercised (synthetic makeEl objects have no querySelectorAll and so
+// skip that strategy entirely).
+const makeDomEl = (
+  ownProps: Record<string, unknown>,
+  descendants: Array<Record<string, unknown>>,
+): Element => {
+  const el = { ...ownProps } as Record<string, unknown>;
+  el['querySelectorAll'] = () =>
+    descendants.map((d) => {
+      const node = {} as Record<string, unknown>;
+      for (const [k, v] of Object.entries(d)) node[k] = v;
+      return node as unknown as Element;
+    });
+  return el as unknown as Element;
+};
+
 describe('getRootFiber', () => {
   it('returns the HostRoot fiber when container exposes __reactContainer$ with .current', () => {
     const root = f({ tag: HOST_ROOT_TAG });
@@ -81,5 +98,34 @@ describe('getRootFiber', () => {
   it('returns undefined when the element carries no fiber or container keys', () => {
     const el = makeEl({ id: 'plain' });
     expect(getRootFiber(el)).toBeUndefined();
+  });
+
+  it('resolves the committed HostRoot when __reactContainer$ is the HostRoot fiber itself (React 18 createRoot)', () => {
+    // React 18 createRoot attaches the HostRoot fiber (tag 3) directly under
+    // __reactContainer$*, and it is the double-buffered alternate with no
+    // child. The committed tree lives at fiber.stateNode.current.
+    const committed = f({ tag: HOST_ROOT_TAG, child: f({ tag: 0 }) });
+    const fiberRoot = { current: committed };
+    const attached = f({
+      tag: HOST_ROOT_TAG,
+      child: null,
+      stateNode: fiberRoot as unknown as Fiber['stateNode'],
+    });
+    const el = makeEl({ [`${REACT_CONTAINER_KEY_PREFIX}opdn`]: attached });
+    expect(getRootFiber(el)).toBe(committed);
+  });
+
+  it('prefers a child-bearing HostRoot from a descendant fiber over a childless container root', () => {
+    // Container strategy yields a childless (known-defective) HostRoot; the
+    // descendant host-node fiber climbs to a real, child-bearing HostRoot —
+    // getRootFiber must discard the empty one and use the good one.
+    const childlessRoot = f({ tag: HOST_ROOT_TAG, child: null });
+    const goodRoot = f({ tag: HOST_ROOT_TAG, child: f({ tag: 0 }) });
+    const hostChild = f({ tag: 5, return: goodRoot });
+    const el = makeDomEl(
+      { [`${REACT_CONTAINER_KEY_PREFIX}c`]: { current: childlessRoot } },
+      [{ [`${REACT_FIBER_KEY_PREFIX}h`]: hostChild }],
+    );
+    expect(getRootFiber(el)).toBe(goodRoot);
   });
 });
