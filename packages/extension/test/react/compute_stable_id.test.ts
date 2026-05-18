@@ -118,4 +118,54 @@ describe('computeStableId', () => {
     link(root, [app]);
     expect(computeStableId(app, 5)).toBe('root5/App[0]');
   });
+
+  // SQ5 bug 2b regression: heterogeneous unkeyed siblings (the real
+  // examples/react-pwa fixture shape). Old absolute-siblingPosition produced
+  // Counter[1]/TodoList[2]/... which resolveStableId could never resolve.
+  // Per-name unkeyed occurrence gives each a [0] discriminator.
+  it('heterogeneous unkeyed siblings each get per-name occurrence [0]', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const app = named(FUNCTION_COMPONENT_TAG, 'App');
+    const div = f({ tag: HOST_COMPONENT_TAG, type: 'div' });
+    const h1 = f({ tag: HOST_COMPONENT_TAG, type: 'h1' });
+    const counter = named(FUNCTION_COMPONENT_TAG, 'Counter');
+    const todoList = named(FUNCTION_COMPONENT_TAG, 'TodoList');
+    const userProfile = named(FUNCTION_COMPONENT_TAG, 'UserProfile');
+    const nested = named(FUNCTION_COMPONENT_TAG, 'NestedSection');
+    link(root, [app]);
+    link(app, [div]);
+    link(div, [h1, counter, todoList, userProfile, nested]);
+    expect(computeStableId(h1)).toBe('root0/App[0]/div[0]/h1[0]');
+    expect(computeStableId(counter)).toBe('root0/App[0]/div[0]/Counter[0]');
+    expect(computeStableId(todoList)).toBe('root0/App[0]/div[0]/TodoList[0]');
+    expect(computeStableId(userProfile)).toBe('root0/App[0]/div[0]/UserProfile[0]');
+    expect(computeStableId(nested)).toBe('root0/App[0]/div[0]/NestedSection[0]');
+  });
+
+  it('same-name unkeyed siblings still increment per-name occurrence', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const ul = f({ tag: HOST_COMPONENT_TAG, type: 'ul' });
+    const a = f({ tag: HOST_COMPONENT_TAG, type: 'li' });
+    const heading = f({ tag: HOST_COMPONENT_TAG, type: 'h2' });
+    const b = f({ tag: HOST_COMPONENT_TAG, type: 'li' });
+    link(root, [ul]);
+    link(ul, [a, heading, b]);
+    // heading between the two li's must not shift the second li off [1]
+    expect(computeStableId(a)).toBe('root0/ul[0]/li[0]');
+    expect(computeStableId(b)).toBe('root0/ul[0]/li[1]');
+    expect(computeStableId(heading)).toBe('root0/ul[0]/h2[0]');
+  });
+
+  // SQ5 bug 2c regression: numeric React keys (<li key={1}>) must be emitted
+  // as the key itself, not mistaken for an occurrence index.
+  it('numeric React keys are emitted as the key, not an occurrence index', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const ul = f({ tag: HOST_COMPONENT_TAG, type: 'ul' });
+    const li1 = f({ tag: HOST_COMPONENT_TAG, type: 'li', key: '1' });
+    const li2 = f({ tag: HOST_COMPONENT_TAG, type: 'li', key: '2' });
+    link(root, [ul]);
+    link(ul, [li1, li2]);
+    expect(computeStableId(li1)).toBe('root0/ul[0]/li[1]');
+    expect(computeStableId(li2)).toBe('root0/ul[0]/li[2]');
+  });
 });

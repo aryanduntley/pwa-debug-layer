@@ -1,3 +1,5 @@
+import { safeUuid } from '../ids/safe_random_id.js';
+
 const TOP_KEY = 'top';
 
 const indexInParent = (win: Window, parent: Window): number => {
@@ -8,13 +10,10 @@ const indexInParent = (win: Window, parent: Window): number => {
   return -1;
 };
 
-const defaultFallback = (): string => {
-  const uuid =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  return `cross_origin/${uuid}`;
-};
+// Always namespaced with `cross_origin/` so a cross-origin frame key can
+// never collide with a structural `top/...` key — the uuid source is the
+// shared guarded generator.
+const defaultFallback = (): string => `cross_origin/${safeUuid()}`;
 
 export const deriveFrameKey = (
   win: Window,

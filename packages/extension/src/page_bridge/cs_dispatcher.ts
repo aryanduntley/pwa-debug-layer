@@ -5,6 +5,7 @@ import {
   type PageBridgeEventEnvelope,
   type PageBridgeResponseEnvelope,
 } from './protocol.js';
+import { safeUuid } from '../ids/safe_random_id.js';
 
 export const PAGE_EVENT_SW_TAG = 'pwa-debug-page-event' as const;
 
@@ -66,8 +67,7 @@ export const createCsDispatcher = (
   input: CsDispatcherInput = {},
 ): CsDispatcher => {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const generateRequestId =
-    input.generateRequestId ?? (() => crypto.randomUUID());
+  const generateRequestId = input.generateRequestId ?? safeUuid;
   const forwardEventToSw = input.forwardEventToSw ?? defaultForwardEventToSw;
   const pending = new Map<string, PendingEntry>();
 

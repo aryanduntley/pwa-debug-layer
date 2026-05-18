@@ -194,4 +194,24 @@ describe('createCsDispatcher', () => {
     );
     expect(forwarded).toHaveLength(0);
   });
+
+  // SQ3 regression: the DEFAULT generateRequestId (no injection) must not
+  // throw on an origin without crypto.randomUUID (insecure http://LAN-IP
+  // debug target). Pre-SQ3 the default was a bare () => crypto.randomUUID().
+  it('default generateRequestId is crypto-absent-safe (no injected id, no crypto.randomUUID)', () => {
+    const { last } = captureLastPostedRequest();
+    vi.stubGlobal('crypto', {}); // no randomUUID
+    try {
+      const dispatcher = createCsDispatcher(); // DEFAULT generateRequestId
+      expect(() =>
+        dispatcher.handleSwRequest({ tool: 'session_ping' }, vi.fn()),
+      ).not.toThrow();
+      const env = last();
+      expect(env).toBeDefined();
+      expect(typeof env?.requestId).toBe('string');
+      expect(env?.requestId).toMatch(/^[0-9a-z]+_[0-9a-z]+$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

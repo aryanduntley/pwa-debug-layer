@@ -1,4 +1,5 @@
 import { serializeArgs } from './serialize.js';
+import { safeRandomId } from '../ids/safe_random_id.js';
 import type { Disposer, FrameMeta } from './capture_console.js';
 import type { WebSocketCapturedEvent } from './types.js';
 
@@ -13,11 +14,7 @@ type InstanceState = {
   url: string;
 };
 
-const defaultIdGen = (): string => {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (c?.randomUUID !== undefined) return c.randomUUID();
-  return `w_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-};
+const defaultIdGen = (): string => safeRandomId('w_');
 
 const tagBinary = (byteLength: number): unknown => ({
   __type: 'Binary' as const,

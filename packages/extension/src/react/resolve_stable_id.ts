@@ -1,5 +1,5 @@
 import type { Fiber } from './types.js';
-import { getFiberForNode } from './get_fiber_for_node.js';
+import { getRootFiber } from './get_root_fiber.js';
 import { extractDisplayName } from './extract_display_name.js';
 import { extractKey } from './extract_key.js';
 
@@ -30,18 +30,6 @@ const childByKey = (parent: Fiber, name: string, key: string): Fiber | undefined
   return undefined;
 };
 
-const rootFiberFor = (rootEl: Element): Fiber | undefined => {
-  const containerFiber = getFiberForNode(rootEl);
-  if (containerFiber === undefined) return undefined;
-  if (containerFiber.tag === 3) return containerFiber;
-  let cursor: Fiber | null = containerFiber.return;
-  while (cursor !== null) {
-    if (cursor.tag === 3) return cursor;
-    cursor = cursor.return;
-  }
-  return containerFiber;
-};
-
 export const resolveStableId = (stableId: string, roots: Element[]): Fiber | undefined => {
   const segments = stableId.split('/');
   if (segments.length === 0) return undefined;
@@ -57,7 +45,7 @@ export const resolveStableId = (stableId: string, roots: Element[]): Fiber | und
 
   const rootEl = roots[rootIndex];
   if (rootEl === undefined) return undefined;
-  const rootFiber = rootFiberFor(rootEl);
+  const rootFiber = getRootFiber(rootEl);
   if (rootFiber === undefined) return undefined;
 
   let current: Fiber = rootFiber;
@@ -70,8 +58,15 @@ export const resolveStableId = (stableId: string, roots: Element[]): Fiber | und
     const discriminator = m[2];
     if (name === undefined || discriminator === undefined) return undefined;
 
+    // A numeric discriminator is ambiguous: it can be a numeric React key
+    // (e.g. <li key={1}> -> 'li[1]') OR a per-name unkeyed-occurrence index
+    // (computeStableId via unkeyedOccurrence). Try the keyed child first,
+    // then fall back to the unkeyed-occurrence child. Residual ambiguity
+    // (a parent with BOTH a child keyed 'N' and an unkeyed same-name child
+    // at occurrence N) is a documented known limitation — keyed wins.
     const next = isNumericString(discriminator)
-      ? childAtIndex(current, name, Number.parseInt(discriminator, 10))
+      ? (childByKey(current, name, discriminator) ??
+         childAtIndex(current, name, Number.parseInt(discriminator, 10)))
       : childByKey(current, name, discriminator);
 
     if (next === undefined) return undefined;

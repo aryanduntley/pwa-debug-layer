@@ -137,4 +137,73 @@ describe('resolveStableId', () => {
     const noFiberEl = {} as unknown as Element;
     expect(resolveStableId('root0', [noFiberEl])).toBeUndefined();
   });
+
+  // SQ5 bug 2b regression — the real examples/react-pwa fixture shape.
+  // Before the fix, heterogeneous unkeyed siblings got absolute-position
+  // discriminators (Counter[1], TodoList[2], ...) that childAtIndex (per-name
+  // occurrence) could never resolve, breaking M23 Cases D-G.
+  it('round-trips heterogeneous unkeyed siblings (fixture shape)', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const app = named(FUNCTION_COMPONENT_TAG, 'App');
+    const div = f({ tag: HOST_COMPONENT_TAG, type: 'div' });
+    const h1 = f({ tag: HOST_COMPONENT_TAG, type: 'h1' });
+    const counter = named(FUNCTION_COMPONENT_TAG, 'Counter');
+    const todoList = named(FUNCTION_COMPONENT_TAG, 'TodoList');
+    const userProfile = named(FUNCTION_COMPONENT_TAG, 'UserProfile');
+    const nested = named(FUNCTION_COMPONENT_TAG, 'NestedSection');
+    link(root, [app]);
+    link(app, [div]);
+    link(div, [h1, counter, todoList, userProfile, nested]);
+    const el = rootElWithFiber(root);
+    for (const target of [h1, counter, todoList, userProfile, nested]) {
+      const id = computeStableId(target);
+      expect(resolveStableId(id, [el])).toBe(target);
+    }
+  });
+
+  // SQ5 bug 2c regression — numeric React keys. computeStableId emits li[1]/
+  // li[2] (the keys); resolveStableId must try childByKey FIRST for a numeric
+  // discriminator. Also covers M23 Case O (key-bearing todo identity).
+  it('round-trips a numeric-keyed list — resolves by key, not index', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const ul = f({ tag: HOST_COMPONENT_TAG, type: 'ul' });
+    const li1 = f({ tag: HOST_COMPONENT_TAG, type: 'li', key: '1' });
+    const li2 = f({ tag: HOST_COMPONENT_TAG, type: 'li', key: '2' });
+    link(root, [ul]);
+    link(ul, [li1, li2]);
+    const el = rootElWithFiber(root);
+    expect(computeStableId(li1)).toBe('root0/ul[0]/li[1]');
+    expect(resolveStableId('root0/ul[0]/li[1]', [el])).toBe(li1);
+    expect(resolveStableId('root0/ul[0]/li[2]', [el])).toBe(li2);
+  });
+
+  it('numeric discriminator falls back to unkeyed occurrence when no key matches', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const ul = f({ tag: HOST_COMPONENT_TAG, type: 'ul' });
+    const a = f({ tag: HOST_COMPONENT_TAG, type: 'li' });
+    const b = f({ tag: HOST_COMPONENT_TAG, type: 'li' });
+    link(root, [ul]);
+    link(ul, [a, b]);
+    const el = rootElWithFiber(root);
+    expect(resolveStableId(computeStableId(a), [el])).toBe(a); // 'li[0]'
+    expect(resolveStableId(computeStableId(b), [el])).toBe(b); // 'li[1]'
+  });
+
+  // Documented known limitation (note 130 / item 328): a parent with BOTH a
+  // child keyed 'N' and an unkeyed same-name child at occurrence N collide on
+  // 'name[N]'; childByKey wins. Not present in the fixture; full keyed/unkeyed
+  // bracket-grammar redesign is a separate larger task (out of scope).
+  it('documents keyed-wins ambiguity for numeric key vs unkeyed occurrence', () => {
+    const root = f({ tag: HOST_ROOT_TAG });
+    const ul = f({ tag: HOST_COMPONENT_TAG, type: 'ul' });
+    const keyed = f({ tag: HOST_COMPONENT_TAG, type: 'li', key: '0' });
+    const unkeyed = f({ tag: HOST_COMPONENT_TAG, type: 'li' });
+    link(root, [ul]);
+    link(ul, [keyed, unkeyed]);
+    const el = rootElWithFiber(root);
+    // both computeStableId -> 'root0/ul[0]/li[0]'; keyed resolves, unkeyed is shadowed
+    expect(computeStableId(keyed)).toBe('root0/ul[0]/li[0]');
+    expect(computeStableId(unkeyed)).toBe('root0/ul[0]/li[0]');
+    expect(resolveStableId('root0/ul[0]/li[0]', [el])).toBe(keyed);
+  });
 });

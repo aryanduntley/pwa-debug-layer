@@ -1,14 +1,14 @@
 import type { Fiber } from './types.js';
 import { extractDisplayName } from './extract_display_name.js';
 import { extractKey } from './extract_key.js';
-import { siblingPosition } from './sibling_position.js';
+import { unkeyedOccurrence } from './unkeyed_occurrence.js';
 
 const HOST_ROOT_TAG = 3;
 
 const segmentFor = (fiber: Fiber): string => {
   const name = extractDisplayName(fiber);
   const key = extractKey(fiber);
-  const discriminator = key ?? String(Math.max(siblingPosition(fiber), 0));
+  const discriminator = key ?? String(unkeyedOccurrence(fiber));
   return `${name}[${discriminator}]`;
 };
 

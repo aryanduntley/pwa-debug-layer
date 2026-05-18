@@ -1,38 +1,13 @@
-note 129
-note 131
-
-Session summary
-
-  Goal: finish M23 (Path 3 exit smoke) + close Path 3. Outcome: partially
-  advanced; blocked on a real defect now fully root-caused and queued.
-
-  Done & verified:
-  - Started the M23 A–O smoke. Cases A, B, C PASS (item 314 ✅).
-  - Root-caused and fixed the React-18 createRoot defect in getRootFiber
-  (it assumed __reactContainer$ is a FiberRoot; it's actually the childless
-   double-buffered HostRoot fiber). Rebuilt as a robust 3-strategy resolver
-   (per your "check multiple ways, prefer the walkable result" direction).
-  SQ4 complete — react_tree now returns the full tree; typecheck clean,
-  get_root_fiber 10/10, suite 495/496.
-
-  Honest corrections made this session:
-  - My initial crypto.randomUUID root-cause was a misdiagnosis (your "echo
-  it" test disproved it — it works fine). Corrected the record; SQ3
-  downgraded from "critical M23 blocker" to optional low-pri.
-  
-  Blocked → queued for next session:
-  - Cases D–O fail: react_get_state "did not resolve" — two confirmed
-  defects (note 130): (1) resolveStableId resolves the root via
-  getFiberForNode (only reads __reactFiber$, absent on #root); (2)
-  computeStableId↔resolveStableId aren't bijective for real
-  heterogeneous/numeric-key trees. Captured as SQ5 — Option A (critical,
-  pending, self-contained spec). M20-scheme amendment logged as evolution
-  note 132 per your approval.
-
-  Parked (design complete, separate post-M23 milestone): host-backed
-  defect-free-method gateway + page-world session globals (notes 129, 131).
-
-  Next session order: SQ5 (Option A) → rebuild → you reload extension +
-  hard-refresh :5173 → resume smoke Case D→O (⚠️  stableIds change format,
-  e.g. Counter[1]→Counter[0] — recapture fresh) → SQ3 → M23 reporting +
-  close Path 3. Vite :5173 left running (yours).
+Notes for next session:
+  - Project pointer auto-advanced to Path 11 "Added Features" → M7 "User 
+  settings infrastructure" (pending). Confirm that's the intended next
+  focus when you resume (12 paths exist; the progression picked this
+  post-Path-3).
+  - Parked by your decision: host-backed defect-free-method gateway (notes
+  129/131/143, host_state-backed) — its own future milestone, not started.
+  - docs/notes.txt is now stale (it describes the pre-SQ5 plan).
+  Authoritative record is the AIMFP DB (notes 138–146). Say the word next
+  session and I'll refresh it.
+  - Background Vite dev server still running on :5173 (task bf2fcgexe), per
+   the usual leave-it-running convention. To stop it: kill that task or
+  just close the terminal.

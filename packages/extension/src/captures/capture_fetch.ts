@@ -1,4 +1,5 @@
 import { serializeArgs } from './serialize.js';
+import { safeRandomId } from '../ids/safe_random_id.js';
 import type { Disposer, FrameMeta } from './capture_console.js';
 import type { FetchCapturedEvent } from './types.js';
 
@@ -11,11 +12,7 @@ export type FetchCaptureOptions = {
 
 const DEFAULT_RESPONSE_BODY_TIMEOUT_MS = 1000;
 
-const defaultIdGen = (): string => {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (c?.randomUUID !== undefined) return c.randomUUID();
-  return `f_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-};
+const defaultIdGen = (): string => safeRandomId('f_');
 
 const headersToRecord = (
   source: HeadersInit | Headers | undefined,
