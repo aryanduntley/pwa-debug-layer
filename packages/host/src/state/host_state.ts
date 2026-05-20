@@ -1,5 +1,9 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import {
+  atomicWriteJson,
+  readJsonOr,
+  xdgConfigPath,
+  type XdgEnv,
+} from '../host_io/host_io.js';
 
 export type HostState = {
   readonly extensionIds: readonly string[];
@@ -13,19 +17,19 @@ export const EMPTY_STATE: HostState = Object.freeze({
   lastInstalledManifestPaths: Object.freeze([] as readonly string[]),
 });
 
-export const defaultStatePath = (
-  env: { HOME?: string; XDG_CONFIG_HOME?: string } = process.env,
-): string => {
-  const configHome =
-    env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0
-      ? env.XDG_CONFIG_HOME
-      : env.HOME
-        ? join(env.HOME, '.config')
-        : null;
-  if (!configHome) {
-    throw new Error('host_state: cannot resolve state path; HOME and XDG_CONFIG_HOME are both unset');
+/**
+ * Thin wrapper over host_io.xdgConfigPath. Pre-checks env so the error string
+ * stays the host_state-specific message existing callers (and the test suite)
+ * already assert on, rather than the generic host_io message.
+ */
+export const defaultStatePath = (env: XdgEnv = process.env): string => {
+  const hasXdg = Boolean(env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0);
+  if (!hasXdg && !env.HOME) {
+    throw new Error(
+      'host_state: cannot resolve state path; HOME and XDG_CONFIG_HOME are both unset',
+    );
   }
-  return join(configHome, 'pwa-debug', 'state.json');
+  return xdgConfigPath('state.json', env);
 };
 
 const isStringArray = (v: unknown): v is string[] =>
@@ -52,26 +56,13 @@ const parseHostState = (raw: unknown): HostState => {
   };
 };
 
-export const loadHostState = async (path: string): Promise<HostState> => {
-  let body: string;
-  try {
-    body = await readFile(path, 'utf-8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY_STATE;
-    throw err;
-  }
-  return parseHostState(JSON.parse(body));
-};
+export const loadHostState = (path: string): Promise<HostState> =>
+  readJsonOr(path, EMPTY_STATE, parseHostState);
 
-export const saveHostState = async (
+export const saveHostState = (
   path: string,
   state: HostState,
-): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
-  await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf-8');
-  await rename(tmp, path);
-};
+): Promise<void> => atomicWriteJson(path, state);
 
 export const addExtensionId = (state: HostState, id: string): HostState => {
   if (state.extensionIds.includes(id)) return state;

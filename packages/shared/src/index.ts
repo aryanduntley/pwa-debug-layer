@@ -42,3 +42,27 @@ export type {
   ConsoleEntry,
   NetworkEntry,
 } from './types/wire_entries.js';
+
+export type {
+  SettingScope,
+  CaptureKind,
+  SettingTypeMap,
+  SettingKey,
+  SettingTypeTag,
+  SettingSchemaEntry,
+  SettingsSchema,
+  SettingsRecord,
+  SettingChange,
+  SettingsEventTool,
+  SettingsSnapshotPayload,
+  SettingsIpcEventPayload,
+} from './types/settings_schema.js';
+
+export {
+  CAPTURE_KINDS,
+  SETTINGS_SCHEMA,
+  settingKeys,
+  getSettingEntry,
+  validateSettingValue,
+  defaultSettings,
+} from './types/settings_schema.js';

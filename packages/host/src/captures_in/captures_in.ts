@@ -26,6 +26,14 @@ export interface CapturesInOptions {
   readonly capacityPerKind?: number;
   readonly getNow?: () => number;
   readonly sessionId?: string;
+  /**
+   * Optional FIFO-eviction subscriber. Fires once per evicted entry on the
+   * matching ring buffer, kind-curried so a single subscriber handles all
+   * 4 buckets. Path 11 M8 wires host_archive.bridgeWriterToOnEvict here to
+   * spill evictions to disk; tests can pass any sink. Absence preserves
+   * the original drop-evicted behavior.
+   */
+  readonly onEvict?: (kind: BufferKind, evicted: HostStoredEvent) => void;
 }
 
 export interface CapturesInReceiveInput {
@@ -88,11 +96,20 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
   const getNow = opts.getNow ?? Date.now;
   const sessionId = opts.sessionId ?? randomUUID();
 
+  const onEvict = opts.onEvict;
+  const makeBuffer = (kind: BufferKind): RingBuffer<HostStoredEvent> =>
+    onEvict
+      ? createRingBuffer<HostStoredEvent>({
+          capacity,
+          onEvict: (evicted) => onEvict(kind, evicted),
+        })
+      : createRingBuffer<HostStoredEvent>({ capacity });
+
   const buffers: Record<BufferKind, RingBuffer<HostStoredEvent>> = {
-    console: createRingBuffer<HostStoredEvent>({ capacity }),
-    network: createRingBuffer<HostStoredEvent>({ capacity }),
-    dom_mutations: createRingBuffer<HostStoredEvent>({ capacity }),
-    lifecycle: createRingBuffer<HostStoredEvent>({ capacity }),
+    console: makeBuffer('console'),
+    network: makeBuffer('network'),
+    dom_mutations: makeBuffer('dom_mutations'),
+    lifecycle: makeBuffer('lifecycle'),
   };
 
   const received: Record<BufferKind, number> = {
@@ -210,6 +227,23 @@ export interface CapturesIntakeEventPayload {
 export interface CapturesRegistryOptions {
   readonly capacityPerKind?: number;
   readonly getNow?: () => number;
+  /**
+   * Optional host-process session id shared across every CapturesIn the
+   * registry creates. M8 mints one hostSessionId at boot and passes it
+   * here so the on-disk archive (also keyed by sessionId) matches the
+   * cursors the tail tools encode. Absence falls back to the per-instance
+   * randomUUID default (one fresh sessionId per extension), which is the
+   * pre-M8 behavior.
+   */
+  readonly sessionId?: string;
+  /**
+   * Shared FIFO-eviction subscriber forwarded to every CapturesIn the
+   * registry creates. M8 wires host_archive.bridgeWriterToOnEvict here so
+   * evictions across all attached extensions spill to one writer (and
+   * therefore one on-disk session subtree). Absence preserves silent
+   * drop-on-eviction.
+   */
+  readonly onEvict?: (kind: BufferKind, evicted: HostStoredEvent) => void;
 }
 
 export interface CapturesRegistry {
@@ -236,6 +270,8 @@ export const createCapturesRegistry = (
       extensionId,
       ...(opts.capacityPerKind !== undefined && { capacityPerKind: opts.capacityPerKind }),
       ...(opts.getNow !== undefined && { getNow: opts.getNow }),
+      ...(opts.sessionId !== undefined && { sessionId: opts.sessionId }),
+      ...(opts.onEvict !== undefined && { onEvict: opts.onEvict }),
     });
     map.set(extensionId, created);
     return created;

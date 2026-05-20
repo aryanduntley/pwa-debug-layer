@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mockSettingsStore } from '../../_helpers/mock_settings_store.js';
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -56,6 +57,7 @@ const buildFakeCtx = (opts: FakeIpcServerOpts = {}): {
     ipcServer: fake,
     hostVersion: '0.0.0-test',
     capturesRegistry: createCapturesRegistry(),
+    settingsStore: mockSettingsStore(),
   });
   return { ctx, requests };
 };

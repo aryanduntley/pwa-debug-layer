@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mockSettingsStore } from '../_helpers/mock_settings_store.js';
 import { z } from 'zod';
 import {
   registerTools,
@@ -26,6 +27,7 @@ const stubCtx: ToolContext = Object.freeze({
   ipcServer: stubIpcServer,
   hostVersion: '0.0.0-test',
   capturesRegistry: createCapturesRegistry(),
+    settingsStore: mockSettingsStore(),
 });
 
 describe('okResponse / errorResponse', () => {

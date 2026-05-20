@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { mockSettingsStore } from '../../_helpers/mock_settings_store.js';
 import { z } from 'zod';
 import { evaluateHandler, evaluateTool } from '../../../src/mcp/tools/evaluate.js';
 import type { ToolContext } from '../../../src/mcp/tool_registry.js';
@@ -56,6 +57,7 @@ const buildCtx = (opts: FakeOpts = {}): ToolContext => {
     ipcServer: fake,
     hostVersion: '0.0.0-test',
     capturesRegistry: createCapturesRegistry(),
+    settingsStore: mockSettingsStore(),
   });
 };
 

@@ -7,7 +7,7 @@ import {
   type ToolResponse,
 } from '../tool_registry.js';
 import { resolveTarget } from './target_resolution.js';
-import { tailWithFilter } from '../../captures_query/captures_query.js';
+import { tailWithFilterMerged } from '../../captures_query/captures_query.js';
 import {
   encodeCursor,
   type ConsoleEntry,
@@ -50,8 +50,11 @@ export const consoleTailHandler = async (
   const sessionId = captures.getStats().sessionId;
   const consoleBuffer = captures.buffer('console');
   const filterSpec = toFilterSpec(args.filter);
-  const result = tailWithFilter(consoleBuffer, filterSpec, {
-    currentSessionId: sessionId,
+  const result = await tailWithFilterMerged({
+    buffer: consoleBuffer,
+    spec: filterSpec,
+    ctx: { currentSessionId: sessionId },
+    kind: 'console',
   });
 
   if (!result.ok) {

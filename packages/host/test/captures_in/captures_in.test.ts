@@ -291,3 +291,52 @@ describe('createCapturesIn — per-bucket sequenceNumber stamping', () => {
     expect(ci.tail('console')[0]?.sequenceNumber).toBe(1);
   });
 });
+
+describe('createCapturesIn — onEvict plumbing (M8 T3)', () => {
+  it('fires the kind-curried onEvict for FIFO-evicted entries', () => {
+    const evictions: Array<{ kind: string; seq: number }> = [];
+    const ci = make({
+      capacityPerKind: 2,
+      onEvict: (kind, evicted) => {
+        evictions.push({ kind, seq: evicted.sequenceNumber });
+      },
+    });
+    // 3 console events at capacity 2 → 1 eviction.
+    ci.receive({ events: [event('console', 1)] });
+    ci.receive({ events: [event('console', 2)] });
+    ci.receive({ events: [event('console', 3)] });
+    expect(evictions).toEqual([{ kind: 'console', seq: 1 }]);
+  });
+
+  it('routes evictions through the correct kind on independent buffers', () => {
+    const evictions: Array<{ kind: string; seq: number }> = [];
+    const ci = make({
+      capacityPerKind: 1,
+      onEvict: (kind, evicted) => {
+        evictions.push({ kind, seq: evicted.sequenceNumber });
+      },
+    });
+    ci.receive({
+      events: [
+        event('console', 1),
+        event('fetch', 2),
+        event('console', 3),
+        event('fetch', 4),
+      ],
+    });
+    // Each bucket evicts its prior entry on the second write.
+    expect(evictions).toContainEqual({ kind: 'console', seq: 1 });
+    expect(evictions).toContainEqual({ kind: 'network', seq: 1 });
+    expect(evictions.length).toBe(2);
+  });
+
+  it('absence of onEvict preserves silent drop-on-eviction (no throw)', () => {
+    const ci = make({ capacityPerKind: 1 });
+    expect(() => {
+      ci.receive({ events: [event('console', 1)] });
+      ci.receive({ events: [event('console', 2)] });
+      ci.receive({ events: [event('console', 3)] });
+    }).not.toThrow();
+    expect(ci.tail('console')).toHaveLength(1);
+  });
+});

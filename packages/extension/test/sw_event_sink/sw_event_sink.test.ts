@@ -389,3 +389,49 @@ describe('isPageEventSwMessage', () => {
     expect(isPageEventSwMessage(42)).toBe(false);
   });
 });
+
+describe('createEventSink shouldRecord gating', () => {
+  it('drops gated events from stats, buffer, logger, and forward', () => {
+    const logger = vi.fn();
+    const forward = vi.fn();
+    const sink = createEventSink({
+      logger,
+      forwardEvents: forward,
+      forwardMaxSize: 1, // force immediate flush per accepted event
+      shouldRecord: (e) => e.frameUrl === 'https://ok.com/',
+    });
+    sink.handle({
+      ...makeConsoleEvent('log', 1),
+      frameUrl: 'https://ok.com/',
+    });
+    sink.handle({
+      ...makeConsoleEvent('log', 2),
+      frameUrl: 'https://blocked.com/',
+    });
+    sink.handle({
+      ...makeConsoleEvent('log', 3),
+      frameUrl: 'https://blocked.com/',
+    });
+    const stats = sink.getStats();
+    expect(stats.totalReceived).toBe(1);
+    expect(stats.perKind['console']).toBe(1);
+    expect(sink.getRecent().events.length).toBe(1);
+    expect(logger).toHaveBeenCalledTimes(1);
+    expect(forward).toHaveBeenCalledTimes(1);
+    sink.dispose();
+  });
+
+  it('is re-evaluated per call (live setting changes propagate immediately)', () => {
+    let allow = true;
+    const sink = createEventSink({
+      shouldRecord: () => allow,
+    });
+    sink.handle(makeConsoleEvent('log', 1));
+    allow = false;
+    sink.handle(makeConsoleEvent('log', 2));
+    allow = true;
+    sink.handle(makeConsoleEvent('log', 3));
+    expect(sink.getStats().totalReceived).toBe(2);
+    sink.dispose();
+  });
+});

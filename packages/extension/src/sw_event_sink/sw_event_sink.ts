@@ -44,10 +44,17 @@ export type EventSinkInput = {
   readonly forwardEvents?: (events: readonly CapturedEvent[]) => void;
   readonly forwardMaxSize?: number;
   readonly forwardMaxMs?: number;
+  /**
+   * Capture gate. Called on every event before any side effect (stats, buffer,
+   * logger, forward). Return false to drop the event silently. Re-evaluated
+   * per call so live setting changes propagate without restart.
+   */
+  readonly shouldRecord?: (event: CapturedEvent) => boolean;
 };
 
 export const createEventSink = (input: EventSinkInput = {}): EventSink => {
   const logger = input.logger;
+  const shouldRecord = input.shouldRecord;
   const bufferSize =
     input.bufferSize !== undefined && input.bufferSize > 0
       ? Math.floor(input.bufferSize)
@@ -74,6 +81,10 @@ export const createEventSink = (input: EventSinkInput = {}): EventSink => {
     });
 
   const handle = (event: CapturedEvent): void => {
+    if (shouldRecord !== undefined && !shouldRecord(event)) {
+      // Gated out: no stats, no buffer, no logger, no forward.
+      return;
+    }
     perKind[event.kind] = (perKind[event.kind] ?? 0) + 1;
     totalReceived += 1;
     if (buffer.length < bufferSize) {

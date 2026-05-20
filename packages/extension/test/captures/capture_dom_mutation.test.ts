@@ -12,7 +12,11 @@ const FRAME: FrameMeta = {
 };
 
 const COALESCE_MS = 8;
-const WAIT_MS = COALESCE_MS + 8;
+// Generous margin over the coalesce timer — full-suite worker load can
+// drift setTimeout by 10-20ms on slow CI / busy local runs, which raced
+// the prior `COALESCE_MS + 8` budget into intermittent dom_mutation
+// flakes. See M9 T1.
+const WAIT_MS = 50;
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => {

@@ -2,11 +2,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { IpcServer } from './ipc/ipc_server.js';
 import type { CapturesRegistry } from '../captures_in/captures_in.js';
+import type { SettingsStore } from '../host_settings/host_settings.js';
 
 export type ToolContext = Readonly<{
   ipcServer: IpcServer;
   hostVersion: string;
   capturesRegistry: CapturesRegistry;
+  settingsStore: SettingsStore;
 }>;
 
 export type ToolResponse = Readonly<{

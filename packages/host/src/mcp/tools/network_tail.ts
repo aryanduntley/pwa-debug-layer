@@ -7,7 +7,7 @@ import {
   type ToolResponse,
 } from '../tool_registry.js';
 import { resolveTarget } from './target_resolution.js';
-import { tailWithFilter } from '../../captures_query/captures_query.js';
+import { tailWithFilterMerged } from '../../captures_query/captures_query.js';
 import {
   encodeCursor,
   type NetworkEntry,
@@ -50,8 +50,11 @@ export const networkTailHandler = async (
   const sessionId = captures.getStats().sessionId;
   const networkBuffer = captures.buffer('network');
   const filterSpec = toFilterSpec(args.filter);
-  const result = tailWithFilter(networkBuffer, filterSpec, {
-    currentSessionId: sessionId,
+  const result = await tailWithFilterMerged({
+    buffer: networkBuffer,
+    spec: filterSpec,
+    ctx: { currentSessionId: sessionId },
+    kind: 'network',
   });
 
   if (!result.ok) {

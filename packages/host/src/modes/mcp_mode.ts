@@ -1,16 +1,52 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { stderr, stdin } from 'node:process';
+import type { SettingChange } from '@pwa-debug/shared';
 import { registerTools } from '../mcp/tool_registry.js';
 import { TOOLS } from '../mcp/tools/index.js';
-import { createIpcServer } from '../mcp/ipc/ipc_server.js';
+import { createIpcServer, type IpcServer } from '../mcp/ipc/ipc_server.js';
+import type { IpcEventEnvelope } from '../mcp/ipc/envelope.js';
 import { defaultSocketPath, socketParentDir } from '../mcp/ipc/socket_path.js';
 import {
   createCapturesRegistry,
   dispatchCapturesEvent,
 } from '../captures_in/captures_in.js';
+import {
+  bridgeWriterToOnEvict,
+  createArchiveWriter,
+  pruneArchives,
+} from '../host_archive/host_archive.js';
+import {
+  createSettingsStore,
+  type SettingsStore,
+} from '../host_settings/host_settings.js';
+
+const snapshotEvent = (store: SettingsStore): IpcEventEnvelope => ({
+  type: 'event',
+  tool: 'settings_snapshot',
+  payload: { values: store.getAll() },
+});
+
+const changedEvent = (change: SettingChange): IpcEventEnvelope => ({
+  type: 'event',
+  tool: 'settings_changed',
+  payload: change,
+});
+
+const broadcastChange = (
+  ipcServer: IpcServer,
+  store: SettingsStore,
+  change: SettingChange,
+): void => {
+  const env = changedEvent(change);
+  for (const conn of ipcServer.listConnections()) {
+    ipcServer.sendTo(conn.extensionId, env);
+  }
+  void store; // store kept in scope; receivers re-read by id, not by closure
+};
 
 const FALLBACK_VERSION = '0.0.0';
 
@@ -46,14 +82,54 @@ export const runMcpMode = async (): Promise<void> => {
   }
 
   const hostVersion = await readHostVersion();
-  const capturesRegistry = createCapturesRegistry();
+  const settingsStore = createSettingsStore();
+  await settingsStore.init();
+
+  // M8: one host-process session id scopes all archive output for this run.
+  // Boot-time prune reaps anything from prior sessions before the writer
+  // opens fresh files; the rotation hook fires a fire-and-forget prune so
+  // both age + size caps are enforced as new files appear.
+  const hostSessionId = randomUUID();
+  await pruneArchives({ getSetting: settingsStore.getSetting }).catch((err) => {
+    stderr.write(`[pwa-debug-host mcp] boot prune failed: ${String(err)}\n`);
+  });
+  const archiveWriter = createArchiveWriter({
+    sessionId: hostSessionId,
+    getSetting: settingsStore.getSetting,
+    onRotate: () => {
+      void pruneArchives({ getSetting: settingsStore.getSetting }).catch(
+        () => undefined,
+      );
+    },
+  });
+  // Share hostSessionId across the registry so cursors the tail tools
+  // encode (via the CapturesIn-attached sessionId metadata) match the
+  // archive subtree the writer spills into. Without this, console.tail /
+  // network.tail cursors would point at a different sessionId than
+  // host_archive uses on disk.
+  const capturesRegistry = createCapturesRegistry({
+    sessionId: hostSessionId,
+    onEvict: bridgeWriterToOnEvict(archiveWriter),
+  });
+
+  // The ipcServer reference is needed inside its own onRegister callback for
+  // the initial snapshot push; bind via a late-initialized holder.
+  let ipcServerRef: IpcServer | null = null;
   const ipcServer = await createIpcServer({
     socketPath,
+    onRegister: (info) => {
+      ipcServerRef?.sendTo(info.extensionId, snapshotEvent(settingsStore));
+    },
     onEvent: (extensionId, env) =>
       dispatchCapturesEvent(capturesRegistry, extensionId, env, {
         onMismatch: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
         onInvalid: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
       }),
+  });
+  ipcServerRef = ipcServer;
+
+  const unsubscribeSettings = settingsStore.subscribe((change) => {
+    broadcastChange(ipcServer, settingsStore, change);
   });
 
   try {
@@ -62,7 +138,12 @@ export const runMcpMode = async (): Promise<void> => {
       version: '0.0.0-m4',
     });
 
-    registerTools(server, TOOLS, { ipcServer, hostVersion, capturesRegistry });
+    registerTools(server, TOOLS, {
+      ipcServer,
+      hostVersion,
+      capturesRegistry,
+      settingsStore,
+    });
 
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -74,7 +155,9 @@ export const runMcpMode = async (): Promise<void> => {
     const reason = await waitForShutdown();
     stderr.write(`[pwa-debug-host mcp] ${reason}; shutting down\n`);
   } finally {
+    unsubscribeSettings();
     await ipcServer.close();
+    settingsStore.dispose();
     stderr.write('[pwa-debug-host mcp] ipc server closed\n');
   }
 };

@@ -7,6 +7,26 @@ import {
 import { createSwLifecycleProducer } from './sw_lifecycle/sw_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
 import { attachFrameId } from './frame_meta/attach_frame_id.js';
+import {
+  createSettingsCache,
+  type ExtSettingsCache,
+} from './ext_settings_cache/ext_settings_cache.js';
+import { shouldCaptureEvent } from './capture_gate/capture_gate.js';
+
+type SettingsEventMessage = {
+  readonly type: 'event';
+  readonly tool: 'settings_snapshot' | 'settings_changed';
+  readonly payload?: unknown;
+};
+
+const isSettingsEventMessage = (msg: unknown): msg is SettingsEventMessage => {
+  if (msg === null || typeof msg !== 'object') return false;
+  const m = msg as Record<string, unknown>;
+  return (
+    m['type'] === 'event' &&
+    (m['tool'] === 'settings_snapshot' || m['tool'] === 'settings_changed')
+  );
+};
 
 const HOST_NAME = 'com.pwa_debug.host';
 const CAPTURES_EVENT_TOOL = 'captures';
@@ -30,7 +50,11 @@ const logSetupHint = (extId: string, errorMessage?: string): void => {
   );
 };
 
-const connectNativeHost = (sink: EventSink, portRef: PortRef): void => {
+const connectNativeHost = (
+  sink: EventSink,
+  portRef: PortRef,
+  settingsCache: ExtSettingsCache,
+): void => {
   const extId = chrome.runtime.id;
   console.log(`[pwa-debug/sw] connecting to native host: ${HOST_NAME}`);
 
@@ -64,6 +88,23 @@ const connectNativeHost = (sink: EventSink, portRef: PortRef): void => {
           );
         },
       );
+      return;
+    }
+    if (isSettingsEventMessage(msg)) {
+      if (msg.tool === 'settings_snapshot') {
+        const r = settingsCache.applySnapshot(msg.payload);
+        console.log(
+          `[pwa-debug/sw] settings_snapshot applied (${r.applied} keys)`,
+        );
+      } else {
+        const r = settingsCache.applyChange(msg.payload);
+        if (!r.applied) {
+          console.warn(
+            '[pwa-debug/sw] settings_changed dropped (invalid payload):',
+            msg.payload,
+          );
+        }
+      }
       return;
     }
     console.log('[pwa-debug/sw] from host:', msg);
@@ -111,15 +152,19 @@ export const bootstrap = (): void => {
     }
   };
 
+  const settingsCache = createSettingsCache();
   const sink = createEventSink({
     logger: (event) => {
       console.log('[pwa-debug/sw] event', event.kind, event);
     },
     forwardEvents: sendEventEnvelope,
+    // Re-reads settings on every event so live host pushes (T3) take effect
+    // without an extension reload (M7 acceptance).
+    shouldRecord: (event) => shouldCaptureEvent(event, settingsCache.getAll()),
   });
   installEventSinkListener(sink);
   createSwLifecycleProducer({ sink });
-  connectNativeHost(sink, portRef);
+  connectNativeHost(sink, portRef, settingsCache);
 };
 
 bootstrap();

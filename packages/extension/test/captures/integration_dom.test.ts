@@ -28,7 +28,10 @@ const FRAME: FrameMeta = {
 };
 
 const COALESCE_MS = 4;
-const WAIT_MS = COALESCE_MS + 8;
+// Generous margin: full-suite worker load drifts setTimeout enough to
+// race the prior `COALESCE_MS + 8` budget on dom_mutation deliveries.
+// See M9 T1.
+const WAIT_MS = 50;
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => {

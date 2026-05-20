@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { mockSettingsStore } from '../../_helpers/mock_settings_store.js';
 import {
   consoleTailHandler,
   consoleTailTool,
@@ -36,6 +37,7 @@ const buildCtx = (opts: FakeOpts = {}): ToolContext => {
     ipcServer: fake,
     hostVersion: '0.0.0-test',
     capturesRegistry: opts.registry ?? createCapturesRegistry(),
+    settingsStore: mockSettingsStore(),
   });
 };
 
@@ -241,7 +243,11 @@ describe('console_tail — FilterSpec error mapping', () => {
     expect(r.next_steps.some((s) => s.includes('FilterSpec'))).toBe(true);
   });
 
-  it('cursor_session_mismatch: cursor minted for a different session → errorResponse', async () => {
+  it('prior-session since cursor with no disk archive → ok with empty entries (T4 routing)', async () => {
+    // Post-M8 T4: a cursor minted for a different sessionId routes to the
+    // host_archive on disk rather than erroring. With no archive on disk
+    // for that session, the result is simply empty (the steady state for
+    // a fresh host or expired archive).
     const registry = createCapturesRegistry();
     registry.getOrCreate('aaa').receive({
       events: [consoleEvent(1, 'log', ['x'])],
@@ -255,9 +261,37 @@ describe('console_tail — FilterSpec error mapping', () => {
       { filter: { since: stranger as string } },
       ctx,
     );
+    expect(r.ok).toBe(true);
+    expect(r.data?.entries).toEqual([]);
+    expect(r.data?.cursor).toBeNull();
+    expect(r.data?.hasMore).toBe(false);
+  });
+
+  it('cursor_session_mismatch: until cursor session differs from since cursor session → errorResponse', async () => {
+    // Post-T4, since-session routes the read. If until points at a different
+    // session, that is a malformed pagination request (cannot bound a single
+    // session read with a different session's cursor) — still an error.
+    const registry = createCapturesRegistry();
+    registry.getOrCreate('aaa').receive({
+      events: [consoleEvent(1, 'log', ['x'])],
+    });
+    const ctx = buildCtx({ connections: [conn('aaa')], registry });
+    const since = encodeCursor({
+      sessionId: 'PRIOR-SESSION',
+      sequenceNumber: 0,
+    });
+    const until = encodeCursor({
+      sessionId: 'OTHER-SESSION',
+      sequenceNumber: 10,
+    });
+    const r = await consoleTailHandler(
+      {
+        filter: { since: since as string, until: until as string },
+      },
+      ctx,
+    );
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/OTHER-SESSION/);
-    expect(r.error).toMatch(/host registry was reset|filter\.since cursor/);
   });
 
   it('pattern_invalid: bad regex source → errorResponse with fieldPath in error', async () => {

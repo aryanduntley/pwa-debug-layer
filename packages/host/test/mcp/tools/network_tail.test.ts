@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { mockSettingsStore } from '../../_helpers/mock_settings_store.js';
 import {
   networkTailHandler,
   networkTailTool,
@@ -36,6 +37,7 @@ const buildCtx = (opts: FakeOpts = {}): ToolContext => {
     ipcServer: fake,
     hostVersion: '0.0.0-test',
     capturesRegistry: opts.registry ?? createCapturesRegistry(),
+    settingsStore: mockSettingsStore(),
   });
 };
 
@@ -286,7 +288,9 @@ describe('network_tail — FilterSpec error mapping', () => {
     expect(r.next_steps.some((s) => s.includes('FilterSpec'))).toBe(true);
   });
 
-  it('cursor_session_mismatch → errorResponse with both session ids', async () => {
+  it('prior-session since cursor with no disk archive → ok with empty entries (T4 routing)', async () => {
+    // Post-M8 T4: prior-session since cursor routes to host_archive on disk.
+    // With no archive, the result is empty rather than an error.
     const registry = createCapturesRegistry();
     registry.getOrCreate('aaa').receive({
       events: [fetchEvent(1, 'https://example.com/x', 200)],
@@ -298,6 +302,30 @@ describe('network_tail — FilterSpec error mapping', () => {
     });
     const r = await networkTailHandler(
       { filter: { since: stranger as string } },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.data?.entries).toEqual([]);
+    expect(r.data?.cursor).toBeNull();
+    expect(r.data?.hasMore).toBe(false);
+  });
+
+  it('cursor_session_mismatch: until session differs from since session → errorResponse', async () => {
+    const registry = createCapturesRegistry();
+    registry.getOrCreate('aaa').receive({
+      events: [fetchEvent(1, 'https://example.com/x', 200)],
+    });
+    const ctx = buildCtx({ connections: [conn('aaa')], registry });
+    const since = encodeCursor({
+      sessionId: 'PRIOR-SESSION',
+      sequenceNumber: 0,
+    });
+    const until = encodeCursor({
+      sessionId: 'OTHER-SESSION',
+      sequenceNumber: 10,
+    });
+    const r = await networkTailHandler(
+      { filter: { since: since as string, until: until as string } },
       ctx,
     );
     expect(r.ok).toBe(false);

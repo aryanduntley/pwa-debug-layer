@@ -13,6 +13,9 @@ import { reactTreeTool } from './react_tree.js';
 import { reactGetStateTool } from './react_get_state.js';
 import { reactFindByTextTool } from './react_find_by_text.js';
 import { reactFindByRoleTool } from './react_find_by_role.js';
+import { settingsListSchemaTool } from './settings_list_schema.js';
+import { settingsGetTool } from './settings_get.js';
+import { settingsSetTool } from './settings_set.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
@@ -29,6 +32,9 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   consoleTailTool,
   networkTailTool,
   evaluateTool,
+  settingsListSchemaTool,
+  settingsGetTool,
+  settingsSetTool,
   reactTreeTool,
   reactGetStateTool,
   reactFindByTextTool,

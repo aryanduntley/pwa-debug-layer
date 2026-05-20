@@ -1,6 +1,7 @@
 import type { RingBuffer } from '../host_buffers/host_buffers.js';
 import type { HostStoredEvent } from '../captures_in/captures_in.js';
 import type {
+  CaptureKind,
   ConsoleLevel,
   Cursor,
   CursorParts,
@@ -8,6 +9,11 @@ import type {
   FilterSpec,
 } from '@pwa-debug/shared';
 import { decodeCursor, encodeCursor } from '@pwa-debug/shared';
+import {
+  readArchive,
+  type ArchiveReadInput,
+  type ArchiveReadResult,
+} from '../host_archive/host_archive.js';
 
 export type TailFilterContext = {
   readonly currentSessionId: string;
@@ -127,6 +133,26 @@ const decodeCursorField = (
   return { ok: true, value: decoded.value };
 };
 
+/**
+ * Decode a cursor field WITHOUT enforcing sessionId match. The caller (T4
+ * tailWithFilterMerged) uses session mismatch as a routing signal to disk,
+ * not an error.
+ */
+const decodeCursorFieldLoose = (
+  cursor: Cursor | undefined,
+  fieldPath: 'since' | 'until',
+): Res<CursorParts | null> => {
+  if (cursor === undefined) return { ok: true, value: null };
+  const decoded = decodeCursor(cursor);
+  if (!decoded.ok) {
+    return {
+      ok: false,
+      error: { kind: 'cursor_invalid', fieldPath, error: decoded.error },
+    };
+  }
+  return { ok: true, value: decoded.value };
+};
+
 const compilePatternList = (
   sources: readonly string[] | undefined,
   fieldPathPrefix: string,
@@ -178,28 +204,38 @@ const eventTextForPattern = (event: HostStoredEvent): string => {
   }
 };
 
-export const tailWithFilter = <E extends HostStoredEvent>(
-  buffer: RingBuffer<E>,
+/**
+ * Pre-compiled FilterSpec ready for application against any source of
+ * HostStoredEvent (memory ring buffer + host_archive disk). Produced by
+ * compileTailFilter so both tailWithFilter and tailWithFilterMerged share
+ * one predicate + parsed pagination state — no duplication, no drift.
+ */
+export type CompiledTailFilter = {
+  readonly predicate: (event: HostStoredEvent) => boolean;
+  readonly sinceParts: CursorParts | null;
+  readonly untilParts: CursorParts | null;
+  readonly limit: number;
+};
+
+/**
+ * Compile a FilterSpec into a reusable predicate + parsed pagination state.
+ * Validates limit, decodes since/until WITHOUT sessionId-match enforcement
+ * (the caller routes on mismatch), compiles patterns, builds the level set.
+ * Pure (no fs, no buffer access).
+ */
+export const compileTailFilter = (
   spec: FilterSpec | undefined,
   ctx: TailFilterContext,
-): TailWithFilterResult<E> => {
+): Res<CompiledTailFilter> => {
   const limitResult = validateLimit(spec?.limit);
   if (!limitResult.ok) return { ok: false, error: limitResult.error };
   const limit = limitResult.value;
 
-  const sinceResult = decodeCursorField(
-    spec?.since,
-    'since',
-    ctx.currentSessionId,
-  );
+  const sinceResult = decodeCursorFieldLoose(spec?.since, 'since');
   if (!sinceResult.ok) return { ok: false, error: sinceResult.error };
   const sinceParts = sinceResult.value;
 
-  const untilResult = decodeCursorField(
-    spec?.until,
-    'until',
-    ctx.currentSessionId,
-  );
+  const untilResult = decodeCursorFieldLoose(spec?.until, 'until');
   if (!untilResult.ok) return { ok: false, error: untilResult.error };
   const untilParts = untilResult.value;
 
@@ -213,7 +249,7 @@ export const tailWithFilter = <E extends HostStoredEvent>(
       ? new Set<ConsoleLevel>(spec.level)
       : null;
 
-  const accepts = (event: E): boolean => {
+  const predicate = (event: HostStoredEvent): boolean => {
     if (
       sinceParts !== null &&
       !(event.sequenceNumber > sinceParts.sequenceNumber)
@@ -249,7 +285,56 @@ export const tailWithFilter = <E extends HostStoredEvent>(
     return true;
   };
 
-  const matching = buffer.tail({ filter: accepts });
+  void ctx; // reserved for future ctx-aware compilation
+  return {
+    ok: true,
+    value: { predicate, sinceParts, untilParts, limit },
+  };
+};
+
+const sessionMismatch = (
+  fieldPath: 'since' | 'until',
+  cursorSessionId: string,
+  currentSessionId: string,
+): TailFilterError => ({
+  kind: 'cursor_session_mismatch',
+  fieldPath,
+  cursorSessionId,
+  currentSessionId,
+});
+
+export const tailWithFilter = <E extends HostStoredEvent>(
+  buffer: RingBuffer<E>,
+  spec: FilterSpec | undefined,
+  ctx: TailFilterContext,
+): TailWithFilterResult<E> => {
+  const compiled = compileTailFilter(spec, ctx);
+  if (!compiled.ok) return { ok: false, error: compiled.error };
+  const { predicate, sinceParts, untilParts, limit } = compiled.value;
+
+  // Memory-only callers enforce sessionId match (preserves prior contract).
+  if (sinceParts !== null && sinceParts.sessionId !== ctx.currentSessionId) {
+    return {
+      ok: false,
+      error: sessionMismatch(
+        'since',
+        sinceParts.sessionId,
+        ctx.currentSessionId,
+      ),
+    };
+  }
+  if (untilParts !== null && untilParts.sessionId !== ctx.currentSessionId) {
+    return {
+      ok: false,
+      error: sessionMismatch(
+        'until',
+        untilParts.sessionId,
+        ctx.currentSessionId,
+      ),
+    };
+  }
+
+  const matching = buffer.tail({ filter: predicate as (e: E) => boolean });
 
   let entries: readonly E[];
   let hasMore: boolean;
@@ -281,4 +366,136 @@ export const tailWithFilter = <E extends HostStoredEvent>(
     sequenceNumber: lastEntry.sequenceNumber,
   });
   return { ok: true, entries, cursor, hasMore };
+};
+
+// =====================================================================
+// T4 — memory→disk merge orchestrator
+// =====================================================================
+
+/**
+ * Input to tailWithFilterMerged. Adds kind + injectable readDisk on top of
+ * tailWithFilter's (buffer, spec, ctx) so a sinceCursor predating the
+ * in-memory tail routes into host_archive.readArchive and merges into the
+ * same TailWithFilterResult shape.
+ */
+export type TailMergedInput<E extends HostStoredEvent> = {
+  readonly buffer: RingBuffer<E>;
+  readonly spec: FilterSpec | undefined;
+  readonly ctx: TailFilterContext;
+  readonly kind: CaptureKind;
+  readonly readDisk?: (input: ArchiveReadInput) => Promise<ArchiveReadResult>;
+};
+
+/**
+ * Memory→disk-merging tail orchestrator. Routes spec.since by sessionId:
+ *   no since                              → memory-only "latest" (no disk)
+ *   since.sessionId === currentSessionId  → current-session merge: disk
+ *                                           (for the gap predating memory)
+ *                                           + memory, concatenated
+ *   since.sessionId !== currentSessionId  → prior-session pure-disk read;
+ *                                           cursor encodes against the
+ *                                           prior sessionId
+ * Until-cursor with a different sessionId than the routing session →
+ * cursor_session_mismatch (malformed pagination, not routing).
+ */
+export const tailWithFilterMerged = async <E extends HostStoredEvent>(
+  input: TailMergedInput<E>,
+): Promise<TailWithFilterResult<E>> => {
+  const { buffer, spec, ctx, kind } = input;
+  const readDisk = input.readDisk ?? readArchive;
+
+  // No since → memory-only "latest" semantics.
+  if (spec?.since === undefined) {
+    return tailWithFilter(buffer, spec, ctx);
+  }
+
+  const compiled = compileTailFilter(spec, ctx);
+  if (!compiled.ok) return { ok: false, error: compiled.error };
+  const { predicate, sinceParts, untilParts, limit } = compiled.value;
+  if (sinceParts === null) {
+    // Defensive: spec.since was set but decode produced null — shouldn't
+    // happen with the loose decoder, but fall back to memory.
+    return tailWithFilter(buffer, spec, ctx);
+  }
+
+  const routingSessionId = sinceParts.sessionId;
+
+  if (untilParts !== null && untilParts.sessionId !== routingSessionId) {
+    return {
+      ok: false,
+      error: sessionMismatch(
+        'until',
+        untilParts.sessionId,
+        routingSessionId,
+      ),
+    };
+  }
+
+  const diskInput: ArchiveReadInput = {
+    sessionId: routingSessionId,
+    kind,
+    sinceSeq: sinceParts.sequenceNumber,
+    ...(untilParts !== null && { untilSeq: untilParts.sequenceNumber }),
+    // Generous raw cap so the predicate has headroom; we trim to spec.limit.
+    limit: MAX_LIMIT,
+  };
+
+  const diskRead = await readDisk(diskInput);
+  const diskFiltered: HostStoredEvent[] = [];
+  let diskOverflow = false;
+  for (const entry of diskRead.entries) {
+    if (!predicate(entry)) continue;
+    if (diskFiltered.length >= limit) {
+      diskOverflow = true;
+      break;
+    }
+    diskFiltered.push(entry);
+  }
+
+  const encodeCursorOrNull = (
+    sessionId: string,
+    seq: number | undefined,
+  ): Cursor | null =>
+    seq === undefined ? null : encodeCursor({ sessionId, sequenceNumber: seq });
+
+  // Prior-session routing — disk only.
+  if (routingSessionId !== ctx.currentSessionId) {
+    const entries = diskFiltered as unknown as readonly E[];
+    const last = entries[entries.length - 1]?.sequenceNumber;
+    return {
+      ok: true,
+      entries,
+      cursor: encodeCursorOrNull(routingSessionId, last),
+      hasMore: diskOverflow || diskRead.hasMore,
+    };
+  }
+
+  // Current-session merge — disk first, then memory for the remainder.
+  if (diskOverflow || diskFiltered.length === limit) {
+    const entries = diskFiltered as unknown as readonly E[];
+    const last = entries[entries.length - 1]?.sequenceNumber;
+    return {
+      ok: true,
+      entries,
+      cursor: encodeCursorOrNull(ctx.currentSessionId, last),
+      hasMore: diskOverflow || diskRead.hasMore,
+    };
+  }
+
+  const remaining = limit - diskFiltered.length;
+  const memorySpec: FilterSpec = { ...spec, limit: remaining };
+  const memoryResult = tailWithFilter(buffer, memorySpec, ctx);
+  if (!memoryResult.ok) return memoryResult;
+
+  const entries = [
+    ...(diskFiltered as unknown as E[]),
+    ...memoryResult.entries,
+  ] as readonly E[];
+  const last = entries[entries.length - 1]?.sequenceNumber;
+  return {
+    ok: true,
+    entries,
+    cursor: encodeCursorOrNull(ctx.currentSessionId, last),
+    hasMore: diskRead.hasMore || memoryResult.hasMore,
+  };
 };

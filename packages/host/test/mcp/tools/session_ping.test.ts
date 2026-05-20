@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { mockSettingsStore } from '../../_helpers/mock_settings_store.js';
 import { sessionPingHandler } from '../../../src/mcp/tools/session_ping.js';
 import type { ToolContext } from '../../../src/mcp/tool_registry.js';
 import type {
@@ -38,6 +39,7 @@ const buildCtx = (opts: FakeOpts = {}): ToolContext => {
     ipcServer: fake,
     hostVersion: '0.0.0-test',
     capturesRegistry: createCapturesRegistry(),
+    settingsStore: mockSettingsStore(),
   });
 };
 
