@@ -3,6 +3,8 @@ import type {
   FetchCapturedEvent,
   XhrCapturedEvent,
   WebSocketCapturedEvent,
+  StoreChangeCapturedEvent,
+  ReplayCapturedEvent,
 } from './captured_event.js';
 import type { Cursor } from './filter_spec.js';
 
@@ -19,3 +21,7 @@ export type NetworkEntry =
   | (FetchCapturedEvent & EntryEnvelope)
   | (XhrCapturedEvent & EntryEnvelope)
   | (WebSocketCapturedEvent & EntryEnvelope);
+
+export type StoreChangeEntry = StoreChangeCapturedEvent & EntryEnvelope;
+
+export type ReplayEntry = ReplayCapturedEvent & EntryEnvelope;

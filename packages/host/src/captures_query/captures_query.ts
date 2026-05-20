@@ -2,13 +2,15 @@ import type { RingBuffer } from '../host_buffers/host_buffers.js';
 import type { HostStoredEvent } from '../captures_in/captures_in.js';
 import type {
   CaptureKind,
-  ConsoleLevel,
   Cursor,
   CursorParts,
-  FilterPattern,
   FilterSpec,
 } from '@pwa-debug/shared';
-import { decodeCursor, encodeCursor } from '@pwa-debug/shared';
+import {
+  compileSourceFilter,
+  decodeCursor,
+  encodeCursor,
+} from '@pwa-debug/shared';
 import {
   readArchive,
   type ArchiveReadInput,
@@ -153,57 +155,6 @@ const decodeCursorFieldLoose = (
   return { ok: true, value: decoded.value };
 };
 
-const compilePatternList = (
-  sources: readonly string[] | undefined,
-  fieldPathPrefix: string,
-): Res<readonly RegExp[]> => {
-  if (sources === undefined || sources.length === 0) {
-    return { ok: true, value: [] };
-  }
-  const compiled: RegExp[] = [];
-  let i = 0;
-  for (const src of sources) {
-    try {
-      compiled.push(new RegExp(src));
-    } catch (e) {
-      return {
-        ok: false,
-        error: {
-          kind: 'pattern_invalid',
-          fieldPath: `${fieldPathPrefix}[${i}]`,
-          error: e instanceof Error ? e.message : String(e),
-        },
-      };
-    }
-    i++;
-  }
-  return { ok: true, value: compiled };
-};
-
-const compilePatterns = (
-  pattern: FilterPattern | undefined,
-): Res<{
-  readonly include: readonly RegExp[];
-  readonly exclude: readonly RegExp[];
-}> => {
-  if (pattern === undefined) {
-    return { ok: true, value: { include: [], exclude: [] } };
-  }
-  const inc = compilePatternList(pattern.include, 'pattern.include');
-  if (!inc.ok) return inc;
-  const exc = compilePatternList(pattern.exclude, 'pattern.exclude');
-  if (!exc.ok) return exc;
-  return { ok: true, value: { include: inc.value, exclude: exc.value } };
-};
-
-const eventTextForPattern = (event: HostStoredEvent): string => {
-  try {
-    return JSON.stringify(event) ?? '';
-  } catch {
-    return '';
-  }
-};
-
 /**
  * Pre-compiled FilterSpec ready for application against any source of
  * HostStoredEvent (memory ring buffer + host_archive disk). Produced by
@@ -220,8 +171,10 @@ export type CompiledTailFilter = {
 /**
  * Compile a FilterSpec into a reusable predicate + parsed pagination state.
  * Validates limit, decodes since/until WITHOUT sessionId-match enforcement
- * (the caller routes on mismatch), compiles patterns, builds the level set.
- * Pure (no fs, no buffer access).
+ * (the caller routes on mismatch), then DELEGATES level + pattern compile to
+ * the shared @pwa-debug/shared compileSourceFilter so the extension capture
+ * gate and the host tail use the same predicate code path. Pure (no fs, no
+ * buffer access).
  */
 export const compileTailFilter = (
   spec: FilterSpec | undefined,
@@ -239,15 +192,18 @@ export const compileTailFilter = (
   if (!untilResult.ok) return { ok: false, error: untilResult.error };
   const untilParts = untilResult.value;
 
-  const patternsResult = compilePatterns(spec?.pattern);
-  if (!patternsResult.ok) return { ok: false, error: patternsResult.error };
-  const includePatterns = patternsResult.value.include;
-  const excludePatterns = patternsResult.value.exclude;
-
-  const levelSet =
-    spec?.level !== undefined && spec.level.length > 0
-      ? new Set<ConsoleLevel>(spec.level)
-      : null;
+  const sourceResult = compileSourceFilter(spec);
+  if (!sourceResult.ok) {
+    return {
+      ok: false,
+      error: {
+        kind: 'pattern_invalid',
+        fieldPath: sourceResult.error.fieldPath,
+        error: sourceResult.error.error,
+      },
+    };
+  }
+  const sourcePredicate = sourceResult.predicate;
 
   const predicate = (event: HostStoredEvent): boolean => {
     if (
@@ -262,27 +218,7 @@ export const compileTailFilter = (
     ) {
       return false;
     }
-    if (levelSet !== null) {
-      const lvl = (event as unknown as { level?: ConsoleLevel }).level;
-      if (lvl === undefined || !levelSet.has(lvl)) return false;
-    }
-    if (includePatterns.length > 0 || excludePatterns.length > 0) {
-      const text = eventTextForPattern(event);
-      for (const re of excludePatterns) {
-        if (re.test(text)) return false;
-      }
-      if (includePatterns.length > 0) {
-        let anyInclude = false;
-        for (const re of includePatterns) {
-          if (re.test(text)) {
-            anyInclude = true;
-            break;
-          }
-        }
-        if (!anyInclude) return false;
-      }
-    }
-    return true;
+    return sourcePredicate(event);
   };
 
   void ctx; // reserved for future ctx-aware compilation

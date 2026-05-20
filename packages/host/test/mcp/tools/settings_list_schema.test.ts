@@ -43,7 +43,7 @@ describe('settings_list_schema tool', () => {
     const { schema } = await callHandler();
     for (const e of schema) {
       expect(typeof e.key).toBe('string');
-      expect(['number', 'boolean', 'string[]', 'enum[]']).toContain(e.type);
+      expect(['number', 'boolean', 'string[]', 'enum[]', 'record']).toContain(e.type);
       expect(['host', 'extension', 'both']).toContain(e.scope);
       expect(typeof e.description).toBe('string');
       expect(e.description.length).toBeGreaterThan(0);

@@ -392,6 +392,224 @@ const handleReactFindByRole: RequestHandler = async (env) => {
   return response.payload;
 };
 
+type ReduxGetStateRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReduxGetStateInput = (
+  raw: unknown,
+): ReduxGetStateRouted | null => {
+  if (raw === undefined || raw === null) {
+    return { tabId: undefined, payload: {} };
+  }
+  if (typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = {};
+  if (typeof r['path'] === 'string' && (r['path'] as string).length > 0) {
+    payload['path'] = r['path'];
+  }
+  return { tabId, payload };
+};
+
+const handleReduxGetState: RequestHandler = async (env) => {
+  const sanitized = sanitizeReduxGetStateInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'redux_get_state: payload must be an object with optional { tab_id?, path? }',
+    );
+  }
+  const csReq = { tool: 'redux_get_state', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type ReduxSubscribeRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReduxSubscribeInput = (
+  raw: unknown,
+): ReduxSubscribeRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action !== 'start' && action !== 'stop') return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { action };
+  if (typeof r['path'] === 'string' && (r['path'] as string).length > 0) {
+    payload['path'] = r['path'];
+  }
+  return { tabId, payload };
+};
+
+const handleReduxSubscribe: RequestHandler = async (env) => {
+  const sanitized = sanitizeReduxSubscribeInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      "redux_subscribe: payload must be { action: 'start' | 'stop', tab_id?, path? }",
+    );
+  }
+  const csReq = { tool: 'redux_subscribe', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type ReduxDispatchRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeReduxDispatchInput = (
+  raw: unknown,
+): ReduxDispatchRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action === null || typeof action !== 'object') return null;
+  const a = action as Record<string, unknown>;
+  if (typeof a['type'] !== 'string' || (a['type'] as string).length === 0) {
+    return null;
+  }
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  return { tabId, payload: { action } };
+};
+
+const handleReduxDispatch: RequestHandler = async (env) => {
+  const sanitized = sanitizeReduxDispatchInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'redux_dispatch: payload must be { action: { type: non-empty string; payload? }, tab_id? }',
+    );
+  }
+  const csReq = { tool: 'redux_dispatch', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type SourceMapResolveRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeSourceMapResolveInput = (
+  raw: unknown,
+): SourceMapResolveRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const scriptUrl = r['script_url'];
+  if (typeof scriptUrl !== 'string' || scriptUrl.length === 0) return null;
+  const line = r['line'];
+  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) return null;
+  const column = r['column'];
+  if (typeof column !== 'number' || !Number.isInteger(column) || column < 0) {
+    return null;
+  }
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  return {
+    tabId,
+    payload: { script_url: scriptUrl, line, column },
+  };
+};
+
+const handleSourceMapResolve: RequestHandler = async (env) => {
+  const sanitized = sanitizeSourceMapResolveInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'source_map_resolve: payload must be { script_url, line: int>=1, column: int>=0, tab_id? }',
+    );
+  }
+  const csReq = { tool: 'source_map_resolve', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type SessionRecordRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeSessionRecordInput = (
+  raw: unknown,
+): SessionRecordRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action !== 'start' && action !== 'stop') return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { action };
+  if (typeof r['session_id'] === 'string' && (r['session_id'] as string).length > 0) {
+    payload['session_id'] = r['session_id'];
+  }
+  if (
+    typeof r['duration_cap_ms'] === 'number' &&
+    Number.isInteger(r['duration_cap_ms']) &&
+    (r['duration_cap_ms'] as number) > 0
+  ) {
+    payload['duration_cap_ms'] = r['duration_cap_ms'];
+  }
+  return { tabId, payload };
+};
+
+const handleSessionRecord: RequestHandler = async (env) => {
+  const sanitized = sanitizeSessionRecordInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      "session_record: payload must be { action: 'start' | 'stop', tab_id?, session_id?, duration_cap_ms? }",
+    );
+  }
+  const csReq = { tool: 'session_record', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   session_ping: handleSessionPing,
   recent_events: handleRecentEvents,
@@ -400,6 +618,11 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   react_get_state: handleReactGetState,
   react_find_by_text: handleReactFindByText,
   react_find_by_role: handleReactFindByRole,
+  redux_get_state: handleReduxGetState,
+  redux_subscribe: handleReduxSubscribe,
+  redux_dispatch: handleReduxDispatch,
+  source_map_resolve: handleSourceMapResolve,
+  session_record: handleSessionRecord,
 });
 
 const errorResponse = (

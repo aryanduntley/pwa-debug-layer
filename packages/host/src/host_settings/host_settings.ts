@@ -68,12 +68,30 @@ const DEFAULT_WATCH_DEBOUNCE_MS = 50;
 
 // --- internal equality (arrays compared element-wise; primitives by ===) ---
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
 const arraysEqual = (a: readonly unknown[], b: readonly unknown[]): boolean =>
-  a.length === b.length && a.every((v, i) => v === b[i]);
+  a.length === b.length && a.every((v, i) => valuesEqual(v, b[i]));
+
+const objectsEqual = (
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): boolean => {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const k of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!valuesEqual(a[k], b[k])) return false;
+  }
+  return true;
+};
 
 const valuesEqual = (a: unknown, b: unknown): boolean => {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) return arraysEqual(a, b);
+  if (isPlainObject(a) && isPlainObject(b)) return objectsEqual(a, b);
   return false;
 };
 

@@ -13,6 +13,13 @@ import { reactTreeTool } from './react_tree.js';
 import { reactGetStateTool } from './react_get_state.js';
 import { reactFindByTextTool } from './react_find_by_text.js';
 import { reactFindByRoleTool } from './react_find_by_role.js';
+import { reduxGetStateTool } from './redux_get_state.js';
+import { reduxSubscribeTool } from './redux_subscribe.js';
+import { reduxTailTool } from './redux_tail.js';
+import { reduxDispatchTool } from './redux_dispatch.js';
+import { sourceMapResolveTool } from './source_map_resolve.js';
+import { sessionRecordTool } from './session_record.js';
+import { sessionReplayTool } from './session_replay.js';
 import { settingsListSchemaTool } from './settings_list_schema.js';
 import { settingsGetTool } from './settings_get.js';
 import { settingsSetTool } from './settings_set.js';
@@ -39,4 +46,11 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   reactGetStateTool,
   reactFindByTextTool,
   reactFindByRoleTool,
+  reduxGetStateTool,
+  reduxSubscribeTool,
+  reduxTailTool,
+  reduxDispatchTool,
+  sourceMapResolveTool,
+  sessionRecordTool,
+  sessionReplayTool,
 ] as unknown as readonly ToolDef[]);

@@ -2,6 +2,7 @@ import { Counter } from './Counter.js';
 import { TodoList } from './TodoList.js';
 import { UserProfile } from './UserProfile.js';
 import { NestedSection } from './NestedSection.js';
+import { ReduxCounter } from './ReduxCounter.js';
 
 export const App = (): JSX.Element => (
   <div className="app">
@@ -10,6 +11,7 @@ export const App = (): JSX.Element => (
     <TodoList />
     <UserProfile name="Alice" role="admin" />
     <NestedSection />
+    <ReduxCounter />
   </div>
 );
 

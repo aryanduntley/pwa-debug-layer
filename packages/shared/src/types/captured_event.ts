@@ -188,10 +188,56 @@ export type LifecycleCaptureOptions = {
   readonly enabled?: Partial<Record<PageLifecycleSubkind, boolean>>;
 };
 
+export type StoreChangeAction = {
+  readonly type: string;
+  readonly payload?: unknown;
+};
+
+export type StoreChangeDiff = {
+  readonly added: readonly string[];
+  readonly changed: readonly string[];
+  readonly removed: readonly string[];
+};
+
+/**
+ * Emitted by the page-world Redux subscription manager on each store.subscribe
+ * callback whose path-narrowed snapshot differs from the prior snapshot. The
+ * `snapshot` field is the serialized (16KB-capped) post-state of the watched
+ * slice; the `diff` field names the top-level keys that changed.
+ */
+export type StoreChangeCapturedEvent = CaptureMeta & {
+  readonly kind: 'store_change';
+  readonly storeId: string;
+  readonly path?: string;
+  readonly action?: StoreChangeAction;
+  readonly diff: StoreChangeDiff;
+  readonly snapshot: unknown;
+  readonly truncated?: boolean;
+};
+
+/**
+ * Emitted by the page-world rrweb_record manager (M12 T1) on each rrweb event
+ * while a recording is active. The `data` field is the raw rrweb event payload
+ * — opaque to the capture pipeline; consumers (session_replay tool) pass it
+ * through to AI agents who can replay or analyze it.
+ *
+ * rrwebType is rrweb's event-type number (rrweb's EventType enum: 0=DomContentLoaded,
+ * 1=Load, 2=FullSnapshot, 3=IncrementalSnapshot, 4=Meta, 5=Custom, 6=Plugin).
+ */
+export type ReplayCapturedEvent = CaptureMeta & {
+  readonly kind: 'replay';
+  readonly sessionId: string;
+  readonly rrwebType: number;
+  readonly data: unknown;
+  readonly timestamp: number;
+};
+
 export type CapturedEvent =
   | ConsoleCapturedEvent
   | FetchCapturedEvent
   | XhrCapturedEvent
   | WebSocketCapturedEvent
   | DomMutationCapturedEvent
-  | LifecycleCapturedEvent;
+  | LifecycleCapturedEvent
+  | StoreChangeCapturedEvent
+  | ReplayCapturedEvent;

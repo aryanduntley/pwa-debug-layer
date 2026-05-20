@@ -15,6 +15,11 @@ import { installDomMutationCapture } from './captures/capture_dom_mutation.js';
 import { installLifecycleCapture } from './captures/capture_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
 import { computeFrameMeta } from './frame_meta/frame_meta.js';
+import {
+  installReduxDevtoolsShim,
+  type ReduxDevtoolsShim,
+} from './stores/redux/devtools_shim.js';
+import { setReduxShim } from './page_bridge/page_dispatch.js';
 
 type FrameworkHookProbe = {
   readonly react: boolean;
@@ -145,6 +150,14 @@ const installCaptures = (
 };
 
 export const bootstrap = (): void => {
+  // Install the Redux devtools shim FIRST — must precede any user RTK code
+  // that creates a store on first eval so __REDUX_DEVTOOLS_EXTENSION_COMPOSE__
+  // is in place when composeWithDevTools() is called.
+  const reduxShim: ReduxDevtoolsShim = installReduxDevtoolsShim(
+    window as unknown as Parameters<typeof installReduxDevtoolsShim>[0],
+  );
+  setReduxShim(reduxShim);
+
   installBridgeListener();
 
   const frame = computeFrameMeta();

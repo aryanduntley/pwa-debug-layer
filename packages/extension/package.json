@@ -9,7 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@pwa-debug/shared": "workspace:*"
+    "@pwa-debug/shared": "workspace:*",
+    "rrweb": "2.0.0-alpha.4"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.3.0",

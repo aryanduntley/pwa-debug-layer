@@ -1,0 +1,4 @@
+What's left on other paths:
+  - Path 2 (Capture) M9 — network producers + verification sidequest
+  (in_progress)
+  - Path 9 (Browser launcher) M14-M18 — five pending milestones

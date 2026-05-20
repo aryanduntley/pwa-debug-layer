@@ -19,7 +19,13 @@ export type HostStoredEvent = HostCapturedEvent & {
   readonly sequenceNumber: number;
 };
 
-export type BufferKind = 'console' | 'network' | 'dom_mutations' | 'lifecycle';
+export type BufferKind =
+  | 'console'
+  | 'network'
+  | 'dom_mutations'
+  | 'lifecycle'
+  | 'store_change'
+  | 'replay';
 
 export interface CapturesInOptions {
   readonly extensionId: string;
@@ -71,6 +77,8 @@ const BUFFER_KINDS: readonly BufferKind[] = [
   'network',
   'dom_mutations',
   'lifecycle',
+  'store_change',
+  'replay',
 ];
 
 const kindToBucket = (kind: string): BufferKind | undefined => {
@@ -85,6 +93,10 @@ const kindToBucket = (kind: string): BufferKind | undefined => {
       return 'dom_mutations';
     case 'lifecycle':
       return 'lifecycle';
+    case 'store_change':
+      return 'store_change';
+    case 'replay':
+      return 'replay';
     default:
       return undefined;
   }
@@ -110,6 +122,8 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     network: makeBuffer('network'),
     dom_mutations: makeBuffer('dom_mutations'),
     lifecycle: makeBuffer('lifecycle'),
+    store_change: makeBuffer('store_change'),
+    replay: makeBuffer('replay'),
   };
 
   const received: Record<BufferKind, number> = {
@@ -117,18 +131,24 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     network: 0,
     dom_mutations: 0,
     lifecycle: 0,
+    store_change: 0,
+    replay: 0,
   };
   const dropped: Record<BufferKind, number> = {
     console: 0,
     network: 0,
     dom_mutations: 0,
     lifecycle: 0,
+    store_change: 0,
+    replay: 0,
   };
   const sequence: Record<BufferKind, number> = {
     console: 0,
     network: 0,
     dom_mutations: 0,
     lifecycle: 0,
+    store_change: 0,
+    replay: 0,
   };
   let droppedUnknown = 0;
 

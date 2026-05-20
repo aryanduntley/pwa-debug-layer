@@ -223,7 +223,7 @@ describe('createCapturesIn — tail forwarding + clear', () => {
     });
     ci.clear();
     const stats = ci.getStats();
-    for (const k of ['console', 'network', 'dom_mutations', 'lifecycle'] as const) {
+    for (const k of ['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay'] as const) {
       expect(stats.perKind[k]).toEqual({ received: 0, dropped: 0, size: 0 });
       expect(ci.tail(k)).toEqual([]);
     }

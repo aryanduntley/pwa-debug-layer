@@ -18,6 +18,41 @@ import {
 } from '../react/serialize_component.js';
 import { findByText, type FindByTextResult } from '../react/find_by_text.js';
 import { findByRole, type FindByRoleResult } from '../react/find_by_role.js';
+import { detectReduxStore } from '../stores/redux/detect.js';
+import { getValueAtPath } from '../stores/redux/path_get.js';
+import { serializeStoreValue } from '../stores/redux/serialize.js';
+import type { ReduxDevtoolsShim } from '../stores/redux/devtools_shim.js';
+import { installStoreSubscription } from '../stores/redux/subscribe.js';
+import { discoverSourceMapUrl } from '../sourcemap/discover.js';
+import { resolveLocation, type ResolvedFrame } from '../sourcemap/resolve.js';
+import {
+  createSourcemapCache,
+  type SourcemapCache,
+} from '../sourcemap/cache.js';
+import {
+  startRecording,
+  stopRecording,
+  getActiveSessionId,
+  getActiveDurationCapMs,
+} from '../rrweb_record/state.js';
+import type { ReplayCapturedEvent } from '@pwa-debug/shared';
+import { safeRandomId } from '../ids/safe_random_id.js';
+import type {
+  StoreChangeCapturedEvent,
+  CapturedEvent,
+} from '@pwa-debug/shared';
+import { encodeEvent } from './protocol.js';
+import { computeFrameMeta } from '../frame_meta/frame_meta.js';
+import type { Disposer } from '../captures/capture_console.js';
+
+// Singleton injected by page-world.ts bootstrap so reduxGetStateHandler can
+// consult the shim's captured stores as a second detection path. Kept as a
+// module-level binding here rather than on a global so tests can reset it.
+let reduxShim: ReduxDevtoolsShim | null = null;
+
+export const setReduxShim = (shim: ReduxDevtoolsShim | null): void => {
+  reduxShim = shim;
+};
 
 export type SessionPingPayload = {
   readonly url: string;
@@ -378,6 +413,431 @@ export const reactFindByRoleHandler = (
   });
 };
 
+export type ReduxGetStateInput = {
+  readonly path?: string;
+};
+
+export type ReduxGetStateSuccess = {
+  readonly state: unknown;
+  readonly path?: string;
+  readonly truncated?: boolean;
+  readonly scopeUrl: string;
+};
+
+export type ReduxGetStateErrorPayload = {
+  readonly error: { readonly message: string };
+};
+
+export const readReduxGetStateInput = (
+  raw: unknown,
+): ReduxGetStateInput => {
+  if (raw === null || typeof raw !== 'object') return {};
+  const r = raw as Record<string, unknown>;
+  const path = r['path'];
+  if (typeof path === 'string' && path.length > 0) {
+    return Object.freeze({ path });
+  }
+  return Object.freeze({});
+};
+
+export const reduxGetStateHandler = (
+  env: PageBridgeRequestEnvelope,
+): ReduxGetStateSuccess | ReduxGetStateErrorPayload => {
+  const input = readReduxGetStateInput(env.payload);
+  const store = detectReduxStore(
+    window as unknown as { __pwaDebug_redux?: unknown },
+    reduxShim !== null ? reduxShim.getStores : undefined,
+  );
+  if (store === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'redux_get_state: no Redux store detected. Fixture/page must expose the store on window.__pwaDebug_redux (T1 path); production auto-detection via the __REDUX_DEVTOOLS_EXTENSION__ shim ships in M11 T2.',
+      }),
+    });
+  }
+  const state = store.getState();
+  const picked = getValueAtPath(state, input.path);
+  if (!picked.ok) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `redux_get_state: path "${input.path ?? ''}" invalid: ${picked.error}`,
+      }),
+    });
+  }
+  const serialized = serializeStoreValue(picked.value);
+  const out: {
+    state: unknown;
+    path?: string;
+    truncated?: boolean;
+    scopeUrl: string;
+  } = {
+    state: serialized.value,
+    scopeUrl: window.location.href,
+  };
+  if (input.path !== undefined) out.path = input.path;
+  if (serialized.truncated) out.truncated = true;
+  return Object.freeze(out);
+};
+
+export type ReduxSubscribeInput = {
+  readonly action: 'start' | 'stop';
+  readonly path?: string;
+};
+
+export type ReduxSubscribeSuccess = {
+  readonly active: boolean;
+  readonly path?: string;
+  readonly scopeUrl: string;
+};
+
+export type ReduxSubscribeErrorPayload = {
+  readonly error: { readonly message: string };
+};
+
+export const readReduxSubscribeInput = (
+  raw: unknown,
+): ReduxSubscribeInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action !== 'start' && action !== 'stop') return null;
+  const path = r['path'];
+  if (path !== undefined && (typeof path !== 'string' || path.length === 0)) {
+    return null;
+  }
+  return Object.freeze(
+    path !== undefined
+      ? ({ action, path } as ReduxSubscribeInput)
+      : ({ action } as ReduxSubscribeInput),
+  );
+};
+
+// Module-singleton: tracks the active store_change subscription's disposer.
+// The page-world bootstrap owns the captures emit path through encodeEvent +
+// window.postMessage; reduxSubscribeHandler reuses it so emits flow through
+// the normal CS → SW → host buffer pipeline.
+let subscriptionDisposer: Disposer | null = null;
+
+const emitToPage = (event: CapturedEvent): void => {
+  window.postMessage(encodeEvent(event), window.location.origin);
+};
+
+export const reduxSubscribeHandler = (
+  env: PageBridgeRequestEnvelope,
+): ReduxSubscribeSuccess | ReduxSubscribeErrorPayload => {
+  const input = readReduxSubscribeInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          "redux_subscribe: payload must be { action: 'start' | 'stop', path?: non-empty string }",
+      }),
+    });
+  }
+  if (input.action === 'stop') {
+    if (subscriptionDisposer !== null) {
+      subscriptionDisposer();
+      subscriptionDisposer = null;
+    }
+    return Object.freeze({
+      active: false,
+      scopeUrl: window.location.href,
+    });
+  }
+  const store = detectReduxStore(
+    window as unknown as { __pwaDebug_redux?: unknown },
+    reduxShim !== null ? reduxShim.getStores : undefined,
+  );
+  if (store === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'redux_subscribe: no Redux store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the production __REDUX_DEVTOOLS_EXTENSION__ shim must be in place.',
+      }),
+    });
+  }
+  // Validate path eagerly so misuse fails at start, not silently later.
+  if (input.path !== undefined) {
+    const probe = getValueAtPath(store.getState(), input.path);
+    if (!probe.ok) {
+      return Object.freeze({
+        error: Object.freeze({
+          message: `redux_subscribe: path "${input.path}" invalid: ${probe.error}`,
+        }),
+      });
+    }
+  }
+  // Tear down any prior subscription before installing the new one.
+  if (subscriptionDisposer !== null) {
+    subscriptionDisposer();
+    subscriptionDisposer = null;
+  }
+  subscriptionDisposer = installStoreSubscription({
+    store,
+    emit: (e: StoreChangeCapturedEvent) => emitToPage(e),
+    frame: computeFrameMeta(),
+    ...(input.path !== undefined ? { path: input.path } : {}),
+  });
+  const out: {
+    active: boolean;
+    path?: string;
+    scopeUrl: string;
+  } = { active: true, scopeUrl: window.location.href };
+  if (input.path !== undefined) out.path = input.path;
+  return Object.freeze(out);
+};
+
+export type ReduxDispatchAction = {
+  readonly type: string;
+  readonly payload?: unknown;
+};
+
+export type ReduxDispatchSuccess = {
+  readonly dispatched: true;
+  readonly action: ReduxDispatchAction;
+  readonly scopeUrl: string;
+};
+
+export type ReduxDispatchErrorPayload = {
+  readonly error: { readonly message: string };
+};
+
+export const readReduxDispatchInput = (
+  raw: unknown,
+): ReduxDispatchAction | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action === null || typeof action !== 'object') return null;
+  const a = action as Record<string, unknown>;
+  const type = a['type'];
+  if (typeof type !== 'string' || type.length === 0) return null;
+  const out: { type: string; payload?: unknown } = { type };
+  if ('payload' in a) out.payload = a['payload'];
+  return Object.freeze(out);
+};
+
+export const reduxDispatchHandler = (
+  env: PageBridgeRequestEnvelope,
+): ReduxDispatchSuccess | ReduxDispatchErrorPayload => {
+  const action = readReduxDispatchInput(env.payload);
+  if (action === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'redux_dispatch: payload must be { action: { type: non-empty string; payload? } }',
+      }),
+    });
+  }
+  const store = detectReduxStore(
+    window as unknown as { __pwaDebug_redux?: unknown },
+    reduxShim !== null ? reduxShim.getStores : undefined,
+  );
+  if (store === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'redux_dispatch: no Redux store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the __REDUX_DEVTOOLS_EXTENSION__ shim must capture it.',
+      }),
+    });
+  }
+  try {
+    store.dispatch(action);
+  } catch (err) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `redux_dispatch: store.dispatch threw: ${(err as Error).message}`,
+      }),
+    });
+  }
+  return Object.freeze({
+    dispatched: true as const,
+    action,
+    scopeUrl: window.location.href,
+  });
+};
+
+export type SourceMapResolveInput = {
+  readonly scriptUrl: string;
+  readonly line: number;
+  readonly column: number;
+};
+
+export type SourceMapResolveSuccess = {
+  readonly original?: ResolvedFrame;
+  readonly scopeUrl: string;
+};
+
+export type SourceMapResolveErrorPayload = {
+  readonly error: { readonly message: string };
+};
+
+export const readSourceMapResolveInput = (
+  raw: unknown,
+): SourceMapResolveInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const scriptUrl = r['script_url'];
+  if (typeof scriptUrl !== 'string' || scriptUrl.length === 0) return null;
+  const line = r['line'];
+  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) return null;
+  const column = r['column'];
+  if (typeof column !== 'number' || !Number.isInteger(column) || column < 0) {
+    return null;
+  }
+  return Object.freeze({ scriptUrl, line, column });
+};
+
+let sourcemapCache: SourcemapCache | null = null;
+
+const getSourcemapCache = (): SourcemapCache => {
+  if (sourcemapCache === null) {
+    sourcemapCache = createSourcemapCache();
+  }
+  return sourcemapCache;
+};
+
+export const resetSourcemapCache = (): void => {
+  sourcemapCache = null;
+};
+
+export const sourceMapResolveHandler = async (
+  env: PageBridgeRequestEnvelope,
+): Promise<SourceMapResolveSuccess | SourceMapResolveErrorPayload> => {
+  const input = readSourceMapResolveInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'source_map_resolve: payload must be { script_url: non-empty string, line: int >= 1, column: int >= 0 }',
+      }),
+    });
+  }
+  let scriptText: string;
+  try {
+    const res = await fetch(input.scriptUrl);
+    if (!res.ok) {
+      return Object.freeze({
+        error: Object.freeze({
+          message: `source_map_resolve: script fetch returned ${res.status}`,
+        }),
+      });
+    }
+    scriptText = await res.text();
+  } catch (err) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `source_map_resolve: script fetch failed: ${(err as Error).message}`,
+      }),
+    });
+  }
+  const mapUrl = discoverSourceMapUrl(input.scriptUrl, scriptText);
+  if (mapUrl === null) {
+    return Object.freeze({
+      scopeUrl: window.location.href,
+    });
+  }
+  const cache = getSourcemapCache();
+  const parsed = await cache.get(mapUrl);
+  if (parsed === null) {
+    return Object.freeze({
+      scopeUrl: window.location.href,
+    });
+  }
+  const original = resolveLocation(parsed, input.line, input.column);
+  const out: { original?: ResolvedFrame; scopeUrl: string } = {
+    scopeUrl: window.location.href,
+  };
+  if (original !== null) out.original = original;
+  return Object.freeze(out);
+};
+
+export type SessionRecordInput = {
+  readonly action: 'start' | 'stop';
+  readonly sessionId?: string;
+  readonly durationCapMs?: number;
+};
+
+export type SessionRecordSuccess = {
+  readonly active: boolean;
+  readonly sessionId?: string;
+  readonly durationCapMs?: number;
+  readonly scopeUrl: string;
+};
+
+export type SessionRecordErrorPayload = {
+  readonly error: { readonly message: string };
+};
+
+export const readSessionRecordInput = (
+  raw: unknown,
+): SessionRecordInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action !== 'start' && action !== 'stop') return null;
+  const out: { action: 'start' | 'stop'; sessionId?: string; durationCapMs?: number } = {
+    action,
+  };
+  const sid = r['session_id'];
+  if (sid !== undefined) {
+    if (typeof sid !== 'string' || sid.length === 0) return null;
+    out.sessionId = sid;
+  }
+  const cap = r['duration_cap_ms'];
+  if (cap !== undefined) {
+    if (typeof cap !== 'number' || !Number.isInteger(cap) || cap <= 0) return null;
+    out.durationCapMs = cap;
+  }
+  return Object.freeze(out);
+};
+
+export const sessionRecordHandler = (
+  env: PageBridgeRequestEnvelope,
+): SessionRecordSuccess | SessionRecordErrorPayload => {
+  const input = readSessionRecordInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          "session_record: payload must be { action: 'start' | 'stop', session_id?: non-empty string, duration_cap_ms?: int > 0 }",
+      }),
+    });
+  }
+  if (input.action === 'stop') {
+    const sid = stopRecording();
+    const out: { active: false; sessionId?: string; scopeUrl: string } = {
+      active: false as const,
+      scopeUrl: window.location.href,
+    };
+    if (sid !== null) out.sessionId = sid;
+    return Object.freeze(out);
+  }
+  const sessionId = input.sessionId ?? safeRandomId();
+  const frame = computeFrameMeta();
+  startRecording({
+    emit: (e: ReplayCapturedEvent) =>
+      window.postMessage(encodeEvent(e), window.location.origin),
+    frame,
+    sessionId,
+    ...(input.durationCapMs !== undefined ? { durationCapMs: input.durationCapMs } : {}),
+  });
+  const out: {
+    active: true;
+    sessionId: string;
+    durationCapMs?: number;
+    scopeUrl: string;
+  } = {
+    active: true as const,
+    sessionId: getActiveSessionId() ?? sessionId,
+    scopeUrl: window.location.href,
+  };
+  const dur = getActiveDurationCapMs();
+  if (dur !== undefined) out.durationCapMs = dur;
+  return Object.freeze(out);
+};
+
 const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   session_ping: () => sessionPingHandler(),
   evaluate: (env) => evaluateHandler(env),
@@ -385,6 +845,11 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   react_get_state: (env) => reactGetStateHandler(env),
   react_find_by_text: (env) => reactFindByTextHandler(env),
   react_find_by_role: (env) => reactFindByRoleHandler(env),
+  redux_get_state: (env) => reduxGetStateHandler(env),
+  redux_subscribe: (env) => reduxSubscribeHandler(env),
+  redux_dispatch: (env) => reduxDispatchHandler(env),
+  source_map_resolve: (env) => sourceMapResolveHandler(env),
+  session_record: (env) => sessionRecordHandler(env),
 });
 
 export const dispatchPageRequest = async (
