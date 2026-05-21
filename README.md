@@ -4,7 +4,7 @@ A browser-side debug layer that lets an AI agent (e.g. Claude Code via MCP) **se
 
 The goal is to eliminate the "user is the AI's eyes and hands" loop. Today, debugging a PWA with AI usually means the human copy/pastes DOM snippets, describes console errors, screenshots UI state, and hand-executes clicks. This project replaces that with direct, structured access.
 
-> **Status: early development.** M3 (native-messaging round-trip + AI-managed host registration) is in progress. The MVP debugging tools (`dom.snapshot`, `react.tree`, `console.tail`, etc.) are designed but not yet implemented. See [Roadmap](#roadmap).
+> **Status: working on Linux.** The full MCP→IPC→native-host→service-worker→page-world round-trip is live, and the debugging surface is shipped: console/network/DOM-mutation/lifecycle capture with persistent ring buffers + disk spill, React and Redux introspection, rrweb session record/replay, source-map resolution, and a one-call browser launcher (`pdl_launch_browser`) with `chrome-devtools-mcp` coexistence. macOS/Windows paths are implemented with unit coverage; manual round-trip retest currently runs on Linux. Firefox is not supported (it doesn't speak CDP). See [Roadmap](#roadmap).
 
 ## How it differs from `chrome-devtools-mcp`
 
@@ -102,7 +102,7 @@ git clone https://github.com/<your-fork>/pwa-debug-layer
 cd pwa-debug-layer
 pnpm install
 pnpm build      # builds packages/host/dist/main.js and packages/extension/dist/
-pnpm test       # 92 unit tests at the time of writing
+pnpm test       # full workspace unit suite (shared + host + extension)
 ```
 
 ### 2. Add the host to your MCP client
@@ -151,7 +151,77 @@ When the round-trip works you'll see in the SW console (`Inspect views: service 
 [pwa-debug/sw] hello …          (5s after connect — host-pushed message proving bidirectional flow)
 ```
 
+## Launching a browser + `chrome-devtools-mcp` coexistence
+
+`pwa-debug` and `chrome-devtools-mcp` are **two separate MCP servers** that share one browser. `pwa-debug` launches (or attaches to) a Chromium browser with a live remote-debugging port; `chrome-devtools-mcp` attaches to that same port over CDP. No proxying, no version coupling.
+
+Register both with your client. For Claude Code:
+
+```sh
+# pwa-debug (this project) — adjust the path to your checkout
+claude mcp add pwa-debug --scope user -- node /absolute/path/to/pwa-debug-layer/packages/host/dist/main.js
+
+# chrome-devtools-mcp (optional but recommended) — runs via npx, no global install
+claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
+```
+
+> The host has no `install`/`serve` subcommand — `dist/main.js` auto-detects its mode: launched by Chrome (argv starts with `chrome-extension://`) it runs as the native-messaging host; launched by your MCP client it runs as the MCP server.
+
+Then let Claude drive setup and launch:
+
+1. **`pdl_check_setup`** — reports `{ ok, gaps[], recommendations[] }`: whether `chrome-devtools-mcp` is reachable, the host manifest is installed, the extension dist is present, and an extension ID is registered. Follow its `next_steps` to close any gap.
+2. **`pdl_install_extension`** — copies the extension to `~/Downloads/pwa-debug-extension` (or a `target` you pass) with `chrome://extensions` "Load unpacked" instructions. *(Skip this if you use a sandbox mode below — it preloads the extension.)*
+3. **`pdl_launch_browser`** — launches/attaches a browser with the debug port live and returns the `browserUrl` to hand to `chrome-devtools-mcp`.
+4. **`pdl_browser_status`** — shows what's been launched (browser, profile mode, port, pid), re-probes each debug port for liveness, and reports the extension service-worker heartbeat.
+
+## Profile modes
+
+`pdl_launch_browser` takes `mode` (default `existing`), `browser` (defaults to your system-default Chromium browser), and `port` (default `9222`).
+
+| Mode | Profile | When to use |
+|---|---|---|
+| **`existing`** *(default)* | Your normal browser profile | Debugging your real browsing session. Degrades gracefully: **(a)** debug port already live → attaches; **(b)** browser running *without* a debug port → opens a new window in the existing session (your extension tools work, but `chrome-devtools-mcp` is unavailable until you fully quit + relaunch — Chrome only opens the debug port at process start); **(c)** browser not running → spawns fresh with the port + your profile (both tool surfaces work). |
+| **`sandbox-persistent`** | `~/.pwa-debug/profiles/<browser>/` (persists across restarts) | Long-running dev work you don't want polluting your normal profile. Runs as a separate process beside your main browser, with the pwa-debug extension **preloaded** (no manual unpacked install, no content-script reload race). |
+| **`sandbox-temp`** | a fresh `mktemp` dir (removed on host shutdown) | One-off / CI / clean-state runs. Same preloaded-extension benefit; the profile is discarded when the host stops. |
+
+Sandbox modes always give you both tool surfaces because they own their own `--user-data-dir` (no profile-lock collision with your main browser) and load the extension before any tab opens.
+
+## Browser support matrix
+
+Chromium-family only (Firefox doesn't speak CDP). Linux is first-class; macOS/Windows binary + profile paths are implemented but verification is deferred.
+
+| Browser | PATH names probed | Standard Linux binary | Linux profile dir (`existing` mode) |
+|---|---|---|---|
+| Chrome | `google-chrome`, `google-chrome-stable` | `/opt/google/chrome/chrome`, `/usr/bin/google-chrome*` | `~/.config/google-chrome` |
+| Chromium | `chromium`, `chromium-browser` | `/usr/bin/chromium*`, `/snap/bin/chromium` | `~/.config/chromium` |
+| Edge | `microsoft-edge`, `microsoft-edge-stable` | `/opt/microsoft/msedge/msedge` | `~/.config/microsoft-edge` |
+| Brave | `brave-browser`, `brave` | `/opt/brave.com/brave/brave-browser` | `~/.config/BraveSoftware/Brave-Browser` |
+| Vivaldi | `vivaldi`, `vivaldi-stable` | `/opt/vivaldi/vivaldi` | `~/.config/vivaldi` |
+| Opera | `opera` | `/usr/bin/opera`, `/opt/opera/opera` | `~/.config/opera` |
+
+- **System default:** on Linux the launcher reads `xdg-settings get default-web-browser` and prefers that browser when you don't pass one. (macOS `defaults`/Windows registry detection deferred.)
+- **Brave Shields** can block the content script on a site — set Shields **Down** for the site if `session_ping` reports `page_blocks_scripts`.
+- **Snap browsers are unsupported** for the native-messaging host (see below); the launcher can still spawn them, but the host round-trip won't connect. Use a native-package browser.
+- **Flatpak** installs get a manifest written, but confinement may block exec — run `flatpak override --user --filesystem=host <app-id>` and retry.
+
 ## Troubleshooting
+
+### Verification sequence
+
+When something isn't working, walk this ladder — each step localizes the failure:
+
+1. **`pdl_check_setup`** — are all setup gaps closed? (CDP reachable, manifest installed, extension present, ID registered.)
+2. **`pdl_browser_status`** — is a browser launched and is its debug port still live? Is the extension service worker connected (recent heartbeat)?
+3. **`host_status`** — is the native-messaging host registered and is an NMH instance connected?
+4. **`session_ping`** — does a full MCP → SW → page-world round-trip succeed on the active tab? (See the typed `pageWorldError` table below.)
+
+### Common launcher gotchas
+
+- **"I launched in `existing` mode but `chrome-devtools-mcp` can't attach."** Chrome enables `--remote-debugging-port` only at process start. If the browser was already running without it, `pdl_launch_browser` opens a new window (sub-state **b**) but cannot add the port to the live process — `attached:false`. Fully quit the browser and re-run, or use `mode: sandbox-persistent` for a guaranteed debug port.
+- **Brave/Chrome says "Opening in existing browser session."** That's sub-state **b** — the binary handed your request to the already-running process instead of starting a fresh one with the port. Same fix as above.
+- **Added the MCP server but the tools don't appear.** `.mcp.json` / client MCP config is read at startup — restart your MCP client after adding `pwa-debug` or `chrome-devtools`.
+- **Tools worked, then stopped after I reloaded the extension.** Reloading the extension at `chrome://extensions` detaches content scripts from already-open tabs. Hard-refresh the page tab (Ctrl+Shift+R); the SW also auto-reinjects on the next `session_ping` (look for `pageWorldSelfHealed: true`). Sandbox modes avoid this entirely (extension preloaded before tabs open).
+
 
 ### `session_ping` returns `pageWorld: null` with a typed `pageWorldError`
 
@@ -171,40 +241,49 @@ To confirm the content script attached after a successful round-trip, open the p
 
 ## MCP tool surface
 
-### Available today (host management)
+Every tool returns a structured response of the form `{ ok, data, error?, next_steps[] }`. The `next_steps` array encodes the rules of engagement for the AI — what to call next based on the actual response shape — mirroring the AIMFP `return_statements` pattern. The canonical list lives in `packages/host/src/mcp/tools/index.ts`.
 
-These ship in M3. They configure the native-messaging host itself; they do not yet expose page-level debugging.
+### Host management & setup
 
 | Tool | Purpose |
 |---|---|
-| `host_status` | Reports install/liveness state: registered IDs, manifest paths, launcher path, active connections. Cheap, idempotent. **Always call first.** |
-| `host_register_extension(id)` | Adds an extension ID to allowed origins; writes per-browser manifests; emits launcher script. Idempotent. |
-| `host_unregister_extension(id)` | Removes an extension ID; deletes manifests if it was the last one. |
-| `host_list_registrations` | Cheap read of registered IDs from state file. |
-| `host_reset` | Destructive cleanup — removes all registrations and manifests. Use to re-bootstrap from scratch. |
-| `session_ping` | Round-trip test through MCP → IPC → NMH → SW. Currently returns `hostUnreachable: true` until the IPC bridge ships in M3 final / M4. |
+| `host_status` | Install/liveness state: registered IDs, manifest paths, launcher path, active connections. Cheap, idempotent. **Always call first.** |
+| `host_register_extension(id)` / `host_unregister_extension(id)` | Add/remove an extension ID across per-browser manifests + launcher script. Idempotent. |
+| `host_list_registrations` / `host_reset` | Read registered IDs; destructive cleanup to re-bootstrap. |
+| `session_ping` | Full MCP → IPC → NMH → SW → page-world round-trip with typed `pageWorldError` codes + self-heal. |
+| `pdl_check_setup` | Diagnose setup → `{ ok, gaps[], recommendations[] }` (CDP reachable, manifest installed, extension present, ID registered). |
+| `pdl_install_extension({ target? })` | Copy the extension to a folder for unpacked install. |
 
-Each tool returns a structured response of the form `{ ok, data, error?, next_steps[] }`. The `next_steps` array encodes the rules of engagement for the AI — what to call next based on the actual response shape — mirroring the AIMFP `return_statements` pattern.
+### Browser launcher
 
-### Planned (page-level debugging — Phase 1+)
+| Tool | Purpose |
+|---|---|
+| `pdl_launch_browser({ browser?, port?, mode? })` | Launch/attach a Chromium browser with a live debug port. `mode`: `existing` (default), `sandbox-persistent`, `sandbox-temp`. Returns `browserUrl` for `chrome-devtools-mcp`. |
+| `pdl_browser_status` | Managed launches (browser, profile mode, port, pid) with live debug-port re-probe + extension SW heartbeat. |
 
-Names and grouping are the design target; signatures may shift during implementation. See [`docs/PLAN.md`](docs/PLAN.md) for the full spec.
+### Page-level debugging
 
-- **Inspection:** `dom.snapshot`, `dom.query`, `dom.describe`, `console.tail`, `console.errors`, `network.tail`, `network.body`, `react.tree`, `react.getState`, `store.get`, `events.tail`, `perf.trace`
-- **Action:** `dom.click`, `dom.type`, `dom.scroll`, `eval`, `nav.goto`, `nav.reload`
-- **Session:** `tabs.list`, `tabs.attach`, `session.record`, `session.replay`
+| Tool | Purpose |
+|---|---|
+| `console_tail` / `network_tail` | Cursor-paginated, filterable tails of the persistent capture ring buffers (memory + disk spill). |
+| `recent_events` | Recent captured events across kinds for quick verification. |
+| `evaluate` | Evaluate an expression in the page world. |
+| `react_tree` / `react_get_state` / `react_find_by_text` / `react_find_by_role` | React fiber-tree introspection + component lookup. |
+| `redux_get_state` / `redux_subscribe` / `redux_tail` / `redux_dispatch` | Redux store read, change-delta subscribe/tail, and (opt-in) dispatch. |
+| `session_record` / `session_replay` | rrweb session recording + cursor-paginated replay. |
+| `source_map_resolve` | Resolve generated stack frames to original `src/…:line:col`. |
+| `settings_list_schema` / `settings_get` / `settings_set` | Read the typed settings schema; get/set values (allowlist, capture filters, disk-spill, etc.). |
 
 ## Roadmap
 
-- **M1** ✅ — pnpm workspace, build pipeline, manifest, SW/CS/page-world skeletons, framework-detection probe.
-- **M2** ✅ — extension loads cleanly in Chromium with no console errors.
-- **M3** 🟡 *(in progress)* — native-messaging round-trip, AI-managed host registration, cross-platform install (Linux native + macOS + Windows registry; snap intentionally unsupported).
-- **M4** — IPC bridge between MCP-mode and NMH-mode so `session_ping` and tool calls actually flow through the SW. Multi-tab focus model.
-- **Phase 1 MVP** — first usable debugging surface: `dom.snapshot` (AX tree), `console.tail`, `network.tail`, `eval`, `dom.click`, `dom.type`. End-to-end goal: Claude debugs a non-trivial PWA bug without the user copy/pasting any DOM or console output.
-- **Phase 2** — framework introspection: React, Redux/Zustand/Jotai, Vue/Pinia, Svelte/Solid. Custom-events opt-in API.
-- **Phase 3** — rrweb session recording/replay, multi-tab routing, optional DevTools panel for human observation, source-map resolution.
-- **Phase 4** — Firefox port.
-- **Deferred** — mobile, Web Store distribution, hosted/team mode.
+- **Foundation** ✅ — pnpm workspace + build pipeline; MV3 extension loads cleanly; native-messaging round-trip; AI-managed host registration; cross-platform install (Linux native + macOS + Windows registry; snap unsupported); MCP↔IPC↔NMH↔SW bridge.
+- **Capture** ✅ — console / network (fetch/XHR/WebSocket) / DOM-mutation / lifecycle producers; host ring buffers with disk spill + archive pruning; filterable, cursor-paginated `console_tail` / `network_tail`.
+- **Introspection** ✅ — React fiber tree + component lookup; Redux read/subscribe/dispatch; page-world `evaluate`.
+- **Replay & source maps** ✅ — rrweb `session_record` / `session_replay`; `source_map_resolve` for stack frames.
+- **Settings** ✅ — typed schema store (allowlist/blocklist, per-kind capture filters, per-site read controls, disk-spill).
+- **Browser launcher** ✅ — `pdl_launch_browser` (existing + sandbox-persistent + sandbox-temp), `pdl_check_setup`, `pdl_browser_status`, `pdl_install_extension`, and `chrome-devtools-mcp` coexistence.
+- **Next** — DevTools panel for human observation of an AI session; Vue/Pinia + Svelte/Solid + Zustand/Jotai store adapters; multi-tab routing model.
+- **Deferred** — Firefox port (needs WebDriver BiDi, not CDP), macOS/Windows manual round-trip retest, mobile, Web Store distribution, hosted/team mode.
 
 ## Code style
 

@@ -1,4 +1,51 @@
-What's left on other paths:
-  - Path 2 (Capture) M9 — network producers + verification sidequest
-  (in_progress)
-  - Path 9 (Browser launcher) M14-M18 — five pending milestones
+emaining paths
+
+  Path: 4 — Store Introspection
+  Status: partial
+  What's left: Redux ✅ (M11). Remaining: Zustand, Pinia, Jotai adapters —
+    reuse the M11 ReduxStoreHandle-shaped plug-in contract (different
+    detection + accessor, same MCP surface). Smallest,  highest-leverage — 
+    the pattern already exists.
+  ────────────────────────────────────────
+  Path: 7 — Interaction Helpers & Filtering
+  Status: partial
+  What's left: Source-map ✅ (M13) + full filter pipeline ✅. Remaining:
+    framework-aware action tools — react-synthetic-event click,
+  find-and-act
+     by component name/role (builds on the existing
+    react_find_by_text/react_find_by_role), dispatch-form-submit.
+  ────────────────────────────────────────
+  Path: 5 — Vue / Svelte / Solid Introspection
+  Status: not built
+  What's left: Vue 3 (vue.tree/vue.getState + Pinia), then Svelte/Solid
+    where devtools hooks are stable. Largest — multiple  frameworks, 
+    parallels the whole React module.
+  ────────────────────────────────────────
+  Path: 6 — Library Popup Capture
+  Status: not built
+  What's left: Auto-detect injected widgets
+    (WalletConnect/RainbowKit/ConnectKit/Privy/SDK modals), capture
+    shadow-root content + connect/auth failure events. Canonical test
+  target
+     is your crypto PWA.
+  ────────────────────────────────────────
+  Path: 10 — Firefox Port
+  Status: deferred
+  What's left: Manifest fork to Firefox MV3, chrome.*→browser.*. Kept on
+  the
+    roadmap so it isn't forgotten, but Firefox doesn't speak CDP, so
+    chrome-devtools-mcp coexistence wouldn't apply — effectively out of
+    scope for now.
+
+  Already complete: Capture (Path 2), Replay (Path 8, via M12), Browser
+  launcher (Path 9, this session), the Added-Features path (Path 11:
+  page-bridge/settings/disk-spill/test-isolation/readControls+filters/Redux
+  /rrweb/sourcemap), plus the early foundation paths and React
+  introspection.
+
+  So, to reach 100%
+
+  Four real work items remain — Path 4 remainder → Path 7 remainder → Path 
+  5 → Path 6 — with Path 10 (Firefox) the one deferred/likely-skip. The
+  natural next pickup is Path 4's other stores: it's the smallest and the
+  plug-in pattern from M11 Redux is already in place.

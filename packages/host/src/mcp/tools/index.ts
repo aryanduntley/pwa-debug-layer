@@ -23,6 +23,10 @@ import { sessionReplayTool } from './session_replay.js';
 import { settingsListSchemaTool } from './settings_list_schema.js';
 import { settingsGetTool } from './settings_get.js';
 import { settingsSetTool } from './settings_set.js';
+import { launchBrowserTool } from './launch_browser.js';
+import { browserStatusTool } from './browser_status.js';
+import { checkSetupTool } from './check_setup.js';
+import { installExtensionTool } from './install_extension.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
@@ -53,4 +57,8 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   sourceMapResolveTool,
   sessionRecordTool,
   sessionReplayTool,
+  launchBrowserTool,
+  browserStatusTool,
+  checkSetupTool,
+  installExtensionTool,
 ] as unknown as readonly ToolDef[]);
