@@ -17,6 +17,10 @@ import { reduxGetStateTool } from './redux_get_state.js';
 import { reduxSubscribeTool } from './redux_subscribe.js';
 import { reduxTailTool } from './redux_tail.js';
 import { reduxDispatchTool } from './redux_dispatch.js';
+import { storeGetStateTool } from './store_get_state.js';
+import { storeSubscribeTool } from './store_subscribe.js';
+import { storeTailTool } from './store_tail.js';
+import { storeDispatchTool } from './store_dispatch.js';
 import { sourceMapResolveTool } from './source_map_resolve.js';
 import { sessionRecordTool } from './session_record.js';
 import { sessionReplayTool } from './session_replay.js';
@@ -50,6 +54,10 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   reactGetStateTool,
   reactFindByTextTool,
   reactFindByRoleTool,
+  storeGetStateTool,
+  storeSubscribeTool,
+  storeTailTool,
+  storeDispatchTool,
   reduxGetStateTool,
   reduxSubscribeTool,
   reduxTailTool,

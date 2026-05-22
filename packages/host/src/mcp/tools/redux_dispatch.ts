@@ -125,7 +125,7 @@ export const reduxDispatchHandler = async (
 export const reduxDispatchTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'redux_dispatch',
   description:
-    "Dispatch an action into the active Redux store (the only WRITE surface in the store-introspection family). DISABLED BY DEFAULT — opt in via settings.set { key: 'capture.stores.allowDispatch', value: true }. Args: { extension_id?, tab_id?, action: { type: non-empty string; payload? } }. Returns { extensionId, tabId, dispatched: true, action, scopeUrl } on success. Tool-level errors (no store detected; user reducer threw) follow the same { error: { message } } convention as redux_get_state. CALL host_status FIRST to see connections.",
+    "DEPRECATED — prefer store_dispatch (unified, framework auto-detect). Dispatch an action into the active Redux store (the only WRITE surface in the store-introspection family). DISABLED BY DEFAULT — opt in via settings.set { key: 'capture.stores.allowDispatch', value: true }. Args: { extension_id?, tab_id?, action: { type: non-empty string; payload? } }. Returns { extensionId, tabId, dispatched: true, action, scopeUrl } on success. Tool-level errors (no store detected; user reducer threw) follow the same { error: { message } } convention as redux_get_state. CALL host_status FIRST to see connections.",
   inputSchema,
   handler: reduxDispatchHandler,
 });

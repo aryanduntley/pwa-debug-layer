@@ -6,6 +6,8 @@ emaining paths
     reuse the M11 ReduxStoreHandle-shaped plug-in contract (different
     detection + accessor, same MCP surface). Smallest,  highest-leverage — 
     the pattern already exists.
+  DONE
+  Deferred (documented, notes #199/#201/#203 + Jotai)
   ────────────────────────────────────────
   Path: 7 — Interaction Helpers & Filtering
   Status: partial

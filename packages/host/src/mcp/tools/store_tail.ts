@@ -21,7 +21,7 @@ const inputSchema = {
   filter: filterSchema,
 };
 
-export const reduxTailHandler = async (
+export const storeTailHandler = async (
   args: z.infer<z.ZodObject<typeof inputSchema>>,
   ctx: ToolContext,
 ): Promise<ToolResponse> => {
@@ -38,7 +38,7 @@ export const reduxTailHandler = async (
     return okResponse(
       { entries: [], cursor: null, hasMore: false },
       [
-        `Extension ${target.extensionId} is connected but no captures-flavor events have arrived yet at the host. Call redux_subscribe(action="start") first, then dispatch in the page to produce store_change events.`,
+        `Extension ${target.extensionId} is connected but no captures-flavor events have arrived yet at the host. Call store_subscribe(action="start") first, then mutate the store in the page to produce store_change events.`,
         FILTER_SPEC_HINT,
       ],
     );
@@ -70,7 +70,7 @@ export const reduxTailHandler = async (
   );
 
   const nextSteps: string[] = [
-    `Returned ${entries.length} StoreChangeEntry record(s) for extension ${target.extensionId} (host session ${sessionId}). Each entry carries page-world fields (ts, frameUrl, frameKey, storeId, path?, diff, snapshot, truncated?) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor).`,
+    `Returned ${entries.length} StoreChangeEntry record(s) for extension ${target.extensionId} (host session ${sessionId}). Each entry carries page-world fields (ts, frameUrl, frameKey, storeId, framework?, path?, diff, snapshot, truncated?) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). framework names the store library that produced the event.`,
   ];
   if (result.hasMore) {
     nextSteps.push(
@@ -78,7 +78,7 @@ export const reduxTailHandler = async (
     );
   } else if (result.cursor === null) {
     nextSteps.push(
-      'No store_change events match the current filter; cursor is null. Confirm redux_subscribe(action="start") is active and at least one dispatch has occurred.',
+      'No store_change events match the current filter; cursor is null. Confirm store_subscribe(action="start") is active and at least one store change has occurred.',
     );
   } else {
     nextSteps.push(
@@ -93,10 +93,10 @@ export const reduxTailHandler = async (
   );
 };
 
-export const reduxTailTool: ToolDef<typeof inputSchema> = Object.freeze({
-  name: 'redux_tail',
+export const storeTailTool: ToolDef<typeof inputSchema> = Object.freeze({
+  name: 'store_tail',
   description:
-    "DEPRECATED — prefer store_tail (unified, framework-tagged entries). Tail the host-side store_change ring buffer (populated while redux_subscribe is active) for a target extension. Returns { entries: StoreChangeEntry[]; cursor: Cursor|null; hasMore: bool }. Each StoreChangeEntry carries page-world fields (ts, frameUrl, frameKey, storeId, path?, diff{added, changed, removed}, snapshot, truncated?) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]}; since/until=opaque cursor strings; limit=int 1..1000 (default 200). level is ignored (store_change has no console-level field). Call redux_subscribe(action='start') first to start producing events.",
+    "Tail the host-side store_change ring buffer (populated while store_subscribe is active) for a target extension. Framework-agnostic: each entry's framework field names the store library that produced it. Returns { entries: StoreChangeEntry[]; cursor: Cursor|null; hasMore: bool }. Each StoreChangeEntry carries page-world fields (ts, frameUrl, frameKey, storeId, framework?, path?, diff{added, changed, removed}, snapshot, truncated?) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]}; since/until=opaque cursor strings; limit=int 1..1000 (default 200). level is ignored (store_change has no console-level field). Call store_subscribe(action='start') first to start producing events.",
   inputSchema,
-  handler: reduxTailHandler,
+  handler: storeTailHandler,
 });

@@ -18,7 +18,7 @@ import {
 } from '../react/serialize_component.js';
 import { findByText, type FindByTextResult } from '../react/find_by_text.js';
 import { findByRole, type FindByRoleResult } from '../react/find_by_role.js';
-import { detectReduxStore } from '../stores/redux/detect.js';
+import { detectStore } from '../stores/registry.js';
 import { getValueAtPath } from '../stores/redux/path_get.js';
 import { serializeStoreValue } from '../stores/redux/serialize.js';
 import type { ReduxDevtoolsShim } from '../stores/redux/devtools_shim.js';
@@ -53,6 +53,18 @@ let reduxShim: ReduxDevtoolsShim | null = null;
 export const setReduxShim = (shim: ReduxDevtoolsShim | null): void => {
   reduxShim = shim;
 };
+
+// Resolve the live store via the framework-agnostic registry. The reduxShim
+// getStores path is threaded in via the DetectContext. An optional framework
+// selector restricts detection to a single adapter (from the store_* tools'
+// framework arg); when omitted, adapters are tried in priority order. Returns
+// { framework, handle } | null.
+const resolveStore = (framework?: string) =>
+  detectStore(
+    window,
+    reduxShim !== null ? { reduxShimGetStores: reduxShim.getStores } : undefined,
+    framework,
+  );
 
 export type SessionPingPayload = {
   readonly url: string;
@@ -415,9 +427,11 @@ export const reactFindByRoleHandler = (
 
 export type ReduxGetStateInput = {
   readonly path?: string;
+  readonly framework?: string;
 };
 
 export type ReduxGetStateSuccess = {
+  readonly framework: string;
   readonly state: unknown;
   readonly path?: string;
   readonly truncated?: boolean;
@@ -433,29 +447,30 @@ export const readReduxGetStateInput = (
 ): ReduxGetStateInput => {
   if (raw === null || typeof raw !== 'object') return {};
   const r = raw as Record<string, unknown>;
+  const out: { path?: string; framework?: string } = {};
   const path = r['path'];
-  if (typeof path === 'string' && path.length > 0) {
-    return Object.freeze({ path });
+  if (typeof path === 'string' && path.length > 0) out.path = path;
+  const framework = r['framework'];
+  if (typeof framework === 'string' && framework.length > 0) {
+    out.framework = framework;
   }
-  return Object.freeze({});
+  return Object.freeze(out);
 };
 
 export const reduxGetStateHandler = (
   env: PageBridgeRequestEnvelope,
 ): ReduxGetStateSuccess | ReduxGetStateErrorPayload => {
   const input = readReduxGetStateInput(env.payload);
-  const store = detectReduxStore(
-    window as unknown as { __pwaDebug_redux?: unknown },
-    reduxShim !== null ? reduxShim.getStores : undefined,
-  );
-  if (store === null) {
+  const detected = resolveStore(input.framework);
+  if (detected === null) {
     return Object.freeze({
       error: Object.freeze({
         message:
-          'redux_get_state: no Redux store detected. Fixture/page must expose the store on window.__pwaDebug_redux (T1 path); production auto-detection via the __REDUX_DEVTOOLS_EXTENSION__ shim ships in M11 T2.',
+          'redux_get_state: no store detected. Fixture/page must expose the store on window.__pwaDebug_redux (T1 path), or production auto-detection via the __REDUX_DEVTOOLS_EXTENSION__ shim must capture it.',
       }),
     });
   }
+  const store = detected.handle;
   const state = store.getState();
   const picked = getValueAtPath(state, input.path);
   if (!picked.ok) {
@@ -467,11 +482,13 @@ export const reduxGetStateHandler = (
   }
   const serialized = serializeStoreValue(picked.value);
   const out: {
+    framework: string;
     state: unknown;
     path?: string;
     truncated?: boolean;
     scopeUrl: string;
   } = {
+    framework: detected.framework,
     state: serialized.value,
     scopeUrl: window.location.href,
   };
@@ -483,10 +500,12 @@ export const reduxGetStateHandler = (
 export type ReduxSubscribeInput = {
   readonly action: 'start' | 'stop';
   readonly path?: string;
+  readonly framework?: string;
 };
 
 export type ReduxSubscribeSuccess = {
   readonly active: boolean;
+  readonly framework?: string;
   readonly path?: string;
   readonly scopeUrl: string;
 };
@@ -506,11 +525,19 @@ export const readReduxSubscribeInput = (
   if (path !== undefined && (typeof path !== 'string' || path.length === 0)) {
     return null;
   }
-  return Object.freeze(
-    path !== undefined
-      ? ({ action, path } as ReduxSubscribeInput)
-      : ({ action } as ReduxSubscribeInput),
-  );
+  const framework = r['framework'];
+  if (
+    framework !== undefined &&
+    (typeof framework !== 'string' || framework.length === 0)
+  ) {
+    return null;
+  }
+  const out: { action: 'start' | 'stop'; path?: string; framework?: string } = {
+    action,
+  };
+  if (path !== undefined) out.path = path as string;
+  if (framework !== undefined) out.framework = framework as string;
+  return Object.freeze(out);
 };
 
 // Module-singleton: tracks the active store_change subscription's disposer.
@@ -545,18 +572,16 @@ export const reduxSubscribeHandler = (
       scopeUrl: window.location.href,
     });
   }
-  const store = detectReduxStore(
-    window as unknown as { __pwaDebug_redux?: unknown },
-    reduxShim !== null ? reduxShim.getStores : undefined,
-  );
-  if (store === null) {
+  const detected = resolveStore(input.framework);
+  if (detected === null) {
     return Object.freeze({
       error: Object.freeze({
         message:
-          'redux_subscribe: no Redux store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the production __REDUX_DEVTOOLS_EXTENSION__ shim must be in place.',
+          'redux_subscribe: no store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the production __REDUX_DEVTOOLS_EXTENSION__ shim must be in place.',
       }),
     });
   }
+  const store = detected.handle;
   // Validate path eagerly so misuse fails at start, not silently later.
   if (input.path !== undefined) {
     const probe = getValueAtPath(store.getState(), input.path);
@@ -577,13 +602,15 @@ export const reduxSubscribeHandler = (
     store,
     emit: (e: StoreChangeCapturedEvent) => emitToPage(e),
     frame: computeFrameMeta(),
+    framework: detected.framework,
     ...(input.path !== undefined ? { path: input.path } : {}),
   });
   const out: {
     active: boolean;
+    framework: string;
     path?: string;
     scopeUrl: string;
-  } = { active: true, scopeUrl: window.location.href };
+  } = { active: true, framework: detected.framework, scopeUrl: window.location.href };
   if (input.path !== undefined) out.path = input.path;
   return Object.freeze(out);
 };
@@ -595,6 +622,7 @@ export type ReduxDispatchAction = {
 
 export type ReduxDispatchSuccess = {
   readonly dispatched: true;
+  readonly framework: string;
   readonly action: ReduxDispatchAction;
   readonly scopeUrl: string;
 };
@@ -630,15 +658,29 @@ export const reduxDispatchHandler = (
       }),
     });
   }
-  const store = detectReduxStore(
-    window as unknown as { __pwaDebug_redux?: unknown },
-    reduxShim !== null ? reduxShim.getStores : undefined,
-  );
-  if (store === null) {
+  const rawFramework =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)['framework']
+      : undefined;
+  const framework =
+    typeof rawFramework === 'string' && rawFramework.length > 0
+      ? rawFramework
+      : undefined;
+  const detected = resolveStore(framework);
+  if (detected === null) {
     return Object.freeze({
       error: Object.freeze({
         message:
-          'redux_dispatch: no Redux store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the __REDUX_DEVTOOLS_EXTENSION__ shim must capture it.',
+          'redux_dispatch: no store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the __REDUX_DEVTOOLS_EXTENSION__ shim must capture it.',
+      }),
+    });
+  }
+  const store = detected.handle;
+  if (typeof store.dispatch !== 'function') {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'redux_dispatch: detected store does not expose a dispatch() method.',
       }),
     });
   }
@@ -653,6 +695,7 @@ export const reduxDispatchHandler = (
   }
   return Object.freeze({
     dispatched: true as const,
+    framework: detected.framework,
     action,
     scopeUrl: window.location.href,
   });
@@ -848,6 +891,12 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   redux_get_state: (env) => reduxGetStateHandler(env),
   redux_subscribe: (env) => reduxSubscribeHandler(env),
   redux_dispatch: (env) => reduxDispatchHandler(env),
+  // Unified store_* family (Path 4 M2). Same framework-agnostic handlers as
+  // redux_* — the framework arg in the payload selects an adapter, or the
+  // registry auto-detects. redux_* kept as deprecated aliases.
+  store_get_state: (env) => reduxGetStateHandler(env),
+  store_subscribe: (env) => reduxSubscribeHandler(env),
+  store_dispatch: (env) => reduxDispatchHandler(env),
   source_map_resolve: (env) => sourceMapResolveHandler(env),
   session_record: (env) => sessionRecordHandler(env),
 });

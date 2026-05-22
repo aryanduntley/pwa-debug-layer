@@ -120,7 +120,7 @@ export const reduxGetStateHandler = async (
 export const reduxGetStateTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'redux_get_state',
   description:
-    "Return the current Redux store state from the active tab, optionally pruned to a dotted/bracket path. Args: { extension_id?, tab_id?, path?: 'counter.value' | 'todos[0].text' | \"users['by-id']\" }. Returns { extensionId, tabId, state, path?, truncated?, scopeUrl }. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see connections.",
+    "DEPRECATED — prefer store_get_state (unified, framework auto-detect). Return the current Redux store state from the active tab, optionally pruned to a dotted/bracket path. Args: { extension_id?, tab_id?, path?: 'counter.value' | 'todos[0].text' | \"users['by-id']\" }. Returns { extensionId, tabId, state, path?, truncated?, scopeUrl }. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see connections.",
   inputSchema,
   handler: reduxGetStateHandler,
 });

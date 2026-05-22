@@ -17,7 +17,7 @@ import type {
   StoreChangeDiff,
 } from '@pwa-debug/shared';
 import type { Disposer, FrameMeta } from '../../captures/capture_console.js';
-import type { ReduxStoreHandle } from './detect.js';
+import type { StoreHandle } from '../contract.js';
 import { getValueAtPath } from './path_get.js';
 import { serializeStoreValue } from './serialize.js';
 import { safeRandomId } from '../../ids/safe_random_id.js';
@@ -64,11 +64,14 @@ export const computeShallowDiff = (
 };
 
 export type StoreSubscriptionOptions = {
-  readonly store: ReduxStoreHandle;
+  readonly store: StoreHandle;
   readonly emit: (event: StoreChangeCapturedEvent) => void;
   readonly frame: FrameMeta;
   readonly path?: string;
   readonly storeId?: string;
+  /** Detecting adapter's framework tag; stamped onto each emitted event so
+   *  tail entries are self-describing. */
+  readonly framework?: string;
   readonly now?: () => number;
 };
 
@@ -104,6 +107,7 @@ export const installStoreSubscription = (
       storeId,
       diff,
       snapshot: serialized.value,
+      ...(opts.framework !== undefined ? { framework: opts.framework } : {}),
       ...(opts.path !== undefined ? { path: opts.path } : {}),
       ...(serialized.truncated ? { truncated: true } : {}),
     };

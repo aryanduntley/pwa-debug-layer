@@ -122,7 +122,7 @@ export const reduxSubscribeHandler = async (
 export const reduxSubscribeTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'redux_subscribe',
   description:
-    "Start or stop a Redux store subscription on the active tab. While active, each store.subscribe callback whose path-narrowed snapshot differs from the prior snapshot emits a store_change event that flows through the standard capture pipeline; read accumulated events via redux_tail. Args: { extension_id?, tab_id?, action: 'start' | 'stop', path?: 'counter' | 'todos.items' }. Returns { extensionId, tabId, active, path?, scopeUrl }. Single subscription per page-world; calling action='start' again replaces any prior subscription. CALL host_status FIRST to see connections.",
+    "DEPRECATED — prefer store_subscribe (unified, framework auto-detect). Start or stop a Redux store subscription on the active tab. While active, each store.subscribe callback whose path-narrowed snapshot differs from the prior snapshot emits a store_change event that flows through the standard capture pipeline; read accumulated events via redux_tail. Args: { extension_id?, tab_id?, action: 'start' | 'stop', path?: 'counter' | 'todos.items' }. Returns { extensionId, tabId, active, path?, scopeUrl }. Single subscription per page-world; calling action='start' again replaces any prior subscription. CALL host_status FIRST to see connections.",
   inputSchema,
   handler: reduxSubscribeHandler,
 });

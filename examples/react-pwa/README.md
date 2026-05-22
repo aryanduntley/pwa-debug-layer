@@ -47,6 +47,37 @@ Vite serves the app at `http://localhost:5173/` by default.
 | `heading` | (heading text) | implicit on `<h1>`/`<h2>` tags |
 | `button` | (button text) | implicit on `<button>` tags |
 
+## Store fixtures (Path 4 — `store_*` tools)
+
+Two JS stores are mounted and handed off on `window` for the unified
+`store_*` tools (auto-detect framework, or pass `framework`):
+
+| Framework | Handoff (`window.*`) | Hook/store | Component | Value marker |
+|-----------|----------------------|------------|-----------|--------------|
+| `redux`   | `__pwaDebug_redux`   | `store` (`store.ts`) | `<ReduxCounter>` (`aria-label="redux-counter"`) | `data-testid="redux-counter-value"` |
+| `zustand` | `__pwaDebug_zustand` | `useZustandStore` (`zustandStore.ts`) | `<ZustandCounter>` (`aria-label="zustand-counter"`) | `data-testid="zustand-counter-value"` |
+| `jotai`   | `__pwaDebug_jotai` (`{ store, atoms }`) | `jotaiStore` + `countAtom`/`todosAtom` (`jotaiStore.ts`) | `<JotaiCounter>` (`aria-label="jotai-counter"`) | `data-testid="jotai-counter-value"` |
+
+All three stores share a parallel shape — a `count`/`counter.value` number plus
+a todos list — so assertions stay symmetric across frameworks.
+
+**Jotai specifics (M5):** Jotai has no addressable state tree, so the handoff
+is the wrapped `{ store, atoms }` shape (the `createStore()` instance + a
+name→atom registry). The adapter projects it into a **name-keyed snapshot**
+(`state.count`, `state.todos`), and `store_dispatch` sets an atom by name:
+`{ type: 'count', payload: 9 }` → `store.set(countAtom, 9)`.
+
+**Zustand specifics (M3):**
+- `useZustandStore` (from `create()`) also exposes `getState`/`setState`/`subscribe`,
+  so it doubles as the vanilla store the adapter duck-types.
+- In-store actions: `increment`, `decrement`, `addBy(n)`, `reset`, `addTodo(text)`, `removeTodo(id)`.
+- `store_dispatch` against Zustand: `{ type: 'increment' }` invokes the named
+  in-store action; `{ type: 'setState', payload: { count: 9 } }` merges a partial.
+- Detection is via the explicit `__pwaDebug_zustand` handoff only — there is no
+  Zustand devtools auto-capture shim yet (deferred; Zustand devtools use
+  `__REDUX_DEVTOOLS_EXTENSION__.connect()`, not the enhancer pattern our Redux
+  shim intercepts).
+
 ## Constraints baked into the fixture
 
 - **No `React.StrictMode`** — its double-render confuses fiber walking.

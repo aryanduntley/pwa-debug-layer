@@ -516,6 +516,125 @@ const handleReduxDispatch: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// ── Unified store_* family (Path 4 M2) ──────────────────────────────────────
+// Framework-aware variants of the redux_* sanitizers: they additionally pass
+// an optional `framework` selector through to the page-world store handlers
+// (which auto-detect when it is absent) and forward to the store_* page keys.
+// The redux_* handlers above are kept untouched as deprecated aliases.
+
+const extractFramework = (r: Record<string, unknown>): string | undefined =>
+  typeof r['framework'] === 'string' && (r['framework'] as string).length > 0
+    ? (r['framework'] as string)
+    : undefined;
+
+type StoreRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const routedTabId = (r: Record<string, unknown>): number | undefined =>
+  typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+    ? (r['tab_id'] as number)
+    : undefined;
+
+const sanitizeStoreGetStateInput = (raw: unknown): StoreRouted | null => {
+  if (raw === undefined || raw === null) {
+    return { tabId: undefined, payload: {} };
+  }
+  if (typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const payload: Record<string, unknown> = {};
+  if (typeof r['path'] === 'string' && (r['path'] as string).length > 0) {
+    payload['path'] = r['path'];
+  }
+  const framework = extractFramework(r);
+  if (framework !== undefined) payload['framework'] = framework;
+  return { tabId: routedTabId(r), payload };
+};
+
+const handleStoreGetState: RequestHandler = async (env) => {
+  const sanitized = sanitizeStoreGetStateInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'store_get_state: payload must be an object with optional { tab_id?, path?, framework? }',
+    );
+  }
+  const csReq = { tool: 'store_get_state', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+const sanitizeStoreSubscribeInput = (raw: unknown): StoreRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action !== 'start' && action !== 'stop') return null;
+  const payload: Record<string, unknown> = { action };
+  if (typeof r['path'] === 'string' && (r['path'] as string).length > 0) {
+    payload['path'] = r['path'];
+  }
+  const framework = extractFramework(r);
+  if (framework !== undefined) payload['framework'] = framework;
+  return { tabId: routedTabId(r), payload };
+};
+
+const handleStoreSubscribe: RequestHandler = async (env) => {
+  const sanitized = sanitizeStoreSubscribeInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      "store_subscribe: payload must be { action: 'start' | 'stop', tab_id?, path?, framework? }",
+    );
+  }
+  const csReq = { tool: 'store_subscribe', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+const sanitizeStoreDispatchInput = (raw: unknown): StoreRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const action = r['action'];
+  if (action === null || typeof action !== 'object') return null;
+  const a = action as Record<string, unknown>;
+  if (typeof a['type'] !== 'string' || (a['type'] as string).length === 0) {
+    return null;
+  }
+  const payload: Record<string, unknown> = { action };
+  const framework = extractFramework(r);
+  if (framework !== undefined) payload['framework'] = framework;
+  return { tabId: routedTabId(r), payload };
+};
+
+const handleStoreDispatch: RequestHandler = async (env) => {
+  const sanitized = sanitizeStoreDispatchInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'store_dispatch: payload must be { action: { type: non-empty string; payload? }, tab_id?, framework? }',
+    );
+  }
+  const csReq = { tool: 'store_dispatch', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
 type SourceMapResolveRouted = {
   readonly tabId: number | undefined;
   readonly payload: Record<string, unknown>;
@@ -621,6 +740,9 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   redux_get_state: handleReduxGetState,
   redux_subscribe: handleReduxSubscribe,
   redux_dispatch: handleReduxDispatch,
+  store_get_state: handleStoreGetState,
+  store_subscribe: handleStoreSubscribe,
+  store_dispatch: handleStoreDispatch,
   source_map_resolve: handleSourceMapResolve,
   session_record: handleSessionRecord,
 });

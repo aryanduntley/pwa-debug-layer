@@ -208,6 +208,11 @@ export type StoreChangeDiff = {
 export type StoreChangeCapturedEvent = CaptureMeta & {
   readonly kind: 'store_change';
   readonly storeId: string;
+  /** Framework tag of the adapter that detected the store (e.g. 'redux',
+   *  'zustand'). Stamped by the store_subscribe page handler so tail entries
+   *  are self-describing. Optional for backward compatibility with pre-M2
+   *  events that predate multi-store detection. */
+  readonly framework?: string;
   readonly path?: string;
   readonly action?: StoreChangeAction;
   readonly diff: StoreChangeDiff;
