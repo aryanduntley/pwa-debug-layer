@@ -3,16 +3,33 @@
  * Isolated from all decision logic so launch_existing stays pure + testable.
  */
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { xdgConfigPath } from '../host_io/host_io.js';
 import {
+  TEMP_PROFILE_PREFIX,
   createTempCleanupRegistry,
+  filterTempProfileNames,
   type TempCleanupRegistry,
 } from './cleanup.js';
-import { createLaunchRegistry, type LaunchRegistry } from './registry.js';
+import {
+  createLaunchRegistry,
+  parseLaunchRecords,
+  type LaunchRecord,
+  type LaunchRegistry,
+} from './registry.js';
 import {
   defaultExtensionCandidates,
   pickExtensionPath,
@@ -89,7 +106,23 @@ export const defaultLaunchDeps = (): LaunchDeps =>
 
 /** Create a fresh mkdtemp profile dir for a sandbox-temp launch. */
 export const makeTempProfileDir = (): string =>
-  mkdtempSync(join(tmpdir(), 'pwa-debug-'));
+  mkdtempSync(join(tmpdir(), TEMP_PROFILE_PREFIX));
+
+/**
+ * Absolute paths of sandbox-temp profile dirs lingering under os.tmpdir() from
+ * a previous run. Graceful shutdown removes its own, so any survivors imply a
+ * crash/SIGKILL. Warn-only at boot: mkdtemp names don't identify the owning
+ * host process, so auto-removal could delete a concurrently-running host's
+ * active profile. Never throws (a missing/unreadable tmpdir yields []).
+ */
+export const findLingeringTempProfiles = (): readonly string[] => {
+  try {
+    const base = tmpdir();
+    return filterTempProfileNames(readdirSync(base)).map((n) => join(base, n));
+  } catch {
+    return [];
+  }
+};
 
 // Lazy module-singleton temp-cleanup registry: created on first sandbox-temp
 // launch, with process signal handlers installed exactly once.
@@ -129,14 +162,45 @@ export const defaultSandboxDeps = (): LaunchSandboxDeps =>
     registerTempProfile: (dir: string) => getTempRegistry().register(dir),
   });
 
-// Lazy module-singleton launch registry: in-session record of launches for
-// pdl_browser_status. Cross-host persistence is deferred.
+// Lazy module-singleton launch registry, persisted to launches.json beside the
+// host config so pdl_browser_status survives a host restart.
 let launchRegistry: LaunchRegistry | null = null;
+
+/** Path to the persisted launch registry (dedicated file, not state.json). */
+const launchesStatePath = (): string => xdgConfigPath('launches.json');
+
+/** Read persisted launches; any error (missing/corrupt/no-HOME) → []. */
+const loadPersistedLaunches = (): readonly LaunchRecord[] => {
+  try {
+    return parseLaunchRecords(
+      JSON.parse(readFileSync(launchesStatePath(), 'utf-8')),
+    );
+  } catch {
+    return [];
+  }
+};
+
+/** Crash-safe write of the launch registry; best-effort (never throws). */
+const persistLaunches = (records: readonly LaunchRecord[]): void => {
+  try {
+    const path = launchesStatePath();
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp.${process.pid}`;
+    writeFileSync(tmp, `${JSON.stringify(records, null, 2)}\n`);
+    renameSync(tmp, path);
+  } catch {
+    // best-effort; a failed persist must never break the launch path.
+  }
+};
 
 /** The host-process launch registry (created on first use). */
 export const getLaunchRegistry = (): LaunchRegistry => {
   if (!launchRegistry) {
-    launchRegistry = createLaunchRegistry({ now: Date.now });
+    launchRegistry = createLaunchRegistry({
+      now: Date.now,
+      load: loadPersistedLaunches,
+      persist: persistLaunches,
+    });
   }
   return launchRegistry;
 };

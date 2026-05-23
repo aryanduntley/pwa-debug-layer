@@ -13,6 +13,16 @@ import { reactTreeTool } from './react_tree.js';
 import { reactGetStateTool } from './react_get_state.js';
 import { reactFindByTextTool } from './react_find_by_text.js';
 import { reactFindByRoleTool } from './react_find_by_role.js';
+import { vueTreeTool } from './vue_tree.js';
+import { vueGetStateTool } from './vue_get_state.js';
+import { vueFindByTextTool } from './vue_find_by_text.js';
+import { vueFindByRoleTool } from './vue_find_by_role.js';
+import { svelteComponentsTool } from './svelte_components.js';
+import { svelteFindByTextTool } from './svelte_find_by_text.js';
+import { svelteFindByRoleTool } from './svelte_find_by_role.js';
+import { solidDetectTool } from './solid_detect.js';
+import { solidFindByTextTool } from './solid_find_by_text.js';
+import { solidFindByRoleTool } from './solid_find_by_role.js';
 import { reduxGetStateTool } from './redux_get_state.js';
 import { reduxSubscribeTool } from './redux_subscribe.js';
 import { reduxTailTool } from './redux_tail.js';
@@ -54,6 +64,16 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   reactGetStateTool,
   reactFindByTextTool,
   reactFindByRoleTool,
+  vueTreeTool,
+  vueGetStateTool,
+  vueFindByTextTool,
+  vueFindByRoleTool,
+  svelteComponentsTool,
+  svelteFindByTextTool,
+  svelteFindByRoleTool,
+  solidDetectTool,
+  solidFindByTextTool,
+  solidFindByRoleTool,
   storeGetStateTool,
   storeSubscribeTool,
   storeTailTool,

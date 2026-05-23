@@ -23,6 +23,7 @@ const makeDeps = (opts: {
   sandboxDir?: string | null;
   extensionPath?: string | null;
   result?: Partial<LaunchResult>;
+  defaultPort?: number;
 }): LaunchBrowserCoreDeps & {
   launched: LaunchExistingInput[];
   sandboxed: LaunchSandboxInput[];
@@ -40,6 +41,7 @@ const makeDeps = (opts: {
     discover: async () => opts.discovery,
     resolveUserDataDir: () =>
       opts.userDataDir === undefined ? '/h/.config/google-chrome' : opts.userDataDir,
+    defaultPort: () => opts.defaultPort ?? 9222,
     launch: async (input) => {
       launched.push(input);
       return Object.freeze({
@@ -115,6 +117,15 @@ describe('launchBrowserCore', () => {
     expect(deps.launched[0]?.port).toBe(9333);
   });
 
+  it('falls back to the injected default port (launch.defaultPort setting)', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chrome], 'chrome'),
+      defaultPort: 9444,
+    });
+    await launchBrowserCore({}, 'linux', {}, deps);
+    expect(deps.launched[0]?.port).toBe(9444);
+  });
+
   it('errors when the requested browser is not installed', async () => {
     const deps = makeDeps({ discovery: discovery([chrome], 'chrome') });
     const res = await launchBrowserCore({ browser: 'edge' }, 'linux', {}, deps);
@@ -171,6 +182,7 @@ describe('launchBrowserCore', () => {
         throw new Error('boom');
       },
       resolveUserDataDir: () => '/x',
+      defaultPort: () => 9222,
       launch: async () => {
         throw new Error('should not reach');
       },

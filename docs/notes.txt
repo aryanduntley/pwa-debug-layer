@@ -1,6 +1,8 @@
-emaining paths
+Path 4 / M36 — Zustand devtools auto-capture shim
+  (task 85, pending), which is the genuine next open work. The only other open item is the standing blocked task 82
+  (real-machine verification of all the framework tools in a live browser).
 
-  Path: 4 — Store Introspection
+  Path: 4CHECK— Store Introspection
   Status: partial
   What's left: Redux ✅ (M11). Remaining: Zustand, Pinia, Jotai adapters —
     reuse the M11 ReduxStoreHandle-shaped plug-in contract (different
@@ -17,7 +19,7 @@ emaining paths
      by component name/role (builds on the existing
     react_find_by_text/react_find_by_role), dispatch-form-submit.
   ────────────────────────────────────────
-  Path: 5 — Vue / Svelte / Solid Introspection
+  Path: 5CHECK — Vue / Svelte / Solid Introspection
   Status: not built
   What's left: Vue 3 (vue.tree/vue.getState + Pinia), then Svelte/Solid
     where devtools hooks are stable. Largest — multiple  frameworks, 

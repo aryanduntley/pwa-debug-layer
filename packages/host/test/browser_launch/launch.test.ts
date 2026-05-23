@@ -91,6 +91,33 @@ describe('defaultUserDataDir', () => {
   it('returns null on Linux when no config root is resolvable', () => {
     expect(defaultUserDataDir('chrome', 'linux', {})).toBeNull();
   });
+  it('resolves the snap confined profile when execPath is under /snap/', () => {
+    // snap chromium stores its profile at ~/snap/chromium/common/chromium,
+    // NOT ~/.config/chromium — the native path would point at an empty dir.
+    expect(
+      defaultUserDataDir('chromium', 'linux', { HOME: '/h' }, '/snap/bin/chromium'),
+    ).toBe('/h/snap/chromium/common/chromium');
+  });
+  it('ignores XDG_CONFIG_HOME for snap (confinement is HOME-based)', () => {
+    expect(
+      defaultUserDataDir(
+        'chromium',
+        'linux',
+        { HOME: '/h', XDG_CONFIG_HOME: '/c' },
+        '/snap/bin/chromium',
+      ),
+    ).toBe('/h/snap/chromium/common/chromium');
+  });
+  it('degrades to null for a snap exec of a browser not in the snap table', () => {
+    expect(
+      defaultUserDataDir('opera', 'linux', { HOME: '/h' }, '/snap/bin/opera'),
+    ).toBeNull();
+  });
+  it('uses the native path when execPath is a normal /usr/bin install', () => {
+    expect(
+      defaultUserDataDir('chromium', 'linux', { HOME: '/h' }, '/usr/bin/chromium'),
+    ).toBe('/h/.config/chromium');
+  });
   it('resolves best-effort macOS + Windows paths from env', () => {
     expect(defaultUserDataDir('chrome', 'darwin', { HOME: '/Users/u' })).toBe(
       '/Users/u/Library/Application Support/Google/Chrome',

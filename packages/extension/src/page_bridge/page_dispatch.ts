@@ -18,7 +18,43 @@ import {
 } from '../react/serialize_component.js';
 import { findByText, type FindByTextResult } from '../react/find_by_text.js';
 import { findByRole, type FindByRoleResult } from '../react/find_by_role.js';
+import {
+  serializeVueTree,
+  type VueTreeOptions,
+  type VueTreeResult,
+} from '../vue/serialize_tree.js';
+import {
+  serializeVueComponent,
+  type VueComponentInfo,
+  type SerializeVueComponentOptions,
+} from '../vue/serialize_component.js';
+import { findVueRoots } from '../vue/find_vue_roots.js';
+import { resolveStableId as resolveVueStableId } from '../vue/resolve_stable_id.js';
+import { findVueByText, type FindVueByTextResult } from '../vue/find_by_text.js';
+import { findVueByRole, type FindVueByRoleResult } from '../vue/find_by_role.js';
+import { detectSvelte } from '../svelte/detect.js';
+import { discoverSvelteComponents } from '../svelte/discover.js';
+import type { SvelteComponent } from '../svelte/types.js';
+import {
+  findSvelteByText,
+  type FindSvelteByTextResult,
+} from '../svelte/find_by_text.js';
+import {
+  findSvelteByRole,
+  type FindSvelteByRoleResult,
+} from '../svelte/find_by_role.js';
+import { detectSolid } from '../solid/detect.js';
+import type { SolidDetection } from '../solid/types.js';
+import {
+  findSolidByText,
+  type FindSolidByTextResult,
+} from '../solid/find_by_text.js';
+import {
+  findSolidByRole,
+  type FindSolidByRoleResult,
+} from '../solid/find_by_role.js';
 import { detectStore } from '../stores/registry.js';
+import { discoverPiniaStores } from '../stores/pinia/discover.js';
 import { getValueAtPath } from '../stores/redux/path_get.js';
 import { serializeStoreValue } from '../stores/redux/serialize.js';
 import type { ReduxDevtoolsShim } from '../stores/redux/devtools_shim.js';
@@ -54,15 +90,22 @@ export const setReduxShim = (shim: ReduxDevtoolsShim | null): void => {
   reduxShim = shim;
 };
 
-// Resolve the live store via the framework-agnostic registry. The reduxShim
-// getStores path is threaded in via the DetectContext. An optional framework
-// selector restricts detection to a single adapter (from the store_* tools'
-// framework arg); when omitted, adapters are tried in priority order. Returns
-// { framework, handle } | null.
+// Resolve the live store via the framework-agnostic registry. Detection seams
+// are threaded in via the DetectContext: the reduxShim getStores path, and the
+// Pinia auto-discovery walk (config.globalProperties.$pinia) bound to the live
+// document. Pinia is tried after Redux/Zustand, so the DOM walk only runs when
+// neither of those matched. An optional framework selector restricts detection
+// to a single adapter (from the store_* tools' framework arg); when omitted,
+// adapters are tried in priority order. Returns { framework, handle } | null.
 const resolveStore = (framework?: string) =>
   detectStore(
     window,
-    reduxShim !== null ? { reduxShimGetStores: reduxShim.getStores } : undefined,
+    {
+      ...(reduxShim !== null
+        ? { reduxShimGetStores: reduxShim.getStores }
+        : {}),
+      piniaGetStores: () => discoverPiniaStores(document),
+    },
     framework,
   );
 
@@ -421,6 +464,438 @@ export const reactFindByRoleHandler = (
   }
   return findByRole(document, input.role, nameRe, {
     ...(input.rootIndex !== undefined ? { rootIndex: input.rootIndex } : {}),
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+// ── Vue introspection (Path 5 M39) — parity with react_tree/react_get_state ──
+
+export const readVueTreeInput = (raw: unknown): VueTreeOptions => {
+  if (raw === null || typeof raw !== 'object') return Object.freeze({});
+  const r = raw as Record<string, unknown>;
+  const out: { rootIndex?: number; depthLimit?: number; maxNodes?: number } = {};
+  const rootIdx = r['root_index'];
+  if (typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0) {
+    out.rootIndex = rootIdx;
+  }
+  const depth = r['depth_limit'];
+  if (typeof depth === 'number' && Number.isInteger(depth) && depth > 0) {
+    out.depthLimit = depth;
+  }
+  const max = r['max_nodes'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxNodes = max;
+  }
+  return Object.freeze(out);
+};
+
+export const vueTreeHandler = (
+  env: PageBridgeRequestEnvelope,
+): VueTreeResult => serializeVueTree(document, readVueTreeInput(env.payload));
+
+type VueGetStateInternal = {
+  readonly stableId: string;
+  readonly options: SerializeVueComponentOptions;
+};
+
+export const readVueGetStateInput = (
+  raw: unknown,
+): VueGetStateInternal | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const stableId = r['stable_id'];
+  if (typeof stableId !== 'string' || stableId.length === 0) return null;
+  const options: { includeProps?: boolean; includeState?: boolean } = {};
+  if (typeof r['include_props'] === 'boolean') options.includeProps = r['include_props'];
+  if (typeof r['include_state'] === 'boolean') options.includeState = r['include_state'];
+  return Object.freeze({ stableId, options: Object.freeze(options) });
+};
+
+// Reuses the generic { error: { message } } shape (ReactGetStateErrorPayload);
+// tool-level errors are wire-successful by convention. The Vue stable id encodes
+// its own root segment (root{i}/…), so resolveVueStableId needs no root_index.
+export const vueGetStateHandler = (
+  env: PageBridgeRequestEnvelope,
+): VueComponentInfo | ReactGetStateErrorPayload => {
+  const input = readVueGetStateInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'vue_get_state: payload must be { stable_id: non-empty string, include_props?: bool, include_state?: bool }',
+      }),
+    });
+  }
+  const roots = findVueRoots(document);
+  const instance = resolveVueStableId(input.stableId, roots);
+  if (instance === undefined) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `vue_get_state: stable_id "${input.stableId}" did not resolve. Re-call vue_tree to refresh ids (the component tree may have changed).`,
+      }),
+    });
+  }
+  return serializeVueComponent(instance, 0, input.options);
+};
+
+export type VueFindByTextInput = {
+  readonly pattern: string;
+  readonly exact: boolean;
+  readonly rootIndex?: number;
+  readonly maxMatches?: number;
+};
+
+export const readVueFindByTextInput = (
+  raw: unknown,
+): VueFindByTextInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const out: {
+    pattern: string;
+    exact: boolean;
+    rootIndex?: number;
+    maxMatches?: number;
+  } = { pattern, exact: r['exact'] === true };
+  const rootIdx = r['root_index'];
+  if (typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0) {
+    out.rootIndex = rootIdx;
+  }
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxMatches = max;
+  }
+  return Object.freeze(out);
+};
+
+export const vueFindByTextHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindVueByTextResult | ReactGetStateErrorPayload => {
+  const input = readVueFindByTextInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'vue_find_by_text: payload must be { pattern: non-empty string, exact?: bool, root_index?: number, max_matches?: number }',
+      }),
+    });
+  }
+  let regex: RegExp;
+  try {
+    regex = new RegExp(input.pattern);
+  } catch (err) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `vue_find_by_text: invalid regex pattern: ${(err as Error).message}`,
+      }),
+    });
+  }
+  return findVueByText(document, regex, {
+    exact: input.exact,
+    ...(input.rootIndex !== undefined ? { rootIndex: input.rootIndex } : {}),
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+export type VueFindByRoleInput = {
+  readonly role: string;
+  readonly name?: string;
+  readonly rootIndex?: number;
+  readonly maxMatches?: number;
+};
+
+export const readVueFindByRoleInput = (
+  raw: unknown,
+): VueFindByRoleInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const out: {
+    role: string;
+    name?: string;
+    rootIndex?: number;
+    maxMatches?: number;
+  } = { role };
+  if (typeof r['name'] === 'string' && r['name'].length > 0) {
+    out.name = r['name'];
+  }
+  const rootIdx = r['root_index'];
+  if (typeof rootIdx === 'number' && Number.isInteger(rootIdx) && rootIdx >= 0) {
+    out.rootIndex = rootIdx;
+  }
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxMatches = max;
+  }
+  return Object.freeze(out);
+};
+
+export const vueFindByRoleHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindVueByRoleResult | ReactGetStateErrorPayload => {
+  const input = readVueFindByRoleInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'vue_find_by_role: payload must be { role: non-empty string, name?: string, root_index?: number, max_matches?: number }',
+      }),
+    });
+  }
+  let nameRe: RegExp | undefined;
+  if (input.name !== undefined) {
+    try {
+      nameRe = new RegExp(input.name);
+    } catch (err) {
+      return Object.freeze({
+        error: Object.freeze({
+          message: `vue_find_by_role: invalid name regex: ${(err as Error).message}`,
+        }),
+      });
+    }
+  }
+  return findVueByRole(document, input.role, nameRe, {
+    ...(input.rootIndex !== undefined ? { rootIndex: input.rootIndex } : {}),
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+// ── Svelte introspection (Path 5 M42) — partial parity (dev-mode, no state) ──
+
+export type SvelteComponentsResult = {
+  readonly present: boolean;
+  readonly dev: boolean;
+  readonly metaElementCount: number;
+  readonly components: SvelteComponent[];
+  readonly scopeUrl: string;
+};
+
+export const svelteComponentsHandler = (): SvelteComponentsResult => {
+  const detection = detectSvelte(
+    window as unknown as Parameters<typeof detectSvelte>[0],
+    document,
+  );
+  return Object.freeze({
+    present: detection.present,
+    dev: detection.dev,
+    metaElementCount: detection.metaElementCount,
+    components: discoverSvelteComponents(document),
+    scopeUrl: window.location.href,
+  });
+};
+
+export type SvelteFindByTextInput = {
+  readonly pattern: string;
+  readonly exact: boolean;
+  readonly maxMatches?: number;
+};
+
+export const readSvelteFindByTextInput = (
+  raw: unknown,
+): SvelteFindByTextInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const out: { pattern: string; exact: boolean; maxMatches?: number } = {
+    pattern,
+    exact: r['exact'] === true,
+  };
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxMatches = max;
+  }
+  return Object.freeze(out);
+};
+
+export const svelteFindByTextHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindSvelteByTextResult | ReactGetStateErrorPayload => {
+  const input = readSvelteFindByTextInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'svelte_find_by_text: payload must be { pattern: non-empty string, exact?: bool, max_matches?: number }',
+      }),
+    });
+  }
+  let regex: RegExp;
+  try {
+    regex = new RegExp(input.pattern);
+  } catch (err) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `svelte_find_by_text: invalid regex pattern: ${(err as Error).message}`,
+      }),
+    });
+  }
+  return findSvelteByText(document, regex, {
+    exact: input.exact,
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+export type SvelteFindByRoleInput = {
+  readonly role: string;
+  readonly name?: string;
+  readonly maxMatches?: number;
+};
+
+export const readSvelteFindByRoleInput = (
+  raw: unknown,
+): SvelteFindByRoleInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const out: { role: string; name?: string; maxMatches?: number } = { role };
+  if (typeof r['name'] === 'string' && r['name'].length > 0) out.name = r['name'];
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) {
+    out.maxMatches = max;
+  }
+  return Object.freeze(out);
+};
+
+export const svelteFindByRoleHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindSvelteByRoleResult | ReactGetStateErrorPayload => {
+  const input = readSvelteFindByRoleInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'svelte_find_by_role: payload must be { role: non-empty string, name?: string, max_matches?: number }',
+      }),
+    });
+  }
+  let nameRe: RegExp | undefined;
+  if (input.name !== undefined) {
+    try {
+      nameRe = new RegExp(input.name);
+    } catch (err) {
+      return Object.freeze({
+        error: Object.freeze({
+          message: `svelte_find_by_role: invalid name regex: ${(err as Error).message}`,
+        }),
+      });
+    }
+  }
+  return findSvelteByRole(document, input.role, nameRe, {
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+// ── Solid introspection (Path 5 M43) — detection + DOM-level find only ───────
+
+export type SolidDetectResult = SolidDetection & { readonly scopeUrl: string };
+
+export const solidDetectHandler = (): SolidDetectResult => {
+  const detection = detectSolid(
+    window as unknown as Parameters<typeof detectSolid>[0],
+    document,
+  );
+  return Object.freeze({ ...detection, scopeUrl: window.location.href });
+};
+
+export type SolidFindByTextInput = {
+  readonly pattern: string;
+  readonly exact: boolean;
+  readonly maxMatches?: number;
+};
+
+export const readSolidFindByTextInput = (
+  raw: unknown,
+): SolidFindByTextInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const out: { pattern: string; exact: boolean; maxMatches?: number } = {
+    pattern,
+    exact: r['exact'] === true,
+  };
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) out.maxMatches = max;
+  return Object.freeze(out);
+};
+
+export const solidFindByTextHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindSolidByTextResult | ReactGetStateErrorPayload => {
+  const input = readSolidFindByTextInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'solid_find_by_text: payload must be { pattern: non-empty string, exact?: bool, max_matches?: number }',
+      }),
+    });
+  }
+  let regex: RegExp;
+  try {
+    regex = new RegExp(input.pattern);
+  } catch (err) {
+    return Object.freeze({
+      error: Object.freeze({
+        message: `solid_find_by_text: invalid regex pattern: ${(err as Error).message}`,
+      }),
+    });
+  }
+  return findSolidByText(document, regex, {
+    exact: input.exact,
+    ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
+  });
+};
+
+export type SolidFindByRoleInput = {
+  readonly role: string;
+  readonly name?: string;
+  readonly maxMatches?: number;
+};
+
+export const readSolidFindByRoleInput = (
+  raw: unknown,
+): SolidFindByRoleInput | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const out: { role: string; name?: string; maxMatches?: number } = { role };
+  if (typeof r['name'] === 'string' && r['name'].length > 0) out.name = r['name'];
+  const max = r['max_matches'];
+  if (typeof max === 'number' && Number.isInteger(max) && max > 0) out.maxMatches = max;
+  return Object.freeze(out);
+};
+
+export const solidFindByRoleHandler = (
+  env: PageBridgeRequestEnvelope,
+): FindSolidByRoleResult | ReactGetStateErrorPayload => {
+  const input = readSolidFindByRoleInput(env.payload);
+  if (input === null) {
+    return Object.freeze({
+      error: Object.freeze({
+        message:
+          'solid_find_by_role: payload must be { role: non-empty string, name?: string, max_matches?: number }',
+      }),
+    });
+  }
+  let nameRe: RegExp | undefined;
+  if (input.name !== undefined) {
+    try {
+      nameRe = new RegExp(input.name);
+    } catch (err) {
+      return Object.freeze({
+        error: Object.freeze({
+          message: `solid_find_by_role: invalid name regex: ${(err as Error).message}`,
+        }),
+      });
+    }
+  }
+  return findSolidByRole(document, input.role, nameRe, {
     ...(input.maxMatches !== undefined ? { maxMatches: input.maxMatches } : {}),
   });
 };
@@ -888,6 +1363,16 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   react_get_state: (env) => reactGetStateHandler(env),
   react_find_by_text: (env) => reactFindByTextHandler(env),
   react_find_by_role: (env) => reactFindByRoleHandler(env),
+  vue_tree: (env) => vueTreeHandler(env),
+  vue_get_state: (env) => vueGetStateHandler(env),
+  vue_find_by_text: (env) => vueFindByTextHandler(env),
+  vue_find_by_role: (env) => vueFindByRoleHandler(env),
+  svelte_components: () => svelteComponentsHandler(),
+  svelte_find_by_text: (env) => svelteFindByTextHandler(env),
+  svelte_find_by_role: (env) => svelteFindByRoleHandler(env),
+  solid_detect: () => solidDetectHandler(),
+  solid_find_by_text: (env) => solidFindByTextHandler(env),
+  solid_find_by_role: (env) => solidFindByRoleHandler(env),
   redux_get_state: (env) => reduxGetStateHandler(env),
   redux_subscribe: (env) => reduxSubscribeHandler(env),
   redux_dispatch: (env) => reduxDispatchHandler(env),

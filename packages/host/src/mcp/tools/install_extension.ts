@@ -32,7 +32,7 @@ export const installExtensionCore = async (
     return errorResponse(
       'The bundled pwa-debug extension was not found to install.',
       [
-        'Build it first: `pnpm --filter @pwa-debug/extension build`, or set PWA_DEBUG_EXTENSION_PATH to an unpacked extension dir. (Once the extension is published, a Web Store link will be offered here instead.)',
+        'Build it first: `pnpm --filter @pwa-debug/extension build`, or set PWA_DEBUG_EXTENSION_PATH to an unpacked extension dir. (By design pwa-debug ships only with the MCP — there is no Chrome Web Store build; install is always a manual dev-mode "Load unpacked".)',
       ],
     );
   }

@@ -41,8 +41,6 @@ const BROWSERS = [
 
 const MODES = ['existing', 'sandbox-persistent', 'sandbox-temp'] as const;
 
-const DEFAULT_PORT = 9222;
-
 const inputSchema = {
   browser: z.enum(BROWSERS).optional(),
   port: z.number().int().min(1).max(65535).optional(),
@@ -66,7 +64,10 @@ export type LaunchBrowserCoreDeps = {
     browser: BrowserName,
     platform: NodeJS.Platform,
     env: NodeJS.ProcessEnv,
+    execPath?: string,
   ) => string | null;
+  /** Default debug port when args.port is omitted (host launch.defaultPort setting). */
+  readonly defaultPort: () => number;
   readonly launch: (input: LaunchExistingInput) => Promise<LaunchResult>;
   /** Sandbox profile dir (persistent deterministic; temp via mkdtemp). */
   readonly resolveSandboxProfileDir: (
@@ -125,7 +126,7 @@ export const launchBrowserCore = async (
   env: NodeJS.ProcessEnv,
   deps: LaunchBrowserCoreDeps,
 ): Promise<ToolResponse> => {
-  const port = args.port ?? DEFAULT_PORT;
+  const port = args.port ?? deps.defaultPort();
   const mode = args.mode ?? 'existing';
 
   let discovery: BrowserDiscoveryResult;
@@ -183,12 +184,17 @@ export const launchBrowserCore = async (
   }
 
   // mode === 'existing'
-  const userDataDir = deps.resolveUserDataDir(target.browser, platform, env);
+  const userDataDir = deps.resolveUserDataDir(
+    target.browser,
+    platform,
+    env,
+    target.execPath,
+  );
   if (!userDataDir) {
     return errorResponse(
       `Could not resolve the default user-data-dir for ${target.browser} on ${platform}.`,
       [
-        'Linux native profiles are first-class; snap/flatpak + macOS/Windows are deferred. Use sandbox-persistent mode as a workaround.',
+        'Linux native + snap profiles are handled; flatpak + macOS/Windows live verification is pending. Use sandbox-persistent mode as a workaround.',
       ],
     );
   }
@@ -204,12 +210,13 @@ export const launchBrowserCore = async (
 
 export const launchBrowserHandler = async (
   args: z.infer<z.ZodObject<typeof inputSchema>>,
-  _ctx: ToolContext,
+  ctx: ToolContext,
 ): Promise<ToolResponse> =>
   launchBrowserCore(args, process.platform, process.env, {
     discover: (platform, env) =>
       discoverBrowsers(platform, env, defaultDiscoveryDeps()),
     resolveUserDataDir: defaultUserDataDir,
+    defaultPort: () => ctx.settingsStore.getSetting('launch.defaultPort'),
     launch: (input) => launchExisting(input, defaultLaunchDeps()),
     resolveSandboxProfileDir: (browser, mode, env) =>
       mode === 'sandbox-temp'

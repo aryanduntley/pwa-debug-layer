@@ -5,7 +5,10 @@ import {
   persistentProfileDir,
   pickExtensionPath,
 } from '../../src/browser_launch/sandbox_paths.js';
-import { createTempCleanupRegistry } from '../../src/browser_launch/cleanup.js';
+import {
+  createTempCleanupRegistry,
+  filterTempProfileNames,
+} from '../../src/browser_launch/cleanup.js';
 import { launchSandbox } from '../../src/browser_launch/launch_sandbox.js';
 import type { LaunchSandboxDeps } from '../../src/browser_launch/types.js';
 
@@ -90,6 +93,23 @@ describe('createTempCleanupRegistry', () => {
     reg.register('/ok');
     expect(() => reg.cleanupAll()).not.toThrow();
     expect(reg.list()).toEqual([]);
+  });
+});
+
+describe('filterTempProfileNames', () => {
+  it('keeps only pwa-debug- prefixed entries from a tmpdir listing', () => {
+    expect(
+      filterTempProfileNames([
+        'pwa-debug-aB12',
+        'pwa-debug-cD34',
+        'systemd-private-xyz',
+        '.X11-unix',
+        'snap.chromium',
+      ]),
+    ).toEqual(['pwa-debug-aB12', 'pwa-debug-cD34']);
+  });
+  it('returns empty when nothing matches', () => {
+    expect(filterTempProfileNames(['tmp1', 'tmp2'])).toEqual([]);
   });
 });
 

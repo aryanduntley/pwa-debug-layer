@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { createLaunchRegistry } from '../../../src/browser_launch/registry.js';
+import {
+  createLaunchRegistry,
+  parseLaunchRecords,
+} from '../../../src/browser_launch/registry.js';
 import {
   browserStatusCore,
   type BrowserStatusDeps,
@@ -39,6 +42,57 @@ describe('createLaunchRegistry', () => {
     expect(list[0]?.launchedAt).toBe(110);
     expect(list[1]?.launchedAt).toBe(120);
     expect(Object.isFrozen(list)).toBe(true);
+  });
+
+  it('supersedes a prior launch on the same port (keeps the list bounded)', () => {
+    const reg = createLaunchRegistry({ now: () => 1 });
+    reg.record({ browser: 'chrome', profileType: 'existing', port: 9222, pid: 1, browserUrl: null });
+    reg.record({ browser: 'brave', profileType: 'existing', port: 9222, pid: 2, browserUrl: null });
+    const list = reg.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]?.browser).toBe('brave');
+  });
+
+  it('seeds from load() and persists the merged list on each record()', () => {
+    const seeded: LaunchRecord = {
+      browser: 'chromium',
+      profileType: 'sandbox-persistent',
+      port: 9300,
+      pid: 5,
+      browserUrl: 'http://127.0.0.1:9300',
+      launchedAt: 1,
+    };
+    const writes: ReadonlyArray<LaunchRecord>[] = [];
+    const reg = createLaunchRegistry({
+      now: () => 2,
+      load: () => [seeded],
+      persist: (recs) => writes.push(recs),
+    });
+    expect(reg.list().map((r) => r.port)).toEqual([9300]); // restored from prior run
+    reg.record({ browser: 'chrome', profileType: 'existing', port: 9222, pid: 1, browserUrl: null });
+    expect(reg.list().map((r) => r.port)).toEqual([9300, 9222]);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.map((r) => r.port)).toEqual([9300, 9222]);
+  });
+});
+
+describe('parseLaunchRecords', () => {
+  it('returns [] for non-array / corrupt input', () => {
+    expect(parseLaunchRecords(null)).toEqual([]);
+    expect(parseLaunchRecords({ nope: 1 })).toEqual([]);
+    expect(parseLaunchRecords('garbage')).toEqual([]);
+  });
+
+  it('keeps valid records and drops malformed ones', () => {
+    const parsed = parseLaunchRecords([
+      { browser: 'chrome', profileType: 'existing', port: 9222, pid: 1, browserUrl: 'u', launchedAt: 10 },
+      { browser: 'firefox', profileType: 'existing', port: 9222, launchedAt: 10 }, // bad browser
+      { browser: 'brave', profileType: 'existing', launchedAt: 10 }, // missing port
+      { browser: 'edge', profileType: 'sandbox-temp', port: 9444, pid: null, browserUrl: null, userDataDir: '/t/x', launchedAt: 20 },
+    ]);
+    expect(parsed.map((r) => r.browser)).toEqual(['chrome', 'edge']);
+    expect(parsed[1]?.userDataDir).toBe('/t/x');
+    expect(parsed[1]?.pid).toBeNull();
   });
 });
 

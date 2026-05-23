@@ -100,7 +100,7 @@ export const browserStatusHandler = async (
 export const browserStatusTool: ToolDef<Record<string, never>> = Object.freeze({
   name: 'pdl_browser_status',
   description:
-    'Live state of the browsers pdl_launch_browser has started or attached to this host session: each managed launch (browser, profile mode, port, pid, browserUrl) with a fresh debug-port liveness re-probe, plus the pwa-debug extension connections (extensionId + lastSeenAt heartbeat age). Cheap, no side effects. Use it to confirm a launch is still alive, find the browserUrl to hand to chrome-devtools-mcp, or see whether the extension SW is connected. Launch records are in-session only (not persisted across host restart). Follow next_steps[].',
+    'Live state of the browsers pdl_launch_browser has started or attached to: each managed launch (browser, profile mode, port, pid, browserUrl) with a fresh debug-port liveness re-probe, plus the pwa-debug extension connections (extensionId + lastSeenAt heartbeat age). Cheap, no side effects. Use it to confirm a launch is still alive, find the browserUrl to hand to chrome-devtools-mcp, or see whether the extension SW is connected. Launch records persist across host restarts (launches.json); the liveness re-probe distinguishes still-running browsers from ones that have since closed. Follow next_steps[].',
   inputSchema,
   handler: browserStatusHandler,
 });

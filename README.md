@@ -188,7 +188,7 @@ Sandbox modes always give you both tool surfaces because they own their own `--u
 
 ## Browser support matrix
 
-Chromium-family only (Firefox doesn't speak CDP). Linux is first-class; macOS/Windows binary + profile paths are implemented but verification is deferred.
+Chromium-family only (Firefox doesn't speak CDP). Linux is first-class. macOS/Windows binary detection, profile/user-data-dir paths, **and system-default detection** (macOS LaunchServices, Windows `UserChoice` registry) are all implemented with unit coverage, but **live verification on real macOS/Windows machines is still needed — see [Help wanted](#help-wanted-macos--windows-verification).**
 
 | Browser | PATH names probed | Standard Linux binary | Linux profile dir (`existing` mode) |
 |---|---|---|---|
@@ -199,10 +199,32 @@ Chromium-family only (Firefox doesn't speak CDP). Linux is first-class; macOS/Wi
 | Vivaldi | `vivaldi`, `vivaldi-stable` | `/opt/vivaldi/vivaldi` | `~/.config/vivaldi` |
 | Opera | `opera` | `/usr/bin/opera`, `/opt/opera/opera` | `~/.config/opera` |
 
-- **System default:** on Linux the launcher reads `xdg-settings get default-web-browser` and prefers that browser when you don't pass one. (macOS `defaults`/Windows registry detection deferred.)
+- **System default:** the launcher prefers your system-default browser when you don't pass one — Linux via `xdg-settings get default-web-browser`, macOS via LaunchServices (`defaults read … LSHandlers`), Windows via the HKCU `UrlAssociations\http\UserChoice` ProgId. The macOS/Windows paths are implemented + unit-tested but not yet exercised on a real machine.
+- **Default debug port** is `9222` (the `chrome-devtools-mcp` convention); override it without passing `port` each time via the `launch.defaultPort` setting (`settings.set`).
+- **Snap profiles:** when launching a snap-packaged browser (`/snap/bin/…`) in `existing` mode, the launcher now resolves its confined profile (`~/snap/<snap>/common/<cfg>`) instead of `~/.config` — but note snap browsers still can't run the native-messaging host (see snap section), so this only matters if/when that confinement is lifted.
 - **Brave Shields** can block the content script on a site — set Shields **Down** for the site if `session_ping` reports `page_blocks_scripts`.
 - **Snap browsers are unsupported** for the native-messaging host (see below); the launcher can still spawn them, but the host round-trip won't connect. Use a native-package browser.
 - **Flatpak** installs get a manifest written, but confinement may block exec — run `flatpak override --user --filesystem=host <app-id>` and retry.
+
+## Help wanted: macOS / Windows verification
+
+Development happens on Linux, so the macOS and Windows code paths are **written and unit-tested with injected fakes, but never run on a real machine.** If you're on macOS or Windows, trying these and reporting back (open an issue with the output) is the single most useful contribution right now:
+
+**macOS**
+- `pdl_check_setup` / `pdl_install_extension` — does the extension resolve and copy, and do the `chrome://extensions` instructions work?
+- Browser binary detection under `/Applications/*.app/Contents/MacOS/…`.
+- System-default detection: `defaults read com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers` — does the parser pick the right browser? (Paste the raw output if it doesn't.)
+- `pdl_launch_browser` mode `existing` (profile under `~/Library/Application Support/…`) and both sandbox modes.
+
+**Windows**
+- Browser detection under `%PROGRAMFILES%` / `%LOCALAPPDATA%`.
+- System-default detection: `reg query "HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" /v ProgId` — does the ProgId map to the right browser?
+- `pdl_launch_browser` (profile under `%LOCALAPPDATA%\…\User Data`) and the HKCU native-messaging registration.
+
+**Any OS**
+- `pdl_browser_status` after restarting the host — launches now persist to `launches.json`, so previously-launched browsers should still be listed (with a fresh liveness re-probe). Confirm the list survives a restart and that closed browsers show as not-live.
+
+The launcher never kills your running browser and sandbox modes use throwaway/dedicated profiles, so this is low-risk to try.
 
 ## Troubleshooting
 
@@ -283,7 +305,8 @@ Every tool returns a structured response of the form `{ ok, data, error?, next_s
 - **Settings** ✅ — typed schema store (allowlist/blocklist, per-kind capture filters, per-site read controls, disk-spill).
 - **Browser launcher** ✅ — `pdl_launch_browser` (existing + sandbox-persistent + sandbox-temp), `pdl_check_setup`, `pdl_browser_status`, `pdl_install_extension`, and `chrome-devtools-mcp` coexistence.
 - **Next** — DevTools panel for human observation of an AI session; Vue/Pinia + Svelte/Solid + Zustand/Jotai store adapters; multi-tab routing model.
-- **Deferred** — Firefox port (needs WebDriver BiDi, not CDP), macOS/Windows manual round-trip retest, mobile, Web Store distribution, hosted/team mode.
+- **Deferred** — Firefox port (needs WebDriver BiDi, not CDP); macOS/Windows live verification ([help wanted](#help-wanted-macos--windows-verification)); mobile; hosted/team mode.
+- **Intentionally not pursued** — **Chrome Web Store distribution.** The extension grants broad page access (DOM, framework state, stores, network) and is only meaningful alongside its MCP host. It ships **bundled with the MCP only** and is installed via a manual, dev-mode "Load unpacked" (`pdl_install_extension` hands you the path + steps) — so every user knows exactly what they're running and why. Disabling Chrome Developer mode auto-disables it.
 
 ## Code style
 

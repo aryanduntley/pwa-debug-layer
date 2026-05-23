@@ -49,4 +49,30 @@ describe('detectPiniaStore', () => {
       }),
     ).toBeNull();
   });
+
+  it('falls back to getStores() when no explicit handoff is present', () => {
+    const store = makeStore({ count: 9 });
+    const handle = detectPiniaStore({}, () => [store]);
+    expect(handle).toBe(store);
+  });
+
+  it('skips non-Pinia getStores candidates and returns the first valid one', () => {
+    const store = makeStore({ count: 1 });
+    const handle = detectPiniaStore({}, () => [42, { setState: () => {} }, store]);
+    expect(handle).toBe(store);
+  });
+
+  it('prefers the explicit handoff over getStores', () => {
+    const handoff = makeStore({ via: 'handoff' });
+    const discovered = makeStore({ via: 'getStores' });
+    const handle = detectPiniaStore(
+      { __pwaDebug_pinia: handoff },
+      () => [discovered],
+    );
+    expect(handle).toBe(handoff);
+  });
+
+  it('returns null when neither handoff nor getStores yields a Pinia store', () => {
+    expect(detectPiniaStore({}, () => [1, 'x', null])).toBeNull();
+  });
 });

@@ -33,6 +33,12 @@ export type StoreHandle = {
 export type DetectContext = {
   /** Stores captured at create-time by the Redux devtools shim (M11 T2). */
   readonly reduxShimGetStores?: () => readonly StoreHandle[];
+  /**
+   * Raw Pinia store candidates auto-discovered off the live Vue app's
+   * config.globalProperties.$pinia registry (M37). Returns `unknown[]` to keep
+   * this seam framework-neutral — the pinia adapter validates each candidate.
+   */
+  readonly piniaGetStores?: () => readonly unknown[];
 };
 
 /**

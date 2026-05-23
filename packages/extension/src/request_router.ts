@@ -392,6 +392,426 @@ const handleReactFindByRole: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// ── Vue introspection (Path 5 M39) — parity with react_tree/react_get_state ──
+
+type VueTreeRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeVueTreeInput = (raw: unknown): VueTreeRouted | null => {
+  if (raw === undefined || raw === null) {
+    return { tabId: undefined, payload: {} };
+  }
+  if (typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = {};
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (
+    typeof r['depth_limit'] === 'number' &&
+    Number.isInteger(r['depth_limit']) &&
+    (r['depth_limit'] as number) > 0
+  ) {
+    payload['depth_limit'] = r['depth_limit'];
+  }
+  if (
+    typeof r['max_nodes'] === 'number' &&
+    Number.isInteger(r['max_nodes']) &&
+    (r['max_nodes'] as number) > 0
+  ) {
+    payload['max_nodes'] = r['max_nodes'];
+  }
+  return { tabId, payload };
+};
+
+const handleVueTree: RequestHandler = async (env) => {
+  const sanitized = sanitizeVueTreeInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'vue_tree: payload must be an object with optional { tab_id?, root_index?, depth_limit?, max_nodes? }',
+    );
+  }
+  const csReq = { tool: 'vue_tree', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type VueGetStateRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeVueGetStateInput = (raw: unknown): VueGetStateRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const stableId = r['stable_id'];
+  if (typeof stableId !== 'string' || stableId.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { stable_id: stableId };
+  if (typeof r['include_props'] === 'boolean') payload['include_props'] = r['include_props'];
+  if (typeof r['include_state'] === 'boolean') payload['include_state'] = r['include_state'];
+  return { tabId, payload };
+};
+
+const handleVueGetState: RequestHandler = async (env) => {
+  const sanitized = sanitizeVueGetStateInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'vue_get_state: payload must be { stable_id: non-empty string, tab_id?, include_props?, include_state? }',
+    );
+  }
+  const csReq = { tool: 'vue_get_state', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type VueFindByTextRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeVueFindByTextInput = (
+  raw: unknown,
+): VueFindByTextRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { pattern };
+  if (typeof r['exact'] === 'boolean') payload['exact'] = r['exact'];
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleVueFindByText: RequestHandler = async (env) => {
+  const sanitized = sanitizeVueFindByTextInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'vue_find_by_text: payload must be { pattern: non-empty string, tab_id?, exact?, root_index?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'vue_find_by_text', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type VueFindByRoleRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeVueFindByRoleInput = (
+  raw: unknown,
+): VueFindByRoleRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { role };
+  if (typeof r['name'] === 'string' && r['name'].length > 0) {
+    payload['name'] = r['name'];
+  }
+  if (
+    typeof r['root_index'] === 'number' &&
+    Number.isInteger(r['root_index']) &&
+    (r['root_index'] as number) >= 0
+  ) {
+    payload['root_index'] = r['root_index'];
+  }
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleVueFindByRole: RequestHandler = async (env) => {
+  const sanitized = sanitizeVueFindByRoleInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'vue_find_by_role: payload must be { role: non-empty string, tab_id?, name?, root_index?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'vue_find_by_role', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+// ── Svelte introspection (Path 5 M42) ───────────────────────────────────────
+
+const handleSvelteComponents: RequestHandler = async (env) => {
+  const raw = env.payload;
+  const tabId =
+    raw !== null &&
+    typeof raw === 'object' &&
+    typeof (raw as Record<string, unknown>)['tab_id'] === 'number' &&
+    Number.isFinite((raw as Record<string, unknown>)['tab_id'])
+      ? ((raw as Record<string, unknown>)['tab_id'] as number)
+      : undefined;
+  const csReq = { tool: 'svelte_components', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type SvelteFindRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeSvelteFindByTextInput = (raw: unknown): SvelteFindRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { pattern };
+  if (typeof r['exact'] === 'boolean') payload['exact'] = r['exact'];
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleSvelteFindByText: RequestHandler = async (env) => {
+  const sanitized = sanitizeSvelteFindByTextInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'svelte_find_by_text: payload must be { pattern: non-empty string, tab_id?, exact?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'svelte_find_by_text', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+const sanitizeSvelteFindByRoleInput = (raw: unknown): SvelteFindRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { role };
+  if (typeof r['name'] === 'string' && (r['name'] as string).length > 0) {
+    payload['name'] = r['name'];
+  }
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleSvelteFindByRole: RequestHandler = async (env) => {
+  const sanitized = sanitizeSvelteFindByRoleInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'svelte_find_by_role: payload must be { role: non-empty string, tab_id?, name?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'svelte_find_by_role', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+// ── Solid introspection (Path 5 M43) ────────────────────────────────────────
+
+const handleSolidDetect: RequestHandler = async (env) => {
+  const raw = env.payload;
+  const tabId =
+    raw !== null &&
+    typeof raw === 'object' &&
+    typeof (raw as Record<string, unknown>)['tab_id'] === 'number' &&
+    Number.isFinite((raw as Record<string, unknown>)['tab_id'])
+      ? ((raw as Record<string, unknown>)['tab_id'] as number)
+      : undefined;
+  const csReq = { tool: 'solid_detect', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+type SolidFindRouted = {
+  readonly tabId: number | undefined;
+  readonly payload: Record<string, unknown>;
+};
+
+const sanitizeSolidFindByTextInput = (raw: unknown): SolidFindRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pattern = r['pattern'];
+  if (typeof pattern !== 'string' || pattern.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { pattern };
+  if (typeof r['exact'] === 'boolean') payload['exact'] = r['exact'];
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleSolidFindByText: RequestHandler = async (env) => {
+  const sanitized = sanitizeSolidFindByTextInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'solid_find_by_text: payload must be { pattern: non-empty string, tab_id?, exact?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'solid_find_by_text', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+const sanitizeSolidFindByRoleInput = (raw: unknown): SolidFindRouted | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const role = r['role'];
+  if (typeof role !== 'string' || role.length === 0) return null;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = { role };
+  if (typeof r['name'] === 'string' && (r['name'] as string).length > 0) {
+    payload['name'] = r['name'];
+  }
+  if (
+    typeof r['max_matches'] === 'number' &&
+    Number.isInteger(r['max_matches']) &&
+    (r['max_matches'] as number) > 0
+  ) {
+    payload['max_matches'] = r['max_matches'];
+  }
+  return { tabId, payload };
+};
+
+const handleSolidFindByRole: RequestHandler = async (env) => {
+  const sanitized = sanitizeSolidFindByRoleInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(
+      'solid_find_by_role: payload must be { role: non-empty string, tab_id?, name?, max_matches? }',
+    );
+  }
+  const csReq = { tool: 'solid_find_by_role', payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
 type ReduxGetStateRouted = {
   readonly tabId: number | undefined;
   readonly payload: Record<string, unknown>;
@@ -737,6 +1157,16 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   react_get_state: handleReactGetState,
   react_find_by_text: handleReactFindByText,
   react_find_by_role: handleReactFindByRole,
+  vue_tree: handleVueTree,
+  vue_get_state: handleVueGetState,
+  vue_find_by_text: handleVueFindByText,
+  vue_find_by_role: handleVueFindByRole,
+  svelte_components: handleSvelteComponents,
+  svelte_find_by_text: handleSvelteFindByText,
+  svelte_find_by_role: handleSvelteFindByRole,
+  solid_detect: handleSolidDetect,
+  solid_find_by_text: handleSolidFindByText,
+  solid_find_by_role: handleSolidFindByRole,
   redux_get_state: handleReduxGetState,
   redux_subscribe: handleReduxSubscribe,
   redux_dispatch: handleReduxDispatch,

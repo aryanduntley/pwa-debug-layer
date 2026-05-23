@@ -7,10 +7,10 @@
     "pwa-debug-host": "./dist/main.js"
   },
   "main": "./dist/main.js",
-  "files": ["dist"],
+  "files": ["dist", "extension"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "rollup -c && chmod +x dist/main.js",
+    "build": "rollup -c && chmod +x dist/main.js && node ./scripts/bundle-extension.mjs",
     "test": "vitest run"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@pwa-debug/extension": "workspace:*",
     "@rollup/plugin-commonjs": "^28.0.1",
     "@rollup/plugin-node-resolve": "^15.3.0",
     "@rollup/plugin-typescript": "^12.1.1",

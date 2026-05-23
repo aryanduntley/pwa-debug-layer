@@ -66,6 +66,7 @@ export type SettingTypeMap = {
   readonly 'capture.filters': Readonly<Partial<Record<CaptureKind, FilterSpec>>>;
   readonly 'capture.stores.allowDispatch': boolean;
   readonly 'capture.sourceMap.enabled': boolean;
+  readonly 'launch.defaultPort': number;
 };
 
 /** Union of every valid setting key, derived so it can never drift from the value map. */
@@ -145,6 +146,13 @@ const isNonNegInt = (v: unknown): v is number =>
   v >= 0;
 
 const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
+
+/** A valid TCP port for remote debugging: integer in [1, 65535]. */
+const isPort = (v: unknown): v is number =>
+  typeof v === 'number' &&
+  Number.isInteger(v) &&
+  v >= 1 &&
+  v <= 65535;
 
 const isStringArray = (v: unknown): v is readonly string[] =>
   Array.isArray(v) && v.every((x) => typeof x === 'string');
@@ -342,6 +350,15 @@ export const SETTINGS_SCHEMA: SettingsSchema = Object.freeze({
     description:
       'When true (default), source_map_resolve fetches and resolves source maps to translate generated stack frames into original-source coordinates. When false, the tool returns errorResponse with a hint. M13 ships query-time resolution only; capture-time auto-annotation is deferred to M13.5.',
     validate: isBoolean,
+  },
+  'launch.defaultPort': {
+    key: 'launch.defaultPort',
+    type: 'number',
+    default: 9222,
+    scope: 'host',
+    description:
+      'Default remote-debugging port used by pdl_launch_browser when no explicit `port` arg is given. 9222 is the chrome-devtools-mcp convention. Change it if 9222 is already in use on your machine.',
+    validate: isPort,
   },
 }) as SettingsSchema;
 

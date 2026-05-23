@@ -45,9 +45,9 @@ const toHandle = (store: PiniaStore): StoreHandle => ({
 
 const detectPinia = (
   scope: unknown,
-  _ctx?: DetectContext,
+  ctx?: DetectContext,
 ): StoreHandle | null => {
-  const store = detectPiniaStore(scope as PiniaDetectScope);
+  const store = detectPiniaStore(scope as PiniaDetectScope, ctx?.piniaGetStores);
   return store === null ? null : toHandle(store);
 };
 

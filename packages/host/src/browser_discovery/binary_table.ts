@@ -139,15 +139,19 @@ export const WIN_BINARIES: readonly WinBinaryEntry[] = Object.freeze([
 ]);
 
 /**
- * Maps an xdg-settings `.desktop` id (or a recognizable substring of one) to a
- * BrowserName. Order matters: first substring hit wins, so list more-specific
- * patterns before generic ones. Non-Chromium defaults (firefox, etc.) simply
- * have no entry and resolve to null.
+ * A case-insensitive substring → BrowserName mapping row. Used by every
+ * default-browser detector: Linux xdg `.desktop` ids, macOS LaunchServices
+ * bundle ids, and Windows UserChoice ProgIds all reduce to "find the first
+ * pattern contained in this opaque id string". Order matters: first hit wins,
+ * so list more-specific patterns before generic ones.
  */
-export type DesktopMapEntry = {
+export type BrowserPatternEntry = {
   readonly pattern: string;
   readonly name: BrowserName;
 };
+
+/** @deprecated alias kept for clarity at the Linux call site. */
+export type DesktopMapEntry = BrowserPatternEntry;
 
 export const DESKTOP_TO_BROWSER: readonly DesktopMapEntry[] = Object.freeze([
   { pattern: 'google-chrome', name: 'chrome' },
@@ -159,3 +163,37 @@ export const DESKTOP_TO_BROWSER: readonly DesktopMapEntry[] = Object.freeze([
   // it after the branded browsers documents the precedence intent.
   { pattern: 'chromium', name: 'chromium' },
 ]);
+
+/**
+ * macOS: maps a LaunchServices handler bundle id (LSHandlerRoleAll for the
+ * http/https URL scheme) to a BrowserName. Matched as a lowercased substring.
+ * Non-Chromium defaults (org.mozilla.firefox, com.apple.safari) have no entry
+ * and resolve to null.
+ */
+export const MAC_BUNDLE_TO_BROWSER: readonly BrowserPatternEntry[] =
+  Object.freeze([
+    { pattern: 'com.google.chrome', name: 'chrome' },
+    { pattern: 'org.chromium.chromium', name: 'chromium' },
+    { pattern: 'com.microsoft.edgemac', name: 'edge' },
+    { pattern: 'com.brave.browser', name: 'brave' },
+    { pattern: 'com.operasoftware.opera', name: 'opera' },
+    { pattern: 'com.vivaldi.vivaldi', name: 'vivaldi' },
+  ]);
+
+/**
+ * Windows: maps an HKCU UserChoice ProgId (e.g. `ChromeHTML`, `MSEdgeHTM`,
+ * `BraveHTML`, hashed variants like `BraveSSHTML.XXXX`) to a BrowserName,
+ * matched as a lowercased substring. Order matters: `chromium` precedes
+ * `chrome` so `ChromiumHTM` is not swallowed by the `chrome` test, and
+ * `msedge` precedes `edge`. Non-Chromium ProgIds (FirefoxURL) resolve to null.
+ */
+export const WIN_PROGID_TO_BROWSER: readonly BrowserPatternEntry[] =
+  Object.freeze([
+    { pattern: 'chromium', name: 'chromium' },
+    { pattern: 'chrome', name: 'chrome' },
+    { pattern: 'brave', name: 'brave' },
+    { pattern: 'msedge', name: 'edge' },
+    { pattern: 'edge', name: 'edge' },
+    { pattern: 'vivaldi', name: 'vivaldi' },
+    { pattern: 'opera', name: 'opera' },
+  ]);

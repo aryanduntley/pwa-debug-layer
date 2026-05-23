@@ -23,6 +23,8 @@ import {
   createSettingsStore,
   type SettingsStore,
 } from '../host_settings/host_settings.js';
+import { findLingeringTempProfiles } from '../browser_launch/node_deps.js';
+import { tmpdir } from 'node:os';
 
 const snapshotEvent = (store: SettingsStore): IpcEventEnvelope => ({
   type: 'event',
@@ -84,6 +86,17 @@ export const runMcpMode = async (): Promise<void> => {
   const hostVersion = await readHostVersion();
   const settingsStore = createSettingsStore();
   await settingsStore.init();
+
+  // Warn about sandbox-temp profile dirs left by a previous crashed run.
+  // Graceful shutdown cleans its own, so survivors mean a SIGKILL/crash.
+  // Warn-only — mkdtemp names don't identify the owner, so we can't safely
+  // auto-remove (a concurrent host may still be using one).
+  const lingering = findLingeringTempProfiles();
+  if (lingering.length > 0) {
+    stderr.write(
+      `[pwa-debug-host mcp] note: ${lingering.length} lingering sandbox-temp profile dir(s) under ${tmpdir()} (e.g. ${lingering[0]}) from a previous run. Cleaned automatically on graceful shutdown; if no other pwa-debug host is running, remove ${join(tmpdir(), 'pwa-debug-*')} to reclaim space.\n`,
+    );
+  }
 
   // M8: one host-process session id scopes all archive output for this run.
   // Boot-time prune reaps anything from prior sessions before the writer
