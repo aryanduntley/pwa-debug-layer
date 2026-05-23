@@ -32,6 +32,7 @@ import {
 } from './registry.js';
 import {
   defaultExtensionCandidates,
+  isLoadableExtensionDir,
   pickExtensionPath,
   type SandboxEnv,
 } from './sandbox_paths.js';
@@ -144,14 +145,19 @@ const getTempRegistry = (): TempCleanupRegistry => {
   return registry;
 };
 
-/** Absolute host-package root, derived from this module's built location. */
+/**
+ * Absolute host-package root. The host bundles to a single packages/host/dist/
+ * main.js, so this module's dir is packages/host/dist — ONE level below the
+ * package root. (The earlier '..','..' overshot to packages/, making the
+ * candidate `<pkg>/extension` resolve to the extension SOURCE root.)
+ */
 const hostPackageDir = (): string =>
-  resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Resolve the unpacked extension dir to preload, or null when none is found. */
 export const resolveExtensionPath = (env: SandboxEnv): string | null =>
   pickExtensionPath(defaultExtensionCandidates(env, hostPackageDir()), (dir) =>
-    existsSync(join(dir, 'manifest.json')),
+    isLoadableExtensionDir(dir, (p) => existsSync(p)),
   );
 
 /** Production LaunchSandboxDeps: probe + spawn reused, temp dirs auto-tracked. */

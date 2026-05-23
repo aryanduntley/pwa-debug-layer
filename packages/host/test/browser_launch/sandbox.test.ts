@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildSandboxSpawnArgs } from '../../src/browser_launch/spawn_args.js';
 import {
   defaultExtensionCandidates,
+  isLoadableExtensionDir,
   persistentProfileDir,
   pickExtensionPath,
 } from '../../src/browser_launch/sandbox_paths.js';
@@ -61,13 +62,44 @@ describe('extension path resolution', () => {
       '/repo/extension/dist',
     ]);
   });
-  it('pickExtensionPath returns the first dir with a manifest', () => {
+  it('pickExtensionPath returns the first loadable dir', () => {
     expect(
       pickExtensionPath(['/a', '/b', '/c'], (d) => d === '/b' || d === '/c'),
     ).toBe('/b');
   });
-  it('pickExtensionPath returns null when none has a manifest', () => {
+  it('pickExtensionPath returns null when none is loadable', () => {
     expect(pickExtensionPath(['/a', '/b'], () => false)).toBeNull();
+  });
+});
+
+describe('isLoadableExtensionDir', () => {
+  // A built/loadable extension dir: manifest.json AND content-script.js.
+  const built = new Set([
+    '/ext/dist/manifest.json',
+    '/ext/dist/content-script.js',
+  ]);
+  // The extension SOURCE root: manifest.json present, no rollup output. This is
+  // the dir the old picker wrongly chose, breaking the Chromium load.
+  const sourceRoot = new Set(['/ext/src/manifest.json']);
+  const exists = (set: Set<string>) => (p: string) => set.has(p);
+
+  it('accepts a dir with manifest.json AND content-script.js', () => {
+    expect(isLoadableExtensionDir('/ext/dist', exists(built))).toBe(true);
+  });
+  it('rejects the source root (manifest only, no built script)', () => {
+    expect(isLoadableExtensionDir('/ext/src', exists(sourceRoot))).toBe(false);
+  });
+  it('rejects a dir missing the manifest', () => {
+    expect(
+      isLoadableExtensionDir('/ext/x', exists(new Set(['/ext/x/content-script.js']))),
+    ).toBe(false);
+  });
+  it('via pickExtensionPath: skips the manifest-only source root for the built dist', () => {
+    const candidates = ['/ext/src', '/ext/dist'];
+    const all = new Set([...built, ...sourceRoot]);
+    expect(
+      pickExtensionPath(candidates, (d) => isLoadableExtensionDir(d, exists(all))),
+    ).toBe('/ext/dist');
   });
 });
 

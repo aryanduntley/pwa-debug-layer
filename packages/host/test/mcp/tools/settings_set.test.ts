@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { z } from 'zod';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -192,5 +193,33 @@ describe('settings_set — MCP registry contract', () => {
       'key',
       'value',
     ]);
+  });
+});
+
+describe('settings_set — input schema preserves value types (transport hardening)', () => {
+  // Regression: value was z.unknown() → untyped {} JSON schema → MCP clients
+  // shipped a boolean as the string "true", which the per-key validator then
+  // rejected ("expected boolean"). The explicit union must preserve each type.
+  const obj = z.object(settingsSetTool.inputSchema);
+
+  it('preserves a boolean (not coerced to string)', () => {
+    const parsed = obj.parse({
+      key: 'capture.stores.allowDispatch',
+      value: true,
+    });
+    expect(parsed.value).toBe(true);
+    expect(typeof parsed.value).toBe('boolean');
+  });
+
+  it('preserves number, string[], and record values', () => {
+    expect(obj.parse({ key: 'launch.defaultPort', value: 9222 }).value).toBe(
+      9222,
+    );
+    expect(
+      obj.parse({ key: 'sites.allowlist', value: ['a', 'b'] }).value,
+    ).toEqual(['a', 'b']);
+    expect(
+      obj.parse({ key: 'capture.readControls', value: { 'x/*': {} } }).value,
+    ).toEqual({ 'x/*': {} });
   });
 });

@@ -58,6 +58,7 @@ import { discoverPiniaStores } from '../stores/pinia/discover.js';
 import { getValueAtPath } from '../stores/redux/path_get.js';
 import { serializeStoreValue } from '../stores/redux/serialize.js';
 import type { ReduxDevtoolsShim } from '../stores/redux/devtools_shim.js';
+import type { ZustandDevtoolsShim } from '../stores/zustand/devtools_shim.js';
 import { installStoreSubscription } from '../stores/redux/subscribe.js';
 import { discoverSourceMapUrl } from '../sourcemap/discover.js';
 import { resolveLocation, type ResolvedFrame } from '../sourcemap/resolve.js';
@@ -90,6 +91,15 @@ export const setReduxShim = (shim: ReduxDevtoolsShim | null): void => {
   reduxShim = shim;
 };
 
+// Singleton injected by page-world.ts bootstrap so resolveStore can consult the
+// Zustand devtools shim's connect-time captures as a detection path (mirrors
+// reduxShim). Module-level binding, not a global, so tests can reset it.
+let zustandShim: ZustandDevtoolsShim | null = null;
+
+export const setZustandShim = (shim: ZustandDevtoolsShim | null): void => {
+  zustandShim = shim;
+};
+
 // Resolve the live store via the framework-agnostic registry. Detection seams
 // are threaded in via the DetectContext: the reduxShim getStores path, and the
 // Pinia auto-discovery walk (config.globalProperties.$pinia) bound to the live
@@ -103,6 +113,9 @@ const resolveStore = (framework?: string) =>
     {
       ...(reduxShim !== null
         ? { reduxShimGetStores: reduxShim.getStores }
+        : {}),
+      ...(zustandShim !== null
+        ? { zustandShimGetStores: zustandShim.getStores }
         : {}),
       piniaGetStores: () => discoverPiniaStores(document),
     },

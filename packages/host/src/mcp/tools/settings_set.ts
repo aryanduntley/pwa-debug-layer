@@ -17,9 +17,21 @@ const isKnownKey = (k: string): k is SettingKey =>
 const LIST_SCHEMA_HINT =
   'Call settings_list_schema to see the expected type tag (number | boolean | string[] | enum[]) and enumValues for this key.';
 
+// `value` is polymorphic across setting keys (boolean | number | string |
+// string[] | record). z.unknown() rendered to an untyped `{}` JSON schema, which
+// led MCP clients to ship the value with no type — a boolean `true` arrived as
+// the string "true" and the per-key validator rejected it ("expected boolean").
+// An explicit union gives the schema concrete branches so clients send the right
+// JSON type; the precise per-key check still happens in settingsStore.setSetting.
 const inputSchema = {
   key: z.string(),
-  value: z.unknown(),
+  value: z.union([
+    z.boolean(),
+    z.number(),
+    z.string(),
+    z.array(z.string()),
+    z.record(z.unknown()),
+  ]),
 };
 
 export const settingsSetHandler = async (

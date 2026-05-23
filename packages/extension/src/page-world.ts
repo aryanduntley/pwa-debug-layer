@@ -19,7 +19,11 @@ import {
   installReduxDevtoolsShim,
   type ReduxDevtoolsShim,
 } from './stores/redux/devtools_shim.js';
-import { setReduxShim } from './page_bridge/page_dispatch.js';
+import {
+  installZustandDevtoolsShim,
+  type ZustandDevtoolsShim,
+} from './stores/zustand/devtools_shim.js';
+import { setReduxShim, setZustandShim } from './page_bridge/page_dispatch.js';
 
 type FrameworkHookProbe = {
   readonly react: boolean;
@@ -157,6 +161,15 @@ export const bootstrap = (): void => {
     window as unknown as Parameters<typeof installReduxDevtoolsShim>[0],
   );
   setReduxShim(reduxShim);
+
+  // Install the Zustand devtools shim AFTER the Redux shim so it decorates the
+  // Redux stub's __REDUX_DEVTOOLS_EXTENSION__ with `.connect` (rather than the
+  // Redux shim later overwriting a connect-only carrier). Zustand's devtools
+  // middleware would otherwise call `.connect` on the Redux stub and throw.
+  const zustandShim: ZustandDevtoolsShim = installZustandDevtoolsShim(
+    window as unknown as Parameters<typeof installZustandDevtoolsShim>[0],
+  );
+  setZustandShim(zustandShim);
 
   installBridgeListener();
 

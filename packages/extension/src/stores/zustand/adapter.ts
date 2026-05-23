@@ -23,6 +23,7 @@ import type { StoreAdapter, StoreHandle, DetectContext } from '../contract.js';
 import {
   detectZustandStore,
   type ZustandDetectScope,
+  type ZustandShimGetStores,
   type ZustandVanillaStore,
 } from './detect.js';
 
@@ -53,9 +54,13 @@ const toHandle = (store: ZustandVanillaStore): StoreHandle => ({
 
 const detectZustand = (
   scope: unknown,
-  _ctx?: DetectContext,
+  ctx?: DetectContext,
 ): StoreHandle | null => {
-  const store = detectZustandStore(scope as ZustandDetectScope);
+  // ZustandVanillaStore (required setState) is structurally a superset of
+  // StoreHandle; the shim genuinely yields Zustand stores and detectZustandStore
+  // re-validates setState via isZustandLike, so the getter cast is sound.
+  const shim = ctx?.zustandShimGetStores as ZustandShimGetStores | undefined;
+  const store = detectZustandStore(scope as ZustandDetectScope, shim);
   return store === null ? null : toHandle(store);
 };
 

@@ -1,7 +1,9 @@
-Path 4 / M36 — Zustand devtools auto-capture shim
-  (task 85, pending), which is the genuine next open work. The only other open item is the standing blocked task 82
-  (real-machine verification of all the framework tools in a live browser).
-
+  Task 82 stays blocked: the fixed launcher chain needs
+  the host restart to re-verify end-to-end, and
+  macOS/Windows still need real machines. (Note recorded.)
+  - Next milestone on Path 4 is the Pinia auto-discovery
+  work (M37) whenever you want to pick it up.
+  
   Path: 4CHECK— Store Introspection
   Status: partial
   What's left: Redux ✅ (M11). Remaining: Zustand, Pinia, Jotai adapters —

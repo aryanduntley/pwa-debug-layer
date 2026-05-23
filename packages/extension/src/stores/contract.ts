@@ -34,6 +34,14 @@ export type DetectContext = {
   /** Stores captured at create-time by the Redux devtools shim (M11 T2). */
   readonly reduxShimGetStores?: () => readonly StoreHandle[];
   /**
+   * Stores captured at connect-time by the Zustand devtools auto-capture shim
+   * (M36) — installZustandDevtoolsShim intercepts
+   * __REDUX_DEVTOOLS_EXTENSION__.connect, which Zustand's devtools middleware
+   * drives. Typed as StoreHandle[] to keep this contract framework-neutral; the
+   * zustand adapter casts to ZustandShimGetStores and re-validates setState.
+   */
+  readonly zustandShimGetStores?: () => readonly StoreHandle[];
+  /**
    * Raw Pinia store candidates auto-discovered off the live Vue app's
    * config.globalProperties.$pinia registry (M37). Returns `unknown[]` to keep
    * this seam framework-neutral — the pinia adapter validates each candidate.
