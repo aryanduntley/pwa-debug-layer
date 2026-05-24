@@ -31,8 +31,13 @@ export type StoreHandle = {
  * adapter reads only the field it owns; absent fields mean "no shim wired".
  */
 export type DetectContext = {
-  /** Stores captured at create-time by the Redux devtools shim (M11 T2). */
-  readonly reduxShimGetStores?: () => readonly StoreHandle[];
+  /**
+   * react-redux stores discovered PASSIVELY off the React fiber tree (M46; see
+   * stores/redux/discover). Read-only — replaced the removed
+   * __REDUX_DEVTOOLS_EXTENSION__ impersonation shim that broke RTK apps.
+   * Returns [] when none found.
+   */
+  readonly reduxGetStores?: () => readonly StoreHandle[];
   /**
    * Stores captured at connect-time by the Zustand devtools auto-capture shim
    * (M36) — installZustandDevtoolsShim intercepts

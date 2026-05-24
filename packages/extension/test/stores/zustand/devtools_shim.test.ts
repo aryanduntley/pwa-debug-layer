@@ -3,7 +3,6 @@ import {
   installZustandDevtoolsShim,
   type ZustandDevtoolsShim,
 } from '../../../src/stores/zustand/devtools_shim.js';
-import { installReduxDevtoolsShim } from '../../../src/stores/redux/devtools_shim.js';
 import { zustandAdapter } from '../../../src/stores/zustand/adapter.js';
 
 /**
@@ -109,29 +108,20 @@ describe('installZustandDevtoolsShim — capture', () => {
   });
 });
 
-describe('installZustandDevtoolsShim — coexistence with the Redux shim', () => {
-  it('decorates the Redux stub with .connect so Zustand apps do not throw', () => {
+describe('installZustandDevtoolsShim — coexistence with a pre-existing devtools callable', () => {
+  it('decorates an existing bare callable with .connect so Zustand apps do not throw', () => {
     const scope: Record<string, unknown> = {};
-    // Redux shim installs a bare enhancer-factory function with NO .connect.
-    installReduxDevtoolsShim(
-      scope as Parameters<typeof installReduxDevtoolsShim>[0],
-    );
-    const stub = scope['__REDUX_DEVTOOLS_EXTENSION__'] as {
-      connect?: unknown;
-    };
-    expect(typeof stub).toBe('function');
-    expect(stub.connect).toBeUndefined(); // would throw under Zustand
+    // Simulate some pre-existing bare __REDUX_DEVTOOLS_EXTENSION__ callable with
+    // NO .connect (e.g. another tool's stub). Zustand's middleware would call
+    // .connect on it and throw — the shim adds .connect to that same callable.
+    scope['__REDUX_DEVTOOLS_EXTENSION__'] = () => undefined;
 
     const shim = installZustandDevtoolsShim(scope);
     const ext = scope['__REDUX_DEVTOOLS_EXTENSION__'] as {
       connect?: unknown;
     };
-    expect(typeof ext).toBe('function'); // still a Redux enhancer factory
+    expect(typeof ext).toBe('function'); // still the original callable
     expect(typeof ext.connect).toBe('function'); // now Zustand-safe
-    // The Redux compose hook is untouched.
-    expect(typeof scope['__REDUX_DEVTOOLS_EXTENSION_COMPOSE__']).toBe(
-      'function',
-    );
 
     // The previously-breaking Zustand path now runs and captures.
     expect(() => makeDevtoolsStore(scope, counter)).not.toThrow();

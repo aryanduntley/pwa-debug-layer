@@ -16,14 +16,10 @@ import { installLifecycleCapture } from './captures/capture_lifecycle.js';
 import type { CapturedEvent } from './captures/types.js';
 import { computeFrameMeta } from './frame_meta/frame_meta.js';
 import {
-  installReduxDevtoolsShim,
-  type ReduxDevtoolsShim,
-} from './stores/redux/devtools_shim.js';
-import {
   installZustandDevtoolsShim,
   type ZustandDevtoolsShim,
 } from './stores/zustand/devtools_shim.js';
-import { setReduxShim, setZustandShim } from './page_bridge/page_dispatch.js';
+import { setZustandShim } from './page_bridge/page_dispatch.js';
 
 type FrameworkHookProbe = {
   readonly react: boolean;
@@ -154,18 +150,16 @@ const installCaptures = (
 };
 
 export const bootstrap = (): void => {
-  // Install the Redux devtools shim FIRST — must precede any user RTK code
-  // that creates a store on first eval so __REDUX_DEVTOOLS_EXTENSION_COMPOSE__
-  // is in place when composeWithDevTools() is called.
-  const reduxShim: ReduxDevtoolsShim = installReduxDevtoolsShim(
-    window as unknown as Parameters<typeof installReduxDevtoolsShim>[0],
-  );
-  setReduxShim(reduxShim);
-
-  // Install the Zustand devtools shim AFTER the Redux shim so it decorates the
-  // Redux stub's __REDUX_DEVTOOLS_EXTENSION__ with `.connect` (rather than the
-  // Redux shim later overwriting a connect-only carrier). Zustand's devtools
-  // middleware would otherwise call `.connect` on the Redux stub and throw.
+  // Redux store capture is PASSIVE now — read-only react-redux fiber-context
+  // discovery (see stores/redux/discover). We no longer impersonate
+  // __REDUX_DEVTOOLS_EXTENSION_COMPOSE__, which used to break RTK apps by
+  // sitting in their store-creation path.
+  //
+  // Install the Zustand devtools-connect shim: zustand's devtools middleware
+  // calls __REDUX_DEVTOOLS_EXTENSION__.connect(...). With no real devtools and
+  // no Redux stub present, the shim installs a benign callable carrier that
+  // also provides `.connect` (and no-ops if the real Redux DevTools owns the
+  // hook).
   const zustandShim: ZustandDevtoolsShim = installZustandDevtoolsShim(
     window as unknown as Parameters<typeof installZustandDevtoolsShim>[0],
   );

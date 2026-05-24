@@ -4,11 +4,12 @@
  * page by trying each adapter's detect() in priority order, returning the
  * first match.
  *
- * Order matters: Redux is tried first because its devtools shim is the most
- * specific (a Redux-shaped store with a dispatch and a reducer). Zustand's
- * devtools middleware reuses the SAME __REDUX_DEVTOOLS_EXTENSION__ hook, so
- * when the Zustand adapter lands (M3) it must disambiguate rather than rely on
- * ordering alone — see the M3 adapter for that logic.
+ * Order matters: Redux is tried first because its duck-type is the most
+ * specific (a Redux-shaped store requires dispatch). Redux stores are found via
+ * the explicit handoff or PASSIVE react-redux fiber-context discovery (M46) —
+ * no devtools impersonation. Zustand still uses its devtools-connect shim on the
+ * SAME __REDUX_DEVTOOLS_EXTENSION__ hook, so the Zustand adapter disambiguates
+ * by its setState duck-type rather than relying on ordering alone.
  *
  * Pure aside from the module-level adapter list, which is fixed at import time
  * (adapters are registered by static import here, not at runtime), keeping

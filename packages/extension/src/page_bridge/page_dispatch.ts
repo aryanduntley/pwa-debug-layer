@@ -55,9 +55,9 @@ import {
 } from '../solid/find_by_role.js';
 import { detectStore } from '../stores/registry.js';
 import { discoverPiniaStores } from '../stores/pinia/discover.js';
+import { discoverReduxStores } from '../stores/redux/discover.js';
 import { getValueAtPath } from '../stores/redux/path_get.js';
 import { serializeStoreValue } from '../stores/redux/serialize.js';
-import type { ReduxDevtoolsShim } from '../stores/redux/devtools_shim.js';
 import type { ZustandDevtoolsShim } from '../stores/zustand/devtools_shim.js';
 import { installStoreSubscription } from '../stores/redux/subscribe.js';
 import { discoverSourceMapUrl } from '../sourcemap/discover.js';
@@ -82,15 +82,6 @@ import { encodeEvent } from './protocol.js';
 import { computeFrameMeta } from '../frame_meta/frame_meta.js';
 import type { Disposer } from '../captures/capture_console.js';
 
-// Singleton injected by page-world.ts bootstrap so reduxGetStateHandler can
-// consult the shim's captured stores as a second detection path. Kept as a
-// module-level binding here rather than on a global so tests can reset it.
-let reduxShim: ReduxDevtoolsShim | null = null;
-
-export const setReduxShim = (shim: ReduxDevtoolsShim | null): void => {
-  reduxShim = shim;
-};
-
 // Singleton injected by page-world.ts bootstrap so resolveStore can consult the
 // Zustand devtools shim's connect-time captures as a detection path (mirrors
 // reduxShim). Module-level binding, not a global, so tests can reset it.
@@ -101,19 +92,17 @@ export const setZustandShim = (shim: ZustandDevtoolsShim | null): void => {
 };
 
 // Resolve the live store via the framework-agnostic registry. Detection seams
-// are threaded in via the DetectContext: the reduxShim getStores path, and the
-// Pinia auto-discovery walk (config.globalProperties.$pinia) bound to the live
-// document. Pinia is tried after Redux/Zustand, so the DOM walk only runs when
-// neither of those matched. An optional framework selector restricts detection
-// to a single adapter (from the store_* tools' framework arg); when omitted,
+// are threaded in via the DetectContext, all PASSIVE/read-only: Redux and Pinia
+// auto-discovery walk the live document (React fiber-context value for redux,
+// Vue config.globalProperties.$pinia for pinia), and the Zustand devtools-connect
+// shim's captured stores. An optional framework selector restricts detection to
+// a single adapter (from the store_* tools' framework arg); when omitted,
 // adapters are tried in priority order. Returns { framework, handle } | null.
 const resolveStore = (framework?: string) =>
   detectStore(
     window,
     {
-      ...(reduxShim !== null
-        ? { reduxShimGetStores: reduxShim.getStores }
-        : {}),
+      reduxGetStores: () => discoverReduxStores(document),
       ...(zustandShim !== null
         ? { zustandShimGetStores: zustandShim.getStores }
         : {}),

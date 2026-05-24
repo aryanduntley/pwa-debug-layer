@@ -9,8 +9,9 @@
  * filters at the source so an unrelated state slice doesn't trigger emits.
  *
  * The manager is closure-based — install() returns a Disposer; calling the
- * disposer tears down the store.subscribe handler. setReduxShim-style
- * singleton handling lives in the orchestrator (page_dispatch.ts), not here.
+ * disposer tears down the store.subscribe handler. Store resolution (explicit
+ * handoff + passive fiber-context discovery) lives in the orchestrator
+ * (page_dispatch.ts), not here.
  */
 import type {
   StoreChangeCapturedEvent,

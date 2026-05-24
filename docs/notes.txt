@@ -1,4 +1,3 @@
-  M37
   Path: 4CHECK— Store Introspection
   Status: partial
   What's left: Redux ✅ (M11). Remaining: Zustand, Pinia, Jotai adapters —
@@ -37,6 +36,44 @@
     roadmap so it isn't forgotten, but Firefox doesn't speak CDP, so
     chrome-devtools-mcp coexistence wouldn't apply — effectively out of
     scope for now.
+PATH 9!
+Confirmed live — but here's the important catch:
+  chrome-devtools-mcp spawned its own browser (one page,
+  about:blank). It is not attached to the Brave I launched
+  on :9222 (which has the localhost:5173 React fixture). So
+  right now the two MCPs are looking at different browsers:
+
+  - pwa-debug → the Brave sandbox on :9222 (your real PWA /
+  React fixture)
+  - chrome-devtools → a separate isolated instance with a
+  blank page
+
+ What remains (not started — incremental)
+
+  - M46 follow-on: audit the Zustand M36 connect-shim for the same
+  impersonation risk (it still patches
+  __REDUX_DEVTOOLS_EXTENSION__.connect; Zustand isn't context-based
+  so fiber discovery can't replace it).
+  - Task 97 (Jotai) is now unblocked → pending: its store discovery
+  rides on the new collector; remaining is Jotai duck-typing +
+  dev4_get_mounted_atoms enum, live-verified against your
+  temp/react-jotai-main app.
+
+  
+  That's the project's whole coexistence model not being
+  wired up. Per the design (and the next_steps both tools
+  keep printing), chrome-devtools-mcp needs to be registered
+   with --browserUrl pointing at our launched port so it
+  attaches instead of launching its own:
+
+  claude mcp add chrome-devtools --scope user -- npx -y
+  chrome-devtools-mcp@latest --browserUrl
+  http://127.0.0.1:9222
+
+  Once it attaches to :9222, both MCPs operate on the same
+  browser — pwa-debug for framework/store/page-world
+  introspection, chrome-devtools for the CDP-parity surface
+  — which is exactly the architecture locked for Path 9.
 
   Already complete: Capture (Path 2), Replay (Path 8, via M12), Browser
   launcher (Path 9, this session), the Added-Features path (Path 11:

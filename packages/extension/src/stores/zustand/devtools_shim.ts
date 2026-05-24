@@ -1,7 +1,7 @@
 /**
  * Page-world Zustand devtools auto-capture shim (Path 4 M36).
  *
- * Distinct from the Redux `composeWithDevTools` shim (redux/devtools_shim.ts):
+ * Unlike passive Redux capture (read-only react-redux fiber-context discovery):
  * Zustand's `devtools(...)` middleware does NOT use the enhancer-over-createStore
  * pattern. It reads `window.__REDUX_DEVTOOLS_EXTENSION__` and calls
  *   const connection = extensionConnector.connect(options);
@@ -13,15 +13,18 @@
  * framework-agnostic ZustandVanillaStore the adapter already understands.
  *
  * COEXISTENCE — the breakage this shim exists to prevent:
- *   The Redux shim installs `__REDUX_DEVTOOLS_EXTENSION__` as a bare enhancer-
- *   factory function with NO `.connect`. Zustand's middleware would then call
+ *   If a bare `__REDUX_DEVTOOLS_EXTENSION__` callable with NO `.connect` is
+ *   present (e.g. left by another tool), Zustand's middleware would call
  *   `extensionConnector.connect(...)` on a function that lacks it → TypeError,
- *   breaking the host app. So this shim DECORATES that same callable with our
- *   `.connect`, yielding the real-devtools shape (a function that also carries
- *   `.connect`). If a `.connect` we did not install is already present, the real
- *   Redux DevTools extension owns the hook — we never clobber it (Zustand talks
- *   to real devtools directly; the explicit __pwaDebug_zustand handoff remains
- *   our capture path).
+ *   breaking the host app. So this shim DECORATES that callable with our
+ *   `.connect`; when no callable is present it installs its own benign carrier
+ *   (a no-op function that also carries `.connect`). If a `.connect` we did not
+ *   install is already present, the real Redux DevTools extension owns the hook
+ *   — we never clobber it (Zustand talks to real devtools directly; the explicit
+ *   __pwaDebug_zustand handoff remains our capture path).
+ *
+ *   NOTE (M46): this shim still impersonates the devtools hook; a follow-on task
+ *   audits whether Zustand capture can move off impersonation as Redux did.
  *
  * CAPABILITY of a captured handle: getState (latest live state, action functions
  * intact) + subscribe (fires on each send) + named-action dispatch (works,

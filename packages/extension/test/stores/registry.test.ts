@@ -121,17 +121,17 @@ describe('detectStore', () => {
     expect(detected?.handle.getState()).toEqual({ counter: { value: 3 } });
   });
 
-  it('detects a Redux store via the shim getStores DetectContext path', () => {
-    const store = makeStore({ via: 'shim' });
-    const detected = detectStore({}, { reduxShimGetStores: () => [store] });
+  it('detects a Redux store via the fiber-discovery getStores DetectContext path', () => {
+    const store = makeStore({ via: 'discovered' });
+    const detected = detectStore({}, { reduxGetStores: () => [store] });
     expect(detected?.framework).toBe('redux');
-    expect(detected?.handle.getState()).toEqual({ via: 'shim' });
+    expect(detected?.handle.getState()).toEqual({ via: 'discovered' });
   });
 
-  it('explicit handoff wins over the shim path', () => {
+  it('explicit handoff wins over discovered stores', () => {
     const detected = detectStore(
       { __pwaDebug_redux: makeStore({ via: 'explicit' }) },
-      { reduxShimGetStores: () => [makeStore({ via: 'shim' })] },
+      { reduxGetStores: () => [makeStore({ via: 'discovered' })] },
     );
     expect(detected?.handle.getState()).toEqual({ via: 'explicit' });
   });
