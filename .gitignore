@@ -13,6 +13,9 @@ coverage/
 vitest.config.*.timestamp-*
 
 # Environment (never commit secrets)
+# Extension signing key — private RSA key for the pinned manifest "key" (stable
+# extension ID). Only needed to pack a .crx; the public key lives in manifest.json.
+.keys/
 .env
 .env.local
 .env.production

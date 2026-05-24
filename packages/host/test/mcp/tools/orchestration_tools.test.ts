@@ -172,6 +172,9 @@ describe('checkSetupCore', () => {
     resolveExtensionPath: () => '/ext/dist',
     loadState: async () => ({ extensionIds: ['abc'] }),
     listConnections: () => [{ extensionId: 'abc' }],
+    deriveBundledExtensionId: async () => 'abc',
+    listManagedPorts: () => [],
+    fetchLoadedExtensionIds: async () => [],
     ...over,
   });
 
@@ -207,6 +210,59 @@ describe('checkSetupCore', () => {
     const res = await checkSetupCore(allGood({ loadState: async () => ({ extensionIds: [] }) }));
     const data = res.data as { gaps: string[] };
     expect(data.gaps.join(' ')).toContain('No extension ID');
+  });
+
+  it('flags a loaded-but-unregistered extension on a sandbox port and recommends registering it', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        loadState: async () => ({ extensionIds: ['abc'] }),
+        deriveBundledExtensionId: async () => 'wrongid',
+        listManagedPorts: () => [{ port: 9222, sandbox: true }],
+        fetchLoadedExtensionIds: async () => ['wrongid'],
+      }),
+    );
+    const data = res.data as {
+      ok: boolean;
+      gaps: string[];
+      recommendations: string[];
+      detail: { loadedExtensionIds: string[]; bundledExtensionId: string | null };
+    };
+    expect(data.ok).toBe(false);
+    expect(data.gaps.join(' ')).toContain('allowed_origins');
+    expect(data.gaps.join(' ')).toContain('wrongid (port 9222)');
+    expect(data.recommendations.join(' ')).toContain('host_register_extension wrongid');
+    expect(data.detail.loadedExtensionIds).toEqual(['wrongid']);
+    expect(data.detail.bundledExtensionId).toBe('wrongid');
+  });
+
+  it('does NOT flag the user\'s own extensions loaded in an existing profile', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        loadState: async () => ({ extensionIds: ['abc'] }),
+        deriveBundledExtensionId: async () => 'abc',
+        listManagedPorts: () => [{ port: 9222, sandbox: false }],
+        // 'abc' is ours+registered; 'someuserext' is a foreign extension that
+        // legitimately is not whitelisted — must not be flagged in existing mode.
+        fetchLoadedExtensionIds: async () => ['abc', 'someuserext'],
+      }),
+    );
+    const data = res.data as { ok: boolean; gaps: string[] };
+    expect(data.ok).toBe(true);
+    expect(data.gaps).toEqual([]);
+  });
+
+  it('statically flags a bundled id that is not registered when no browser is live to probe', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        loadState: async () => ({ extensionIds: ['stale'] }),
+        deriveBundledExtensionId: async () => 'bundled',
+        listManagedPorts: () => [],
+      }),
+    );
+    const data = res.data as { gaps: string[]; recommendations: string[] };
+    expect(data.gaps.join(' ')).toContain('bundled');
+    expect(data.gaps.join(' ')).toContain('not registered');
+    expect(data.recommendations.join(' ')).toContain('host_register_extension bundled');
   });
 });
 

@@ -222,6 +222,50 @@ export const probeChromeDevtoolsVersion = (): Promise<boolean> =>
     );
   });
 
+const EXTENSION_URL_RE = /^chrome-extension:\/\/([a-p]{32})\//;
+
+/**
+ * GET /json/list on a live debug port and return the distinct extension IDs of
+ * loaded MV3 service-worker targets (an extension surfaces its SW here once
+ * loaded). Lets the host spot an extension that is loaded in a managed browser
+ * but whose ID is not whitelisted in allowed_origins — the failure mode where
+ * the SW loads yet connectNative is rejected. Never rejects: returns [] on any
+ * error, a dead port, or a non-array body.
+ */
+export const fetchLoadedExtensionIds = async (
+  port: number,
+): Promise<readonly string[]> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const body = (await res.json().catch(() => null)) as unknown;
+    if (!Array.isArray(body)) return [];
+    const ids = new Set<string>();
+    for (const target of body) {
+      if (
+        target === null ||
+        typeof target !== 'object' ||
+        (target as { type?: unknown }).type !== 'service_worker'
+      ) {
+        continue;
+      }
+      const url = (target as { url?: unknown }).url;
+      if (typeof url !== 'string') continue;
+      const id = EXTENSION_URL_RE.exec(url)?.[1];
+      if (id) ids.add(id);
+    }
+    return [...ids];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /** Recursively copy the unpacked extension dir to a destination. */
 export const copyDir = (src: string, dest: string): Promise<void> =>
   cp(src, dest, { recursive: true });

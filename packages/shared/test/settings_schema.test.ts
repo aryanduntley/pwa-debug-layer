@@ -21,6 +21,7 @@ const EXPECTED_KEYS: readonly SettingKey[] = [
   'capture.filters',
   'capture.stores.allowDispatch',
   'capture.sourceMap.enabled',
+  'launch.defaultPort',
 ];
 
 describe('SETTINGS_SCHEMA integrity', () => {

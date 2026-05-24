@@ -1,9 +1,4 @@
-  Task 82 stays blocked: the fixed launcher chain needs
-  the host restart to re-verify end-to-end, and
-  macOS/Windows still need real machines. (Note recorded.)
-  - Next milestone on Path 4 is the Pinia auto-discovery
-  work (M37) whenever you want to pick it up.
-  
+  M37
   Path: 4CHECK— Store Introspection
   Status: partial
   What's left: Redux ✅ (M11). Remaining: Zustand, Pinia, Jotai adapters —

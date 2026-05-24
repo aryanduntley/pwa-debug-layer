@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   okResponse,
@@ -12,15 +12,21 @@ import {
 } from '../../native-messaging/browser_paths.js';
 import { defaultStatePath, loadHostState } from '../../state/host_state.js';
 import {
+  fetchLoadedExtensionIds,
+  getLaunchRegistry,
   probeChromeDevtoolsVersion,
   resolveExtensionPath,
 } from '../../browser_launch/node_deps.js';
+import { deriveBundledExtensionId } from '../../extension_identity/extension_id.js';
 
 const inputSchema = {} as Record<string, never>;
 
 const HOST_NAME = 'com.pwa_debug.host';
 
 type StateView = { readonly extensionIds: readonly string[] };
+
+/** A managed browser launch the live extension-id probe can reach. */
+type ManagedPort = { readonly port: number; readonly sandbox: boolean };
 
 /** Injected probes so the gap analysis is testable without npx / fs / state. */
 export type CheckSetupDeps = {
@@ -30,6 +36,12 @@ export type CheckSetupDeps = {
   readonly resolveExtensionPath: () => string | null;
   readonly loadState: () => Promise<StateView>;
   readonly listConnections: () => readonly { readonly extensionId: string }[];
+  /** The id the bundled extension's pinned manifest key resolves to (null if unkeyed/missing). */
+  readonly deriveBundledExtensionId: () => Promise<string | null>;
+  /** Debug ports of browsers this host launched, tagged sandbox vs existing-profile. */
+  readonly listManagedPorts: () => readonly ManagedPort[];
+  /** Extension ids of loaded service-worker targets on a debug port. */
+  readonly fetchLoadedExtensionIds: (port: number) => Promise<readonly string[]>;
 };
 
 const CDP_SNIPPET =
@@ -88,6 +100,60 @@ export const checkSetupCore = async (
     );
   }
 
+  // Extension-id / allow-list consistency. A loaded extension whose id is not
+  // in allowed_origins loads fine but Chrome rejects its connectNative — the
+  // extension appears installed yet never connects. Catch it two ways.
+  const registered = state.extensionIds;
+  const bundledId = await deps.deriveBundledExtensionId();
+
+  // Live: which ids are actually loaded in managed browsers, and where. In a
+  // sandbox profile only our preloaded extension is present, so any unregistered
+  // loaded id is a real problem; an existing profile also carries the user's own
+  // extensions, so there we only flag the one matching our bundle.
+  const probed = await Promise.all(
+    deps.listManagedPorts().map(async (m) => ({
+      port: m.port,
+      sandbox: m.sandbox,
+      ids: await deps.fetchLoadedExtensionIds(m.port),
+    })),
+  );
+  const loadedExtensionIds = [...new Set(probed.flatMap((p) => p.ids))];
+  const mismatches = probed.flatMap((p) =>
+    p.ids
+      .filter((id) => !registered.includes(id))
+      .filter((id) => p.sandbox || id === bundledId)
+      .map((id) => ({ port: p.port, id })),
+  );
+
+  const firstMismatch = mismatches[0];
+  if (firstMismatch) {
+    const where = mismatches.map((m) => `${m.id} (port ${m.port})`).join(', ');
+    gaps.push(
+      `Extension(s) loaded in a managed browser are not whitelisted in the host's allowed_origins: ${where}. Chrome rejects their native-messaging connection, so they load but never connect.`,
+    );
+    const fixId =
+      bundledId !== null && mismatches.some((m) => m.id === bundledId)
+        ? bundledId
+        : firstMismatch.id;
+    recommendations.push(
+      `Run host_register_extension ${fixId} (and host_unregister_extension on any stale id) so allowed_origins matches the loaded extension, then reload it at chrome://extensions.`,
+    );
+  } else if (
+    bundledId !== null &&
+    registered.length > 0 &&
+    !registered.includes(bundledId)
+  ) {
+    // Static fallback: no managed browser was live to probe, but the bundled
+    // extension's pinned id simply is not registered — it will fail to connect
+    // the moment it loads.
+    gaps.push(
+      `The bundled extension's id (${bundledId}) is not registered with the host (registered: ${registered.join(', ')}). When it loads, Chrome will reject its native-messaging connection.`,
+    );
+    recommendations.push(
+      `Run host_register_extension ${bundledId} (and host_unregister_extension on the stale id) before launching.`,
+    );
+  }
+
   const ok = gaps.length === 0;
   const data = {
     ok,
@@ -100,6 +166,8 @@ export const checkSetupCore = async (
       extensionDist,
       registeredExtensionIds: state.extensionIds.length,
       activeConnections: connections.length,
+      bundledExtensionId: bundledId,
+      loadedExtensionIds,
     },
   };
 
@@ -136,12 +204,29 @@ export const checkSetupHandler = async (
       return { extensionIds: state.extensionIds };
     },
     listConnections: () => ctx.ipcServer.listConnections(),
+    deriveBundledExtensionId: async () => {
+      const dir = resolveExtensionPath(process.env);
+      if (!dir) return null;
+      return deriveBundledExtensionId(join(dir, 'manifest.json'), (p) =>
+        readFile(p, 'utf8'),
+      );
+    },
+    listManagedPorts: () =>
+      getLaunchRegistry()
+        .list()
+        .map((l) => ({
+          port: l.port,
+          sandbox:
+            l.profileType === 'sandbox-persistent' ||
+            l.profileType === 'sandbox-temp',
+        })),
+    fetchLoadedExtensionIds,
   });
 
 export const checkSetupTool: ToolDef<Record<string, never>> = Object.freeze({
   name: 'pdl_check_setup',
   description:
-    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp availability (npx probe), native-messaging host manifest installed for a detected browser, bundled extension dist present, an extension ID registered, and live NMH connections. ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, or a pdl_install_extension pointer). Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
+    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp availability (npx probe), native-messaging host manifest installed for a detected browser, bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
   inputSchema,
   handler: checkSetupHandler,
 });

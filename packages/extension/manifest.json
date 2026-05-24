@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "PWA Debug Layer",
   "version": "0.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqORD1iZOB89zzCoA/bffPsUqxFXaeDCtN7U898HfmCvswf8UmSUTnUNkqtP8xNRY5Hl4MairGQHlMg295rRl+Z53XjjfFBGsoYT/l3DfrDcZPF2/hCRecxovaQSjF2O+lR2w/ysIqSpxANiHZNiVkHxNfqbsXOvOcc5RoU9drdMcOPNthogRO6lII7Cwss6tbq07LBW4drSmvGF09Xcj2G5xvlQNyJRjWVJm0RXMVrAo1kr49ELXdmnMTUv2zNijvX4u7ZYFnakoKYXBLNi3XW4df2bT04v32jCmwMhuKWHBzz2nKhVYmN6EycJCXP951zYfTgf2fmtXtkXxR9M2hwIDAQAB",
   "description": "Browser-side debug layer that exposes live PWA state to AI agents via MCP. Stub build (M1).",
   "minimum_chrome_version": "111",
   "background": {
