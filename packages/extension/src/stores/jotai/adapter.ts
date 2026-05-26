@@ -25,6 +25,7 @@ import {
   type JotaiDetectScope,
   type JotaiHandoff,
 } from './detect.js';
+import { buildHandoffFromDevStore } from './dev_discover.js';
 
 type DispatchAction = { readonly type: string; readonly payload?: unknown };
 
@@ -57,12 +58,26 @@ const toHandle = (handoff: JotaiHandoff): StoreHandle => {
   };
 };
 
+// Resolution order: explicit window.__pwaDebug_jotai handoff wins (the app
+// chose exactly which atoms to expose); otherwise fall back to M44 fiber-context
+// discovery — each discovered bare store is turned into a { store, atoms }
+// handoff by enumerating its mounted atoms via the dev API. First store that
+// yields a handoff wins. detect.ts stays DOM-free; the store candidates arrive
+// via the framework-agnostic DetectContext.jotaiGetStores seam.
 const detectJotai = (
   scope: unknown,
-  _ctx?: DetectContext,
+  ctx?: DetectContext,
 ): StoreHandle | null => {
   const handoff = detectJotaiHandoff(scope as JotaiDetectScope);
-  return handoff === null ? null : toHandle(handoff);
+  if (handoff !== null) return toHandle(handoff);
+  const getStores = ctx?.jotaiGetStores;
+  if (getStores !== undefined) {
+    for (const candidate of getStores()) {
+      const built = buildHandoffFromDevStore(candidate);
+      if (built !== null) return toHandle(built);
+    }
+  }
+  return null;
 };
 
 export const jotaiAdapter: StoreAdapter = Object.freeze({

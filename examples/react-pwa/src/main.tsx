@@ -18,9 +18,13 @@ import { jotaiStore, jotaiAtoms } from './jotaiStore.js';
 (window as unknown as { __pwaDebug_zustand?: unknown }).__pwaDebug_zustand =
   useZustandStore;
 
-// Jotai handoff (Path 4 M5). Jotai has no addressable tree, so the adapter
-// expects the wrapped { store, atoms } shape: the createStore() instance plus a
-// name->atom registry. The same store backs the JotaiProvider below.
+// Jotai handoff (Path 4 M5). The createStore() instance backing the JotaiProvider
+// below is auto-DISCOVERED off the React fiber context (M44), but jotai >=2.12
+// removed the store.dev*_get_mounted_atoms API, so atoms can no longer be
+// ENUMERATED from a bare store — the wrapped { store, atoms } handoff remains
+// required to expose the name->atom registry the adapter snapshots. See the M44
+// analysis note. (On jotai 2.0–2.11 enumeration auto-works; this fixture pins
+// 2.20.)
 (window as unknown as { __pwaDebug_jotai?: unknown }).__pwaDebug_jotai = {
   store: jotaiStore,
   atoms: jotaiAtoms,

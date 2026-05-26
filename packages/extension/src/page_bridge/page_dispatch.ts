@@ -56,6 +56,7 @@ import {
 import { detectStore } from '../stores/registry.js';
 import { discoverPiniaStores } from '../stores/pinia/discover.js';
 import { discoverReduxStores } from '../stores/redux/discover.js';
+import { discoverJotaiStores } from '../stores/jotai/discover.js';
 import { getValueAtPath } from '../stores/redux/path_get.js';
 import { serializeStoreValue } from '../stores/redux/serialize.js';
 import type { ZustandDevtoolsShim } from '../stores/zustand/devtools_shim.js';
@@ -92,12 +93,13 @@ export const setZustandShim = (shim: ZustandDevtoolsShim | null): void => {
 };
 
 // Resolve the live store via the framework-agnostic registry. Detection seams
-// are threaded in via the DetectContext, all PASSIVE/read-only: Redux and Pinia
-// auto-discovery walk the live document (React fiber-context value for redux,
-// Vue config.globalProperties.$pinia for pinia), and the Zustand devtools-connect
-// shim's captured stores. An optional framework selector restricts detection to
-// a single adapter (from the store_* tools' framework arg); when omitted,
-// adapters are tried in priority order. Returns { framework, handle } | null.
+// are threaded in via the DetectContext, all PASSIVE/read-only: Redux, Pinia and
+// Jotai auto-discovery walk the live document (React fiber-context value for
+// redux + jotai, Vue config.globalProperties.$pinia for pinia), and the Zustand
+// devtools-connect shim's captured stores. An optional framework selector
+// restricts detection to a single adapter (from the store_* tools' framework
+// arg); when omitted, adapters are tried in priority order. Returns
+// { framework, handle } | null.
 const resolveStore = (framework?: string) =>
   detectStore(
     window,
@@ -107,6 +109,7 @@ const resolveStore = (framework?: string) =>
         ? { zustandShimGetStores: zustandShim.getStores }
         : {}),
       piniaGetStores: () => discoverPiniaStores(document),
+      jotaiGetStores: () => discoverJotaiStores(document),
     },
     framework,
   );
@@ -953,7 +956,7 @@ const noStoreMessage = (framework?: string): string => {
     case 'pinia':
       return `no Pinia store detected. Pinia stores are auto-discovered from the live Vue app; otherwise expose a store via window.__pwaDebug_pinia.`;
     case 'jotai':
-      return `no Jotai store detected. Expose the store + atoms via window.__pwaDebug_jotai = { store, atoms }.`;
+      return `no Jotai store resolved. The store is auto-discovered off the React <Provider store> context, but jotai >=2.12 removed the atom-enumeration API, so atom NAMES cannot be read from a bare store — expose them via window.__pwaDebug_jotai = { store, atoms } (the atom set is visible in your source, e.g. the module that calls atom()). On jotai 2.0–2.11 the atoms auto-enumerate with no handoff.`;
     default:
       return `no store detected. Rely on auto-detection (react-redux fiber discovery, Pinia Vue-app discovery, or Zustand devtools() middleware), or expose the store via a framework handoff (window.__pwaDebug_redux / __pwaDebug_zustand / __pwaDebug_pinia / __pwaDebug_jotai).`;
   }

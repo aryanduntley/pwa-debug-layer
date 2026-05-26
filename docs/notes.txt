@@ -1,3 +1,10 @@
+  flatpak uninstall org.chromium.Chromium
+  flatpak uninstall --delete-data org.chromium.Chromium
+
+  flatpak uninstall --unused   
+
+  note #207
+
   Path: 4CHECK— Store Introspection
   Status: partial
   What's left: Redux ✅ (M11). Remaining: Zustand, Pinia, Jotai adapters —
@@ -36,6 +43,12 @@
     roadmap so it isn't forgotten, but Firefox doesn't speak CDP, so
     chrome-devtools-mcp coexistence wouldn't apply — effectively out of
     scope for now.
+
+Where things stand next: active path is now Path 9 (Public Release
+  Orchestration), active milestone M45 (chrome-devtools-mcp
+  coexistence polish) — but you've lined up Paths 6 & 7 + flatpak for
+   next session.
+
 PATH 9!
 Confirmed live — but here's the important catch:
   chrome-devtools-mcp spawned its own browser (one page,

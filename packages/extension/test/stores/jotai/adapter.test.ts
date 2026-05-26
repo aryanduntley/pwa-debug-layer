@@ -68,4 +68,34 @@ describe('jotaiAdapter', () => {
     const handle = detect(makeHandoff())!;
     expect(() => handle.dispatch?.({ type: 'nope' })).toThrow(/no atom named "nope"/);
   });
+
+  // M44: zero-handoff discovery via the DetectContext.jotaiGetStores seam — a
+  // bare store found on a React context is turned into a { store, atoms } handoff
+  // by enumerating its dev-mounted atoms.
+  const makeDevStore = () => {
+    const { store, values } = makeJotai();
+    const countAtom = { debugLabel: 'count' };
+    values.set(countAtom, 7);
+    return { ...store, dev4_get_mounted_atoms: () => [countAtom][Symbol.iterator]() };
+  };
+
+  it('detects a bare store via jotaiGetStores when no explicit handoff exists', () => {
+    const devStore = makeDevStore();
+    const handle = jotaiAdapter.detect({}, { jotaiGetStores: () => [devStore] })!;
+    expect(handle).not.toBeNull();
+    expect(handle.getState()).toEqual({ count: 7 });
+  });
+
+  it('prefers the explicit handoff over the discovery seam', () => {
+    const scope = makeHandoff();
+    const devStore = makeDevStore();
+    const handle = jotaiAdapter.detect(scope, { jotaiGetStores: () => [devStore] })!;
+    // Explicit handoff exposes count+name; the dev store would expose only count.
+    expect(handle.getState()).toEqual({ count: 0, name: 'a' });
+  });
+
+  it('returns null when the seam yields no dev-introspectable store', () => {
+    const { store } = makeJotai(); // bare store, no dev API
+    expect(jotaiAdapter.detect({}, { jotaiGetStores: () => [store] })).toBeNull();
+  });
 });

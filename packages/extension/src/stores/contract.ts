@@ -52,6 +52,15 @@ export type DetectContext = {
    * this seam framework-neutral — the pinia adapter validates each candidate.
    */
   readonly piniaGetStores?: () => readonly unknown[];
+  /**
+   * Raw Jotai store candidates auto-discovered off the React fiber tree (M44) —
+   * a Jotai <Provider store> exposes its createStore() instance ({ get, set,
+   * sub }) as the context value, found by the same fiber walk as react-redux
+   * (see stores/jotai/discover). Returns `unknown[]` to keep this seam
+   * framework-neutral; the jotai adapter validates each candidate and enumerates
+   * its mounted atoms via the dev store API.
+   */
+  readonly jotaiGetStores?: () => readonly unknown[];
 };
 
 /**
