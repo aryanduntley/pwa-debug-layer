@@ -337,25 +337,68 @@ export const terminateManagedBrowserImpl = async (
   return { closed: false, method: 'failed' };
 };
 
+/** Regex-escape a string for safe use as a pgrep -f pattern. */
+const escapeForPgrep = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * True when any process still has `dir` in its command line — i.e. a browser
+ * instance is still using this profile. Uses pgrep -f over the escaped path.
+ * pgrep exits 1 (→ err) when nothing matches; treat that as not-referenced.
+ */
+const profileDirReferenced = (dir: string): Promise<boolean> =>
+  new Promise((resolveP) => {
+    execFile('pgrep', ['-f', escapeForPgrep(dir)], (err, stdout) => {
+      if (err) return resolveP(false);
+      resolveP(stdout.trim().length > 0);
+    });
+  });
+
+/** Poll until no process references the profile dir (browser fully exited) or attempts run out. */
+const waitForProfileReleased = async (
+  dir: string,
+  attempts: number,
+): Promise<void> => {
+  for (let i = 0; i < attempts; i += 1) {
+    if (!(await profileDirReferenced(dir))) return;
+    await sleep(250);
+  }
+};
+
 /**
  * Remove a sandbox profile dir, GUARDED: only paths under ~/.pwa-debug/profiles
  * or an os.tmpdir() entry with the sandbox-temp prefix are eligible — defense in
  * depth so a bad caller can never rm an arbitrary (e.g. user-profile) dir.
- * Returns true when a removal was attempted.
+ *
+ * A clean CDP Browser.close drops the debug port early, but the browser's child
+ * processes keep flushing the profile to disk for a few seconds after — an
+ * immediate rmSync races those writes and the dir gets repopulated. So we first
+ * wait until no process still references the dir (the browser has fully exited),
+ * then delete and re-check once. Returns true only when the dir is actually gone.
  */
-export const discardProfileDirImpl = (dir: string): boolean => {
+export const discardProfileDirImpl = async (dir: string): Promise<boolean> => {
   const resolved = resolve(dir);
   const underPwaProfiles = resolved.includes(join('.pwa-debug', 'profiles'));
   const isTempProfile =
     dirname(resolved) === resolve(tmpdir()) &&
     basename(resolved).startsWith(TEMP_PROFILE_PREFIX);
   if (!underPwaProfiles && !isTempProfile) return false;
+  await waitForProfileReleased(resolved, 40); // up to ~10s for graceful shutdown
   try {
     rmSync(resolved, { recursive: true, force: true });
   } catch {
     /* best-effort */
   }
-  return true;
+  // A final shutdown write can race the delete; retry once if it reappeared.
+  if (existsSync(resolved)) {
+    await sleep(250);
+    try {
+      rmSync(resolved, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+  return !existsSync(resolved);
 };
 
 /** True when `npx chrome-devtools-mcp --version` succeeds. Never rejects. */

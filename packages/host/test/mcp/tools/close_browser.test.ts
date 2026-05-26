@@ -74,6 +74,22 @@ describe('closeBrowserCore', () => {
     expect(deps.removed).toEqual([9222]);
   });
 
+  it('reports profileDiscarded:false + a next_step when the dir survives the discard', async () => {
+    const deps: CloseBrowserDeps = {
+      listLaunches: () => [rec()],
+      terminate: async () => ({ closed: true, method: 'cdp' }),
+      discardProfile: async () => false, // browser still flushing → dir not gone
+      removeFromRegistry: () => {},
+    };
+    const res = await closeBrowserCore({ port: 9222, session: 'discard' }, deps);
+    expect(res.ok).toBe(true);
+    const data = res.data as {
+      closed: Array<{ profileDiscarded?: boolean }>;
+    };
+    expect(data.closed[0]!.profileDiscarded).toBe(false);
+    expect(res.next_steps.join(' ')).toMatch(/could not be fully removed/);
+  });
+
   it('an attached launch (pid null) is detached — never terminated, profile kept', async () => {
     const deps = makeDeps({ launches: [rec({ pid: null })] });
     const res = await closeBrowserCore({ all: true, session: 'discard' }, deps);

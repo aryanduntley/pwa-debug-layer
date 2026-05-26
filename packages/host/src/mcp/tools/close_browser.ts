@@ -41,7 +41,7 @@ const inputSchema = {
 export type CloseBrowserDeps = {
   readonly listLaunches: () => readonly LaunchRecord[];
   readonly terminate: (record: LaunchRecord) => Promise<TerminateOutcome>;
-  readonly discardProfile: (dir: string) => boolean;
+  readonly discardProfile: (dir: string) => boolean | Promise<boolean>;
   readonly removeFromRegistry: (port: number) => void;
 };
 
@@ -109,7 +109,7 @@ export const closeBrowserCore = async (
     const outcome = await deps.terminate(p.record);
     let profileDiscarded: boolean | undefined;
     if (outcome.closed && p.discardProfile && p.record.userDataDir) {
-      profileDiscarded = deps.discardProfile(p.record.userDataDir);
+      profileDiscarded = await deps.discardProfile(p.record.userDataDir);
     }
     if (outcome.closed) deps.removeFromRegistry(p.record.port);
     closed.push(
@@ -129,6 +129,12 @@ export const closeBrowserCore = async (
   if (failed.length > 0) {
     next_steps.push(
       `Could not confirm shutdown for ${failed.map((f) => `${f.browser}:${f.port}`).join(', ')} (debug port still answering). The browser may be mid-shutdown — re-check with pdl_browser_status.`,
+    );
+  }
+  const notDiscarded = closed.filter((c) => c.profileDiscarded === false);
+  if (notDiscarded.length > 0) {
+    next_steps.push(
+      `Profile dir could not be fully removed for ${notDiscarded.map((c) => `${c.browser}:${c.port}`).join(', ')} (browser may still be flushing it to disk). Re-check the dir; it can be deleted manually if it persists.`,
     );
   }
   const detached = closed.filter((c) => c.action === 'detached');
