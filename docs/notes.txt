@@ -59,6 +59,42 @@ Confirmed live — but here's the important catch:
   dev4_get_mounted_atoms enum, live-verified against your
   temp/react-jotai-main app.
 
+
+
+
+Verified vs. deferred
+
+  - ✅ Typecheck clean; 719 host tests pass (new: 10 close-plan + 5
+  close-tool + sandbox-flag test); flags and pdl_close_browser
+  confirmed in dist/main.js.
+  - ✅ CDP-close mechanism live-verified (port 9222 dropped).
+  - ⏳ Deferred to after your restart (item 602, milestone 47 left
+  in_progress): end-to-end test of the actual tool + confirming a
+  relaunched sandbox shows no restore prompt — both need the host
+  reloaded.
+
+  After you restart, to verify
+
+  pdl_launch_browser   browser=brave mode=sandbox-persistent
+  pdl_close_browser    browser=brave session=discard
+  pdl_browser_status   → should no longer list it; port 9222 down;
+  profile dir gone
+  # then relaunch and confirm NO "restore tabs" prompt
+
+  Cleanup
+
+  Sandbox Brave fully gone (0 processes, port down); your real Brave
+  (19 procs) untouched.
+
+  AIMFP is fully synced: Path 9 → M47 (in_progress) → Task 100 with
+  all code/types/functions/interactions/flows/module tracked; items
+  597–601 complete, 602 (live-verify) pending the restart.
+
+  One nudge for next session: once you've restarted and confirmed,
+  that's the moment to close out M47 — want me to verify it then?
+
+
+  
   
   That's the project's whole coexistence model not being
   wired up. Per the design (and the next_steps both tools

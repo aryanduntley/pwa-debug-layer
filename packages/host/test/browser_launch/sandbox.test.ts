@@ -29,7 +29,15 @@ describe('buildSandboxSpawnArgs', () => {
       '--disable-extensions-except=/ext/dist',
       '--no-first-run',
       '--no-default-browser-check',
+      '--disable-session-crashed-bubble',
+      '--hide-crash-restore-bubble',
     ]);
+  });
+
+  it('suppresses the crash/restore bubble so a re-launched sandbox profile never prompts', () => {
+    const { args } = buildSandboxSpawnArgs('/b', 9222, '/p', '/e');
+    expect(args).toContain('--disable-session-crashed-bubble');
+    expect(args).toContain('--hide-crash-restore-bubble');
   });
 });
 

@@ -39,6 +39,7 @@ import { settingsGetTool } from './settings_get.js';
 import { settingsSetTool } from './settings_set.js';
 import { launchBrowserTool } from './launch_browser.js';
 import { browserStatusTool } from './browser_status.js';
+import { closeBrowserTool } from './close_browser.js';
 import { checkSetupTool } from './check_setup.js';
 import { installExtensionTool } from './install_extension.js';
 
@@ -87,6 +88,7 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   sessionReplayTool,
   launchBrowserTool,
   browserStatusTool,
+  closeBrowserTool,
   checkSetupTool,
   installExtensionTool,
 ] as unknown as readonly ToolDef[]);

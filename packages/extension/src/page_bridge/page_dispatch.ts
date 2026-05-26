@@ -934,6 +934,31 @@ export const readReduxGetStateInput = (
   return Object.freeze(out);
 };
 
+/**
+ * Actionable "no store detected" guidance, tailored per framework so a caller
+ * who passed framework:'zustand' is told the real enablement path rather than a
+ * Redux-centric message. Shared by every store handler's not-found branch. The
+ * host MCP layer prepends the tool name, so these messages carry no prefix.
+ *
+ * There is no Chrome-DevTools / chrome-devtools-mcp fallback for store state —
+ * CDP cannot read app-internal store state, so these tools are the only source.
+ * The guidance points at the actual capture seams (auto-detect or handoff).
+ */
+const noStoreMessage = (framework?: string): string => {
+  switch (framework) {
+    case 'zustand':
+      return `no Zustand store detected. Zero-config capture requires the store to use zustand's devtools() middleware (a Zustand store has no global or React-fiber handle, so there is no passive way to find one otherwise). If it does not use devtools(), expose the vanilla store via window.__pwaDebug_zustand = store for full read/subscribe/dispatch access.`;
+    case 'redux':
+      return `no Redux store detected. react-redux stores are auto-discovered from the React fiber tree; otherwise expose the store via window.__pwaDebug_redux = store.`;
+    case 'pinia':
+      return `no Pinia store detected. Pinia stores are auto-discovered from the live Vue app; otherwise expose a store via window.__pwaDebug_pinia.`;
+    case 'jotai':
+      return `no Jotai store detected. Expose the store + atoms via window.__pwaDebug_jotai = { store, atoms }.`;
+    default:
+      return `no store detected. Rely on auto-detection (react-redux fiber discovery, Pinia Vue-app discovery, or Zustand devtools() middleware), or expose the store via a framework handoff (window.__pwaDebug_redux / __pwaDebug_zustand / __pwaDebug_pinia / __pwaDebug_jotai).`;
+  }
+};
+
 export const reduxGetStateHandler = (
   env: PageBridgeRequestEnvelope,
 ): ReduxGetStateSuccess | ReduxGetStateErrorPayload => {
@@ -942,8 +967,7 @@ export const reduxGetStateHandler = (
   if (detected === null) {
     return Object.freeze({
       error: Object.freeze({
-        message:
-          'redux_get_state: no store detected. Fixture/page must expose the store on window.__pwaDebug_redux (T1 path), or production auto-detection via the __REDUX_DEVTOOLS_EXTENSION__ shim must capture it.',
+        message: noStoreMessage(input.framework),
       }),
     });
   }
@@ -1053,8 +1077,7 @@ export const reduxSubscribeHandler = (
   if (detected === null) {
     return Object.freeze({
       error: Object.freeze({
-        message:
-          'redux_subscribe: no store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the production __REDUX_DEVTOOLS_EXTENSION__ shim must be in place.',
+        message: noStoreMessage(input.framework),
       }),
     });
   }
@@ -1147,8 +1170,7 @@ export const reduxDispatchHandler = (
   if (detected === null) {
     return Object.freeze({
       error: Object.freeze({
-        message:
-          'redux_dispatch: no store detected. Fixture/page must expose the store on window.__pwaDebug_redux, or the __REDUX_DEVTOOLS_EXTENSION__ shim must capture it.',
+        message: noStoreMessage(framework),
       }),
     });
   }

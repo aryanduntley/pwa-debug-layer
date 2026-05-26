@@ -43,6 +43,15 @@ export const buildNewWindowArgs = (execPath: string): SpawnArgs =>
  * Sandbox launch: dedicated profile + the pwa-debug extension preloaded BEFORE
  * any tab opens (so the content-script injection race cannot occur).
  * --disable-extensions-except pins the profile to only our extension.
+ *
+ * --disable-session-crashed-bubble + --hide-crash-restore-bubble suppress the
+ * "Brave/Chrome didn't shut down correctly — restore tabs?" prompt on the NEXT
+ * launch of this dedicated dev profile. The prompt is decided at startup from
+ * the profile's exited_cleanly flag, NOT by how the browser was closed — so
+ * this is the durable fix (works regardless of CDP close / SIGTERM / SIGKILL),
+ * matching how Puppeteer / chrome-devtools-mcp launch their managed browsers.
+ * Applied to sandbox modes only — an 'existing'-mode launch is the user's real
+ * profile, where a genuine restore prompt should be left intact.
  */
 export const buildSandboxSpawnArgs = (
   execPath: string,
@@ -59,5 +68,7 @@ export const buildSandboxSpawnArgs = (
       `--disable-extensions-except=${extensionPath}`,
       '--no-first-run',
       '--no-default-browser-check',
+      '--disable-session-crashed-bubble',
+      '--hide-crash-restore-bubble',
     ]),
   });

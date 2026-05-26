@@ -87,12 +87,14 @@ describe('page_dispatch — unified store_* family (M2)', () => {
     expect(p.state).toEqual({ counter: { value: 1 } });
   });
 
-  it('an explicit unknown framework selector yields a no-store error', async () => {
+  it('a framework selector with no live store yields actionable per-framework guidance', async () => {
     const env = await dispatchPageRequest(
       makeRequest('store_get_state', { framework: 'zustand' }),
     );
     const p = env.payload as { error?: { message: string } };
-    expect(p.error?.message).toMatch(/no store detected/);
+    expect(p.error?.message).toMatch(/no Zustand store detected/);
+    // Corrected "notify": points at the real enablement path, not Chrome DevTools.
+    expect(p.error?.message).toMatch(/__pwaDebug_zustand/);
   });
 
   it('store_dispatch dispatches and reports framework', async () => {

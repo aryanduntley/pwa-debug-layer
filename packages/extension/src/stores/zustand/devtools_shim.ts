@@ -17,14 +17,23 @@
  *   present (e.g. left by another tool), Zustand's middleware would call
  *   `extensionConnector.connect(...)` on a function that lacks it → TypeError,
  *   breaking the host app. So this shim DECORATES that callable with our
- *   `.connect`; when no callable is present it installs its own benign carrier
- *   (a no-op function that also carries `.connect`). If a `.connect` we did not
- *   install is already present, the real Redux DevTools extension owns the hook
- *   — we never clobber it (Zustand talks to real devtools directly; the explicit
- *   __pwaDebug_zustand handoff remains our capture path).
+ *   `.connect`; when no callable is present it installs its own carrier that
+ *   carries `.connect` AND, when invoked as a Redux enhancer factory, returns a
+ *   safe IDENTITY enhancer (createStore => createStore) — so a coexisting
+ *   legacy-pattern Redux app on the same page composes a clean no-op instead of
+ *   crashing on `undefined`. If a `.connect` we did not install is already
+ *   present, the real Redux DevTools extension owns the hook — we never clobber
+ *   it (Zustand talks to real devtools directly; the explicit __pwaDebug_zustand
+ *   handoff remains our capture path).
  *
- *   NOTE (M46): this shim still impersonates the devtools hook; a follow-on task
- *   audits whether Zustand capture can move off impersonation as Redux did.
+ *   M46 AUDIT (resolved 2026-05-24): this carrier is the ONLY zero-config Zustand
+ *   capture seam — a Zustand store lives in a module closure with no global and
+ *   no fiber-reachable handle (the React binding only closes over the store via
+ *   useSyncExternalStore), so it cannot move to passive discovery the way Redux
+ *   did (whose store is a readable react-redux context value). The impersonation
+ *   CRASH risk (note 238 class) was removed not by deletion but by making the
+ *   carrier a spec-correct devtools stub: it returns a valid identity enhancer
+ *   and never sets __REDUX_DEVTOOLS_EXTENSION_COMPOSE__.
  *
  * CAPABILITY of a captured handle: getState (latest live state, action functions
  * intact) + subscribe (fires on each send) + named-action dispatch (works,
@@ -151,9 +160,17 @@ export const installZustandDevtoolsShim = (
     // factory (Redux) and a connect provider (Zustand). THE breakage fix.
     ext.connect = connect;
   } else {
-    // No callable present (Redux shim absent/skipped). Install a benign callable
-    // carrier that also provides .connect, matching real devtools' shape.
-    const carrier = (() => undefined) as DevtoolsExtension;
+    // No devtools present. Install a callable carrier that provides `.connect`
+    // for Zustand. zustand@5's middleware only needs this global to be
+    // truthy-with-`.connect` — it never invokes it (verified middleware.js:66) —
+    // so the callable half exists purely for Redux coexistence: a legacy-pattern
+    // app does `compose(applyMiddleware(...), __REDUX_DEVTOOLS_EXTENSION__())`.
+    // Returning a valid IDENTITY enhancer (createStore => createStore) instead of
+    // `undefined` makes that compose a clean no-op rather than crashing the host
+    // app. We deliberately never set __REDUX_DEVTOOLS_EXTENSION_COMPOSE__ (the
+    // wrong-contract global that crashed RTK in the deleted Redux shim, note 238).
+    const carrier = (() => (createStore: unknown) =>
+      createStore) as DevtoolsExtension;
     carrier.connect = connect;
     scope.__REDUX_DEVTOOLS_EXTENSION__ = carrier;
   }

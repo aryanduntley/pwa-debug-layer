@@ -26,6 +26,8 @@ export type LaunchRecord = {
 export type LaunchRegistry = {
   readonly record: (rec: Omit<LaunchRecord, 'launchedAt'>) => void;
   readonly list: () => readonly LaunchRecord[];
+  /** Drop the launch on `port` (after pdl_close_browser stops/detaches it). */
+  readonly remove: (port: number) => void;
 };
 
 const BROWSERS: readonly BrowserName[] = [
@@ -52,6 +54,13 @@ export const mergeLaunch = (
   rec: LaunchRecord,
 ): readonly LaunchRecord[] =>
   Object.freeze([...records.filter((r) => r.port !== rec.port), rec]);
+
+/** Drop the record for `port` (port is the unique key — see mergeLaunch). */
+export const removeLaunch = (
+  records: readonly LaunchRecord[],
+  port: number,
+): readonly LaunchRecord[] =>
+  Object.freeze(records.filter((r) => r.port !== port));
 
 /**
  * Validate persisted JSON back into LaunchRecords, dropping malformed entries
@@ -102,5 +111,9 @@ export const createLaunchRegistry = (deps: {
       deps.persist?.(records);
     },
     list: () => Object.freeze([...records]),
+    remove: (port) => {
+      records = removeLaunch(records, port);
+      deps.persist?.(records);
+    },
   });
 };

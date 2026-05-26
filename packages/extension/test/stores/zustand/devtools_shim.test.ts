@@ -149,7 +149,7 @@ describe('installZustandDevtoolsShim — coexistence with a pre-existing devtool
     expect(shim.getStores()).toEqual([]);
   });
 
-  it('installs a benign callable carrier when no extension is present', () => {
+  it('installs a callable carrier returning a safe identity enhancer when no extension is present', () => {
     const scope: Record<string, unknown> = {};
     installZustandDevtoolsShim(scope);
     const ext = scope['__REDUX_DEVTOOLS_EXTENSION__'] as (() => unknown) & {
@@ -157,7 +157,42 @@ describe('installZustandDevtoolsShim — coexistence with a pre-existing devtool
     };
     expect(typeof ext).toBe('function');
     expect(typeof ext.connect).toBe('function');
-    expect(ext()).toBeUndefined(); // carrier is a harmless no-op when called
+    // Called as a Redux enhancer factory, the carrier returns an IDENTITY
+    // enhancer (createStore => createStore), never undefined — so a coexisting
+    // Redux app composes a clean no-op instead of crashing.
+    const enhancer = ext() as (createStore: unknown) => unknown;
+    expect(typeof enhancer).toBe('function');
+    const createStoreStub = (): string => 'store';
+    expect(enhancer(createStoreStub)).toBe(createStoreStub);
+  });
+
+  it('coexists with a legacy-pattern Redux app on the same page (no crash)', () => {
+    const scope: Record<string, unknown> = {};
+    installZustandDevtoolsShim(scope);
+    const ext = scope['__REDUX_DEVTOOLS_EXTENSION__'] as () => unknown;
+
+    // Emulate redux `compose(...enhancers)` (right-to-left). The old
+    // `() => undefined` carrier injected `undefined` here -> 'undefined is not
+    // a function'. The identity enhancer composes cleanly.
+    const compose = (...fns: Array<(a: unknown) => unknown>) =>
+      fns.reduce((a, b) => (x: unknown) => a(b(x)));
+    const applyMiddlewareLike = (createStore: unknown): unknown => createStore;
+    const createStoreStub = (): string => 'store';
+
+    expect(() => {
+      const composed = compose(
+        applyMiddlewareLike,
+        ext() as (a: unknown) => unknown,
+      );
+      const enhanced = composed(createStoreStub) as () => string;
+      expect(enhanced()).toBe('store');
+    }).not.toThrow();
+  });
+
+  it('never sets __REDUX_DEVTOOLS_EXTENSION_COMPOSE__ (the note-238 RTK crash global)', () => {
+    const scope: Record<string, unknown> = {};
+    installZustandDevtoolsShim(scope);
+    expect(scope['__REDUX_DEVTOOLS_EXTENSION_COMPOSE__']).toBeUndefined();
   });
 
   it('is idempotent — re-install returns the same shim and shares captures', () => {

@@ -211,6 +211,153 @@ export const getLaunchRegistry = (): LaunchRegistry => {
   return launchRegistry;
 };
 
+// ── pdl_close_browser effects ──────────────────────────────────────────────
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
+
+/** Poll the debug port until it stops answering (browser gone) or attempts run out. */
+const waitForPortDown = async (
+  port: number,
+  attempts: number,
+): Promise<boolean> => {
+  for (let i = 0; i < attempts; i += 1) {
+    if (!(await probeDebugPortImpl(port))) return true;
+    await sleep(250);
+  }
+  return !(await probeDebugPortImpl(port));
+};
+
+/** Read the browser-level CDP WebSocket URL from /json/version (null if absent). */
+const fetchBrowserWsUrl = async (port: number): Promise<string | null> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json().catch(() => null)) as {
+      webSocketDebuggerUrl?: unknown;
+    } | null;
+    const url = body?.webSocketDebuggerUrl;
+    return typeof url === 'string' ? url : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Canonical graceful quit: connect the browser CDP WebSocket and send
+ * Browser.close. The browser exits cleanly (no crash-restore bubble) and the
+ * socket closes. Resolves true once the socket closes, false on error/timeout.
+ * Uses Node's global WebSocket (Node >= 22).
+ */
+const cdpBrowserClose = (wsUrl: string): Promise<boolean> =>
+  new Promise((resolveP) => {
+    let settled = false;
+    const finish = (v: boolean): void => {
+      if (!settled) {
+        settled = true;
+        resolveP(v);
+      }
+    };
+    try {
+      const ws = new WebSocket(wsUrl);
+      const timer = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+        finish(false);
+      }, 2000);
+      ws.addEventListener('open', () => {
+        ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      });
+      // Browser.close makes the browser exit → the socket closes: that's success.
+      ws.addEventListener('close', () => {
+        clearTimeout(timer);
+        finish(true);
+      });
+      ws.addEventListener('error', () => {
+        clearTimeout(timer);
+        finish(false);
+      });
+    } catch {
+      finish(false);
+    }
+  });
+
+export type TerminateOutcome = {
+  readonly closed: boolean;
+  readonly method: 'already-down' | 'cdp' | 'sigterm' | 'sigkill' | 'failed';
+};
+
+/**
+ * Stop a managed launch, preferring a clean shutdown:
+ *  1. port already down → already-down (idempotent).
+ *  2. CDP Browser.close over the WebSocket → clean quit, no restore bubble.
+ *  3. SIGTERM the spawned pid (graceful) → 4. SIGKILL last resort.
+ * Each step waits for the debug port to go down before reporting success.
+ */
+export const terminateManagedBrowserImpl = async (
+  record: LaunchRecord,
+): Promise<TerminateOutcome> => {
+  if (!(await probeDebugPortImpl(record.port))) {
+    return { closed: true, method: 'already-down' };
+  }
+  const wsUrl = await fetchBrowserWsUrl(record.port);
+  if (wsUrl) {
+    await cdpBrowserClose(wsUrl);
+    if (await waitForPortDown(record.port, 8)) {
+      return { closed: true, method: 'cdp' };
+    }
+  }
+  if (record.pid !== null) {
+    try {
+      process.kill(record.pid, 'SIGTERM');
+    } catch {
+      /* already gone */
+    }
+    if (await waitForPortDown(record.port, 8)) {
+      return { closed: true, method: 'sigterm' };
+    }
+    try {
+      process.kill(record.pid, 'SIGKILL');
+    } catch {
+      /* already gone */
+    }
+    if (await waitForPortDown(record.port, 8)) {
+      return { closed: true, method: 'sigkill' };
+    }
+  }
+  return { closed: false, method: 'failed' };
+};
+
+/**
+ * Remove a sandbox profile dir, GUARDED: only paths under ~/.pwa-debug/profiles
+ * or an os.tmpdir() entry with the sandbox-temp prefix are eligible — defense in
+ * depth so a bad caller can never rm an arbitrary (e.g. user-profile) dir.
+ * Returns true when a removal was attempted.
+ */
+export const discardProfileDirImpl = (dir: string): boolean => {
+  const resolved = resolve(dir);
+  const underPwaProfiles = resolved.includes(join('.pwa-debug', 'profiles'));
+  const isTempProfile =
+    dirname(resolved) === resolve(tmpdir()) &&
+    basename(resolved).startsWith(TEMP_PROFILE_PREFIX);
+  if (!underPwaProfiles && !isTempProfile) return false;
+  try {
+    rmSync(resolved, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+  return true;
+};
+
 /** True when `npx chrome-devtools-mcp --version` succeeds. Never rejects. */
 export const probeChromeDevtoolsVersion = (): Promise<boolean> =>
   new Promise((resolveP) => {
