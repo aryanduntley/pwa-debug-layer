@@ -162,17 +162,23 @@ Register both with your client. For Claude Code:
 claude mcp add pwa-debug --scope user -- node /absolute/path/to/pwa-debug-layer/packages/host/dist/main.js
 
 # chrome-devtools-mcp (optional but recommended) — runs via npx, no global install
+# The --browserUrl port MUST match the port pwa-debug launches on (launch.defaultPort, default 9222).
 claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
 ```
+
+> **Port must match.** `chrome-devtools-mcp`'s `--browserUrl` has to point at the exact port `pwa-debug` opens — the `launch.defaultPort` setting (default `9222`), or the active port from a current `pdl_launch_browser`. Rather than hand-write this, let Claude call **`pdl_register_chrome_devtools`**, which runs the `claude mcp add` above for you pinned to the right port (and **`pdl_check_setup`** flags a registration that points at the wrong port).
+
+> **Mind the restart.** A registration added via `claude mcp add` is a **direct MCP** install: Claude Code must be **fully restarted** for `chrome-devtools-mcp`'s tools to load (a mid-session add does not load, and `/mcp` cannot load a newly-added server — it only shows status). If instead you install `chrome-devtools-mcp` as a **plugin**, run **`/reload-plugins`** to hot-load it with **no restart**. The bundled **`chrome-devtools-coexistence`** skill walks Claude through both paths and, for the restart case, hands you a context note to paste back afterward.
 
 > The host has no `install`/`serve` subcommand — `dist/main.js` auto-detects its mode: launched by Chrome (argv starts with `chrome-extension://`) it runs as the native-messaging host; launched by your MCP client it runs as the MCP server.
 
 Then let Claude drive setup and launch:
 
-1. **`pdl_check_setup`** — reports `{ ok, gaps[], recommendations[] }`: whether `chrome-devtools-mcp` is reachable, the host manifest is installed, the extension dist is present, and an extension ID is registered. Follow its `next_steps` to close any gap.
-2. **`pdl_install_extension`** — copies the extension to `~/Downloads/pwa-debug-extension` (or a `target` you pass) with `chrome://extensions` "Load unpacked" instructions. *(Skip this if you use a sandbox mode below — it preloads the extension.)*
-3. **`pdl_launch_browser`** — launches/attaches a browser with the debug port live and returns the `browserUrl` to hand to `chrome-devtools-mcp`.
-4. **`pdl_browser_status`** — shows what's been launched (browser, profile mode, port, pid), re-probes each debug port for liveness, and reports the extension service-worker heartbeat.
+1. **`pdl_check_setup`** — reports `{ ok, gaps[], recommendations[] }`: whether `chrome-devtools-mcp` is **registered** (read from the `claude` CLI) and pointed at the right debug port, the host manifest is installed, the extension dist is present, and an extension ID is registered. Follow its `next_steps` to close any gap.
+2. **`pdl_register_chrome_devtools`** — writes the `chrome-devtools-mcp` registration for you, pinned to the active/`launch.defaultPort` port (idempotent; re-points it if it's on the wrong port). *(Mutates your user-scope MCP config — Claude will ask first; a restart follows, see above.)*
+3. **`pdl_install_extension`** — copies the extension to `~/Downloads/pwa-debug-extension` (or a `target` you pass) with `chrome://extensions` "Load unpacked" instructions. *(Skip this if you use a sandbox mode below — it preloads the extension.)*
+4. **`pdl_launch_browser`** — launches/attaches a browser with the debug port live and returns the `browserUrl` to hand to `chrome-devtools-mcp`. **Always launch first:** call this *before* any `chrome-devtools-mcp` tool, so the browser + debug port exist for it to attach to.
+5. **`pdl_browser_status`** — shows what's been launched (browser, profile mode, port, pid), re-probes each debug port for liveness, and reports the extension service-worker heartbeat.
 
 ## Profile modes
 

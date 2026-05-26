@@ -401,16 +401,85 @@ export const discardProfileDirImpl = async (dir: string): Promise<boolean> => {
   return !existsSync(resolved);
 };
 
-/** True when `npx chrome-devtools-mcp --version` succeeds. Never rejects. */
-export const probeChromeDevtoolsVersion = (): Promise<boolean> =>
+/** Whether chrome-devtools-mcp is registered with Claude Code, and the
+ *  --browserUrl it is configured to attach to (null if registered without one
+ *  or if the arg can't be parsed). */
+export type ChromeDevtoolsRegistration = {
+  readonly registered: boolean;
+  readonly browserUrl: string | null;
+};
+
+const BROWSER_URL_ARG_RE = /--browserUrl(?:[=\s]+)(\S+)/;
+
+/**
+ * Read the REAL chrome-devtools-mcp registration from Claude Code via
+ * `claude mcp get chrome-devtools`. A zero exit means it is registered; the
+ * configured --browserUrl is regex-extracted from the (human-readable) output.
+ * This MCP is Claude-Code-targeted, so the `claude` CLI is the source of truth —
+ * we deliberately do NOT fall back to parsing ~/.claude.json. Never rejects:
+ * returns { registered: false } when `claude` is absent, errors, or times out.
+ */
+export const readChromeDevtoolsRegistration =
+  (): Promise<ChromeDevtoolsRegistration> =>
+    new Promise((resolveP) => {
+      execFile(
+        'claude',
+        ['mcp', 'get', 'chrome-devtools'],
+        { timeout: 10_000 },
+        (err, stdout) => {
+          if (err) {
+            resolveP({ registered: false, browserUrl: null });
+            return;
+          }
+          const match = BROWSER_URL_ARG_RE.exec(stdout ?? '');
+          resolveP({ registered: true, browserUrl: match?.[1] ?? null });
+        },
+      );
+    });
+
+/** Outcome of a `claude mcp ...` mutation. Never throws; carries stderr on failure. */
+export type ClaudeMcpResult = {
+  readonly ok: boolean;
+  readonly error: string | null;
+};
+
+const runClaudeMcp = (args: readonly string[]): Promise<ClaudeMcpResult> =>
   new Promise((resolveP) => {
-    execFile(
-      'npx',
-      ['--no-install', 'chrome-devtools-mcp', '--version'],
-      { timeout: 10_000 },
-      (err) => resolveP(!err),
-    );
+    execFile('claude', [...args], { timeout: 15_000 }, (err, _stdout, stderr) => {
+      if (err) {
+        const detail = (stderr ?? '').trim() || err.message;
+        resolveP({ ok: false, error: detail });
+        return;
+      }
+      resolveP({ ok: true, error: null });
+    });
   });
+
+/**
+ * Register chrome-devtools-mcp with Claude Code (user scope) pointed at the
+ * given CDP browserUrl, via `claude mcp add`. This writes a DIRECT MCP
+ * registration — Claude Code must be restarted for the new server to load.
+ */
+export const addChromeDevtoolsRegistration = (
+  browserUrl: string,
+): Promise<ClaudeMcpResult> =>
+  runClaudeMcp([
+    'mcp',
+    'add',
+    'chrome-devtools',
+    '--scope',
+    'user',
+    '--',
+    'npx',
+    '-y',
+    'chrome-devtools-mcp@latest',
+    '--browserUrl',
+    browserUrl,
+  ]);
+
+/** Remove the chrome-devtools-mcp registration via `claude mcp remove`. */
+export const removeChromeDevtoolsRegistration = (): Promise<ClaudeMcpResult> =>
+  runClaudeMcp(['mcp', 'remove', 'chrome-devtools']);
 
 const EXTENSION_URL_RE = /^chrome-extension:\/\/([a-p]{32})\//;
 

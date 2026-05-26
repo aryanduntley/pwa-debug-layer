@@ -237,6 +237,31 @@ export type ReplayCapturedEvent = CaptureMeta & {
   readonly timestamp: number;
 };
 
+/** Minimal identity of the DOM element a popup was injected as/under. */
+export type PopupHostSummary = {
+  readonly tagName: string;
+  readonly id?: string;
+  readonly classes?: readonly string[];
+  /** A best-effort CSS selector locating the host element. */
+  readonly selector: string;
+};
+
+export type PopupPhase = 'appeared' | 'updated' | 'disappeared';
+
+/** How the popup was detected: an attached open shadow root, or a light-DOM portal overlay under <body>. */
+export type PopupDetection = 'shadow' | 'portal';
+
+export type PopupCapturedEvent = CaptureMeta & {
+  readonly kind: 'library_popup';
+  /** Stable id for one popup instance across its appeared -> updated -> disappeared lifecycle. */
+  readonly popupId: string;
+  readonly phase: PopupPhase;
+  readonly detection: PopupDetection;
+  /** Tagged library when a signature matched (e.g. 'walletconnect', 'rainbowkit'), else 'unknown'. */
+  readonly library: string;
+  readonly host: PopupHostSummary;
+};
+
 export type CapturedEvent =
   | ConsoleCapturedEvent
   | FetchCapturedEvent
@@ -245,4 +270,5 @@ export type CapturedEvent =
   | DomMutationCapturedEvent
   | LifecycleCapturedEvent
   | StoreChangeCapturedEvent
-  | ReplayCapturedEvent;
+  | ReplayCapturedEvent
+  | PopupCapturedEvent;

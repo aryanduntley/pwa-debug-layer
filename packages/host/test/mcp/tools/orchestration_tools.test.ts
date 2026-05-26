@@ -15,6 +15,10 @@ import {
   installExtensionCore,
   type InstallExtensionDeps,
 } from '../../../src/mcp/tools/install_extension.js';
+import {
+  registerChromeDevtoolsCore,
+  type RegisterCdpDeps,
+} from '../../../src/mcp/tools/register_chrome_devtools.js';
 import type { LaunchRecord } from '../../../src/browser_launch/registry.js';
 import type { BrowserInstall } from '../../../src/native-messaging/browser_paths.js';
 
@@ -159,7 +163,11 @@ describe('browserStatusCore', () => {
 
 describe('checkSetupCore', () => {
   const allGood = (over: Partial<CheckSetupDeps>): CheckSetupDeps => ({
-    probeChromeDevtools: async () => true,
+    readCdpRegistration: async () => ({
+      registered: true,
+      browserUrl: 'http://127.0.0.1:9222',
+    }),
+    defaultPort: () => 9222,
     detectInstalls: async () =>
       [
         Object.freeze({
@@ -185,12 +193,47 @@ describe('checkSetupCore', () => {
     expect(data.gaps).toEqual([]);
   });
 
-  it('flags a missing chrome-devtools-mcp', async () => {
-    const res = await checkSetupCore(allGood({ probeChromeDevtools: async () => false }));
+  it('flags an unregistered chrome-devtools-mcp with the port-correct add snippet', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        readCdpRegistration: async () => ({ registered: false, browserUrl: null }),
+      }),
+    );
     const data = res.data as { ok: boolean; gaps: string[]; recommendations: string[] };
     expect(data.ok).toBe(false);
-    expect(data.gaps.join(' ')).toContain('chrome-devtools-mcp');
+    expect(data.gaps.join(' ')).toContain('not registered');
     expect(data.recommendations.join(' ')).toContain('claude mcp add chrome-devtools');
+    expect(data.recommendations.join(' ')).toContain('--browserUrl http://127.0.0.1:9222');
+  });
+
+  it('flags a chrome-devtools-mcp registered at the wrong debug port', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        readCdpRegistration: async () => ({
+          registered: true,
+          browserUrl: 'http://127.0.0.1:9333',
+        }),
+        defaultPort: () => 9222,
+      }),
+    );
+    const data = res.data as { ok: boolean; gaps: string[]; recommendations: string[] };
+    expect(data.ok).toBe(false);
+    expect(data.gaps.join(' ')).toContain('does not match the active debug port');
+    expect(data.gaps.join(' ')).toContain('9333');
+    expect(data.recommendations.join(' ')).toContain('claude mcp remove chrome-devtools');
+  });
+
+  it('builds the add snippet against the active managed port, not launch.defaultPort', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        readCdpRegistration: async () => ({ registered: false, browserUrl: null }),
+        defaultPort: () => 9222,
+        listManagedPorts: () => [{ port: 9444, sandbox: false }],
+        fetchLoadedExtensionIds: async () => ['abc'],
+      }),
+    );
+    const data = res.data as { recommendations: string[] };
+    expect(data.recommendations.join(' ')).toContain('--browserUrl http://127.0.0.1:9444');
   });
 
   it('flags a missing manifest when installs exist but none has one on disk', async () => {
@@ -263,6 +306,104 @@ describe('checkSetupCore', () => {
     expect(data.gaps.join(' ')).toContain('bundled');
     expect(data.gaps.join(' ')).toContain('not registered');
     expect(data.recommendations.join(' ')).toContain('host_register_extension bundled');
+  });
+});
+
+describe('registerChromeDevtoolsCore', () => {
+  const make = (
+    over: Partial<RegisterCdpDeps>,
+  ): RegisterCdpDeps & { added: string[]; removes: number } => {
+    const added: string[] = [];
+    let removes = 0;
+    return {
+      readCdpRegistration: async () => ({ registered: false, browserUrl: null }),
+      runMcpAdd: async (browserUrl: string) => {
+        added.push(browserUrl);
+        return { ok: true, error: null };
+      },
+      runMcpRemove: async () => {
+        removes += 1;
+        return { ok: true, error: null };
+      },
+      defaultPort: () => 9222,
+      listManagedPorts: () => [],
+      ...over,
+      get added() {
+        return added;
+      },
+      get removes() {
+        return removes;
+      },
+    } as RegisterCdpDeps & { added: string[]; removes: number };
+  };
+
+  it('no-ops when already registered at the correct port', async () => {
+    const deps = make({
+      readCdpRegistration: async () => ({
+        registered: true,
+        browserUrl: 'http://127.0.0.1:9222',
+      }),
+    });
+    const res = await registerChromeDevtoolsCore({}, deps);
+    const data = res.data as { action: string };
+    expect(res.ok).toBe(true);
+    expect(data.action).toBe('noop');
+    expect(deps.added).toEqual([]);
+    expect(deps.removes).toBe(0);
+  });
+
+  it('registers fresh when chrome-devtools is not registered', async () => {
+    const deps = make({
+      readCdpRegistration: async () => ({ registered: false, browserUrl: null }),
+    });
+    const res = await registerChromeDevtoolsCore({}, deps);
+    const data = res.data as { action: string; browserUrl: string };
+    expect(res.ok).toBe(true);
+    expect(data.action).toBe('registered');
+    expect(deps.added).toEqual(['http://127.0.0.1:9222']);
+    expect(deps.removes).toBe(0);
+    expect(res.next_steps.join(' ')).toContain('full Claude Code restart is required');
+    expect(res.next_steps.join(' ')).toContain('/reload-plugins');
+  });
+
+  it('removes then re-adds when registered at the wrong port', async () => {
+    const deps = make({
+      readCdpRegistration: async () => ({
+        registered: true,
+        browserUrl: 'http://127.0.0.1:9333',
+      }),
+    });
+    const res = await registerChromeDevtoolsCore({}, deps);
+    const data = res.data as { action: string };
+    expect(res.ok).toBe(true);
+    expect(data.action).toBe('re-registered');
+    expect(deps.removes).toBe(1);
+    expect(deps.added).toEqual(['http://127.0.0.1:9222']);
+  });
+
+  it('prefers the active managed port over launch.defaultPort', async () => {
+    const deps = make({
+      defaultPort: () => 9222,
+      listManagedPorts: () => [{ port: 9444 }],
+    });
+    await registerChromeDevtoolsCore({}, deps);
+    expect(deps.added).toEqual(['http://127.0.0.1:9444']);
+  });
+
+  it('honors an explicit port arg over everything else', async () => {
+    const deps = make({ listManagedPorts: () => [{ port: 9444 }] });
+    await registerChromeDevtoolsCore({ port: 9555 }, deps);
+    expect(deps.added).toEqual(['http://127.0.0.1:9555']);
+  });
+
+  it('returns an error with the manual snippet when the add fails', async () => {
+    const deps = make({
+      runMcpAdd: async () => ({ ok: false, error: 'claude: command not found' }),
+    });
+    const res = await registerChromeDevtoolsCore({}, deps);
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('Failed to register');
+    expect(res.next_steps.join(' ')).toContain('claude mcp add chrome-devtools');
   });
 });
 

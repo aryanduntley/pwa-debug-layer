@@ -25,7 +25,8 @@ export type BufferKind =
   | 'dom_mutations'
   | 'lifecycle'
   | 'store_change'
-  | 'replay';
+  | 'replay'
+  | 'library_popup';
 
 export interface CapturesInOptions {
   readonly extensionId: string;
@@ -79,6 +80,7 @@ const BUFFER_KINDS: readonly BufferKind[] = [
   'lifecycle',
   'store_change',
   'replay',
+  'library_popup',
 ];
 
 const kindToBucket = (kind: string): BufferKind | undefined => {
@@ -97,6 +99,8 @@ const kindToBucket = (kind: string): BufferKind | undefined => {
       return 'store_change';
     case 'replay':
       return 'replay';
+    case 'library_popup':
+      return 'library_popup';
     default:
       return undefined;
   }
@@ -124,6 +128,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     lifecycle: makeBuffer('lifecycle'),
     store_change: makeBuffer('store_change'),
     replay: makeBuffer('replay'),
+    library_popup: makeBuffer('library_popup'),
   };
 
   const received: Record<BufferKind, number> = {
@@ -133,6 +138,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     lifecycle: 0,
     store_change: 0,
     replay: 0,
+    library_popup: 0,
   };
   const dropped: Record<BufferKind, number> = {
     console: 0,
@@ -141,6 +147,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     lifecycle: 0,
     store_change: 0,
     replay: 0,
+    library_popup: 0,
   };
   const sequence: Record<BufferKind, number> = {
     console: 0,
@@ -149,6 +156,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     lifecycle: 0,
     store_change: 0,
     replay: 0,
+    library_popup: 0,
   };
   let droppedUnknown = 0;
 

@@ -18,14 +18,15 @@ import type { FilterSpec } from './filter_spec.js';
 /** Which runtime(s) consume a setting. */
 export type SettingScope = 'host' | 'extension' | 'both';
 
-/** Capture-pipeline event kinds. M11 T3 added 'store_change'; M12 T1 added 'replay' (rrweb). */
+/** Capture-pipeline event kinds. M11 T3 added 'store_change'; M12 T1 added 'replay' (rrweb); Path 6 M-A added 'library_popup'. */
 export type CaptureKind =
   | 'console'
   | 'network'
   | 'dom_mutations'
   | 'lifecycle'
   | 'store_change'
-  | 'replay';
+  | 'replay'
+  | 'library_popup';
 
 /** Runtime tuple of every {@link CaptureKind}, for validation and introspection. */
 export const CAPTURE_KINDS: readonly CaptureKind[] = [
@@ -35,6 +36,7 @@ export const CAPTURE_KINDS: readonly CaptureKind[] = [
   'lifecycle',
   'store_change',
   'replay',
+  'library_popup',
 ] as const;
 
 /**
@@ -308,6 +310,7 @@ export const SETTINGS_SCHEMA: SettingsSchema = Object.freeze({
       'lifecycle',
       'store_change',
       'replay',
+      'library_popup',
     ],
     scope: 'both',
     description:

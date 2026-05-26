@@ -44,6 +44,7 @@ const KIND_MAP: Readonly<Record<string, CaptureKind>> = Object.freeze({
   lifecycle: 'lifecycle',
   store_change: 'store_change',
   replay: 'replay',
+  library_popup: 'library_popup',
 });
 
 export const eventKindToCaptureKind = (

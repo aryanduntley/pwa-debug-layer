@@ -62,8 +62,8 @@ describe('SETTINGS_SCHEMA integrity', () => {
     }
   });
 
-  it('CAPTURE_KINDS lists the four expected kinds', () => {
-    expect(CAPTURE_KINDS).toEqual(['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay']);
+  it('CAPTURE_KINDS lists every expected kind', () => {
+    expect(CAPTURE_KINDS).toEqual(['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay', 'library_popup']);
   });
 
   it('SETTINGS_SCHEMA is frozen', () => {
@@ -320,7 +320,7 @@ describe('defaultSettings', () => {
     expect(d['capture.diskSpill.maxBytes']).toBe(100_000_000);
     expect(d['sites.allowlist']).toEqual(['*']);
     expect(d['sites.blocklist']).toEqual([]);
-    expect(d['capture.enabledKinds']).toEqual(['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay']);
+    expect(d['capture.enabledKinds']).toEqual(['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay', 'library_popup']);
     expect(d['sites.readControls']).toEqual({});
     expect(d['capture.filters']).toEqual({});
     expect(d['capture.stores.allowDispatch']).toBe(false);

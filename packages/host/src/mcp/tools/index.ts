@@ -42,6 +42,7 @@ import { browserStatusTool } from './browser_status.js';
 import { closeBrowserTool } from './close_browser.js';
 import { checkSetupTool } from './check_setup.js';
 import { installExtensionTool } from './install_extension.js';
+import { registerChromeDevtoolsTool } from './register_chrome_devtools.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
@@ -91,4 +92,5 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   closeBrowserTool,
   checkSetupTool,
   installExtensionTool,
+  registerChromeDevtoolsTool,
 ] as unknown as readonly ToolDef[]);
