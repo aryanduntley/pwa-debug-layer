@@ -251,6 +251,46 @@ export type PopupPhase = 'appeared' | 'updated' | 'disappeared';
 /** How the popup was detected: an attached open shadow root, or a light-DOM portal overlay under <body>. */
 export type PopupDetection = 'shadow' | 'portal';
 
+/** An actionable control detected inside a popup (label + ARIA role, typically 'button'). */
+export type PopupActionButton = {
+  readonly label: string;
+  readonly role: string;
+};
+
+/**
+ * A detected auth/connect failure signal rendered inside a popup widget: the
+ * human-readable reason (an alert message or failure-copy match). Carried on
+ * PopupState.failure; the host popup_failures tool correlates it with console
+ * and network errors that fired during the popup's open window.
+ */
+export type PopupFailure = {
+  readonly reason: string;
+};
+
+/**
+ * Structured snapshot of a detected popup's content (shadow root or portal
+ * subtree). Carried on PopupCapturedEvent.state for the appeared/updated phases
+ * (omitted on disappeared). Built by the page-world popup-snapshot helper from
+ * dom_serialize.summarizeNode + dom_aria role/name primitives.
+ */
+export type PopupState = {
+  /** Whether the widget is currently shown. */
+  readonly visible: boolean;
+  /** Widget heading / accessible name. */
+  readonly title?: string;
+  /** Visible text content, capped. */
+  readonly text?: string;
+  /** Actionable controls (Connect, Cancel, ...). */
+  readonly buttons?: readonly PopupActionButton[];
+  /** Alert / aria-live region texts rendered inside the widget. */
+  readonly alerts?: readonly string[];
+  /** Set when the widget content looks like an auth/connect failure. */
+  readonly failure?: PopupFailure;
+  /** Optional depth-capped structural summary of the widget subtree. */
+  readonly content?: NodeSummary;
+  readonly truncated?: boolean;
+};
+
 export type PopupCapturedEvent = CaptureMeta & {
   readonly kind: 'library_popup';
   /** Stable id for one popup instance across its appeared -> updated -> disappeared lifecycle. */
@@ -260,6 +300,8 @@ export type PopupCapturedEvent = CaptureMeta & {
   /** Tagged library when a signature matched (e.g. 'walletconnect', 'rainbowkit'), else 'unknown'. */
   readonly library: string;
   readonly host: PopupHostSummary;
+  /** Content snapshot, present on appeared/updated, omitted on disappeared. */
+  readonly state?: PopupState;
 };
 
 export type CapturedEvent =

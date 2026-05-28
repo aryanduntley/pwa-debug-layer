@@ -18,5 +18,12 @@ export type {
   LifecycleSubkind,
   LifecycleCapturedEvent,
   LifecycleCaptureOptions,
+  PopupHostSummary,
+  PopupPhase,
+  PopupDetection,
+  PopupActionButton,
+  PopupFailure,
+  PopupState,
+  PopupCapturedEvent,
   CapturedEvent,
 } from '@pwa-debug/shared';

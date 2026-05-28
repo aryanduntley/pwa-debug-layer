@@ -9,6 +9,8 @@ import { recentEventsTool } from './recent_events.js';
 import { consoleTailTool } from './console_tail.js';
 import { evaluateTool } from './evaluate.js';
 import { networkTailTool } from './network_tail.js';
+import { popupTailTool } from './popup_tail.js';
+import { popupFailuresTool } from './popup_failures.js';
 import { reactTreeTool } from './react_tree.js';
 import { reactGetStateTool } from './react_get_state.js';
 import { reactFindByTextTool } from './react_find_by_text.js';
@@ -58,6 +60,8 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   recentEventsTool,
   consoleTailTool,
   networkTailTool,
+  popupTailTool,
+  popupFailuresTool,
   evaluateTool,
   settingsListSchemaTool,
   settingsGetTool,

@@ -28,6 +28,13 @@ export type {
   StoreChangeDiff,
   StoreChangeCapturedEvent,
   ReplayCapturedEvent,
+  PopupHostSummary,
+  PopupPhase,
+  PopupDetection,
+  PopupActionButton,
+  PopupFailure,
+  PopupState,
+  PopupCapturedEvent,
   CapturedEvent,
 } from './types/captured_event.js';
 
@@ -55,6 +62,11 @@ export type {
   NetworkEntry,
   StoreChangeEntry,
   ReplayEntry,
+  PopupEntry,
+  PopupConsoleError,
+  PopupNetworkError,
+  PopupFailureWindow,
+  PopupFailureReport,
 } from './types/wire_entries.js';
 
 export type {

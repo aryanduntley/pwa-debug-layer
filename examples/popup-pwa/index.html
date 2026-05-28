@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pwa-debug · popup-pwa fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2rem;
+        max-width: 40rem;
+        line-height: 1.5;
+      }
+      h1 { font-size: 1.25rem; }
+      button {
+        display: block;
+        margin: 0.5rem 0;
+        padding: 0.6rem 1rem;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+      code { background: #f0f0f0; padding: 0 0.25rem; border-radius: 3px; }
+      .hint { color: #666; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>popup-pwa — Path 6 library_popup smoke fixture</h1>
+    <p class="hint">
+      Canonical CI-stable test target for the <code>library_popup</code> capture
+      kind. Each button reproduces one detection path the
+      <code>capture_popup</code> producer must surface via <code>popup_tail</code>.
+      Open this page in a pwa-debug managed browser, then call
+      <code>popup_tail</code> to see the emitted events.
+    </p>
+
+    <!--
+      1) SHADOW path. A custom element whose tag matches the walletconnect
+         signature (<w3m-modal>) attaches an OPEN shadow root AFTER load — the
+         genuine post-install injection signal. Expected event:
+         { phase:'appeared', detection:'shadow', library:'walletconnect' }.
+    -->
+    <button id="open-shadow">Open shadow modal (walletconnect signature)</button>
+
+    <!--
+      2) PORTAL path. A high-z-index fixed overlay appended to <body>, the way
+         React/Vue portals mount. Expected event:
+         { phase:'appeared', detection:'portal', library:'unknown' }.
+    -->
+    <button id="open-portal">Open light-DOM portal modal (generic overlay)</button>
+
+    <!--
+      3) Connect-failure surfacing (M-C will correlate this; here it is just a
+         smoke signal alongside the popup). Emits a console.error + a failing
+         fetch so the failure is observable next to the popup events.
+    -->
+    <button id="simulate-failure">Simulate connect failure</button>
+
+    <p class="hint">
+      Removing a popup (close buttons inside each modal) emits a matching
+      <code>{ phase:'disappeared' }</code> event with the same
+      <code>popupId</code>.
+    </p>
+
+    <script>
+      // --- 1) shadow modal -------------------------------------------------
+      let shadowHost = null;
+      document.getElementById('open-shadow').addEventListener('click', () => {
+        if (shadowHost) return;
+        shadowHost = document.createElement('w3m-modal');
+        document.body.appendChild(shadowHost);
+        const root = shadowHost.attachShadow({ mode: 'open' });
+        root.innerHTML = `
+          <div style="position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.4)">
+            <div style="background:#fff;padding:1.5rem;border-radius:8px">
+              <p>Connect a wallet (shadow modal)</p>
+              <button id="close">Close</button>
+            </div>
+          </div>`;
+        root.getElementById('close').addEventListener('click', () => {
+          shadowHost.remove();
+          shadowHost = null;
+        });
+      });
+
+      // --- 2) light-DOM portal modal --------------------------------------
+      let portalNode = null;
+      document.getElementById('open-portal').addEventListener('click', () => {
+        if (portalNode) return;
+        portalNode = document.createElement('div');
+        portalNode.setAttribute('data-portal-modal', '');
+        portalNode.style.position = 'fixed';
+        portalNode.style.inset = '0';
+        portalNode.style.zIndex = '2147483000';
+        portalNode.style.display = 'grid';
+        portalNode.style.placeItems = 'center';
+        portalNode.style.background = 'rgba(0,0,0,.4)';
+        portalNode.innerHTML = `
+          <div style="background:#fff;padding:1.5rem;border-radius:8px">
+            <p>Generic portal overlay</p>
+            <button id="close-portal">Close</button>
+          </div>`;
+        document.body.appendChild(portalNode);
+        portalNode
+          .querySelector('#close-portal')
+          .addEventListener('click', () => {
+            portalNode.remove();
+            portalNode = null;
+          });
+      });
+
+      // --- 3) simulated connect failure -----------------------------------
+      // Opens the portal modal (if needed) and renders an in-modal role=alert
+      // with failure copy, so the popup state.failure path has a target, then
+      // emits a correlatable console error + failed network request.
+      document
+        .getElementById('simulate-failure')
+        .addEventListener('click', () => {
+          if (!portalNode) document.getElementById('open-portal').click();
+          const alert = document.createElement('div');
+          alert.setAttribute('role', 'alert');
+          alert.className = 'error-banner';
+          alert.textContent = 'Connection failed: user rejected the request.';
+          portalNode.querySelector('div')?.appendChild(alert);
+          console.error('[popup-pwa] wallet connect failed: user rejected request');
+          fetch('https://invalid.example.invalid/connect').catch(() => {});
+        });
+    </script>
+  </body>
+</html>
