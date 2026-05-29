@@ -251,6 +251,18 @@ export type PopupPhase = 'appeared' | 'updated' | 'disappeared';
 /** How the popup was detected: an attached open shadow root, or a light-DOM portal overlay under <body>. */
 export type PopupDetection = 'shadow' | 'portal';
 
+/**
+ * Classification of a detected popup within a widget tree.
+ * - 'primary': a top-level popup with no enclosing tracked popup (the logical
+ *   widget, e.g. a Reown <w3m-modal> or a React portal overlay).
+ * - 'nested': a popup host that lives inside an already-tracked popup's subtree
+ *   (across shadow boundaries) — e.g. the <wui-*>/<ph-*> web components Reown
+ *   renders inside the modal. Surfaced only when explicitly requested so the
+ *   live view shows one popup per widget, not one per component.
+ * Absent role is treated as 'primary' by consumers (backward compatibility).
+ */
+export type PopupRole = 'primary' | 'nested';
+
 /** An actionable control detected inside a popup (label + ARIA role, typically 'button'). */
 export type PopupActionButton = {
   readonly label: string;
@@ -300,8 +312,47 @@ export type PopupCapturedEvent = CaptureMeta & {
   /** Tagged library when a signature matched (e.g. 'walletconnect', 'rainbowkit'), else 'unknown'. */
   readonly library: string;
   readonly host: PopupHostSummary;
+  /**
+   * Classification within a widget tree (see PopupRole). The producer always
+   * stamps this; absent is treated as 'primary' for backward compatibility.
+   */
+  readonly role?: PopupRole;
+  /**
+   * popupId of the nearest enclosing tracked popup (the IMMEDIATE parent in the
+   * widget tree, which may itself be nested), or null when this event is a
+   * primary (top-level) popup. Follow the parentPopupId chain up to the
+   * role:'primary' root to find the owning widget; the immediate-parent links
+   * let consumers reconstruct the full hierarchy.
+   */
+  readonly parentPopupId?: string | null;
   /** Content snapshot, present on appeared/updated, omitted on disappeared. */
   readonly state?: PopupState;
+};
+
+/**
+ * An uncaught error surfaced at the page level: a window 'error' (ErrorEvent /
+ * window.onerror) or an 'unhandledrejection' (PromiseRejectionEvent). Captured
+ * app- and framework-agnostically so the AI sees thrown failures (including
+ * wallet/connect rejections that bubble) without the app having to log them.
+ * Errors an app fully catches do NOT surface here (by definition).
+ */
+export type PageErrorCapturedEvent = CaptureMeta & {
+  readonly kind: 'page_error';
+  /**
+   * 'error' = window 'error'/onerror; 'unhandledrejection' = a rejected promise
+   * the app didn't catch; 'wallet_rejection' = an EIP-1193 provider .request()
+   * rejection observed at the provider boundary (e.g. code 4001 user-rejected),
+   * captured even when the app catches it.
+   */
+  readonly subkind: 'error' | 'unhandledrejection' | 'wallet_rejection';
+  /** Human-readable message (Error.message, the rejection reason, or stringified value), capped. */
+  readonly message: string;
+  /** Error constructor name when available (e.g. 'TypeError', 'UserRejectedRequestError'). */
+  readonly name?: string;
+  /** Stack trace with extension frames stripped, when available. */
+  readonly stack?: string;
+  /** For window 'error' events: originating script location 'url:line:col'. */
+  readonly source?: string;
 };
 
 export type CapturedEvent =
@@ -313,4 +364,5 @@ export type CapturedEvent =
   | LifecycleCapturedEvent
   | StoreChangeCapturedEvent
   | ReplayCapturedEvent
-  | PopupCapturedEvent;
+  | PopupCapturedEvent
+  | PageErrorCapturedEvent;

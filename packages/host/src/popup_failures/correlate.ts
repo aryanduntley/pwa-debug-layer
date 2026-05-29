@@ -10,6 +10,7 @@ import type {
   PopupConsoleError,
   PopupFailureReport,
   PopupNetworkError,
+  PopupPageError,
 } from '@pwa-debug/shared';
 
 const CONSOLE_TEXT_CAP = 1000;
@@ -18,9 +19,19 @@ export type CorrelateInput = {
   readonly popups: readonly HostStoredEvent[];
   readonly consoleEvents: readonly HostStoredEvent[];
   readonly networkEvents: readonly HostStoredEvent[];
+  /** Uncaught window errors / unhandled rejections (page_error buffer). */
+  readonly errorEvents?: readonly HostStoredEvent[];
   readonly now: number;
   readonly includeAll?: boolean;
   readonly popupId?: string;
+  /**
+   * Include NESTED component popups. Default false: only PRIMARY popups are
+   * reported, so a component-heavy widget (Reown: ~hundreds of nested popups
+   * sharing one frame+window) yields ONE failure report instead of hundreds —
+   * the primary's window already correlates the whole widget's console/network
+   * errors by frameKey.
+   */
+  readonly includeNested?: boolean;
 };
 
 const str = (v: unknown): string | undefined =>
@@ -43,18 +54,30 @@ const readAlerts = (state: PopupState | undefined): readonly string[] => {
   return state.alerts.filter((a): a is string => typeof a === 'string');
 };
 
+// Best readable text for a single console arg. Structured loggers (pino/bunyan)
+// emit an object whose human message is under msg/message (level/time are
+// noise), so prefer those before falling back to JSON.
+const argText = (a: unknown): string => {
+  if (typeof a === 'string') return a;
+  if (a !== null && typeof a === 'object') {
+    const o = a as Record<string, unknown>;
+    for (const key of ['msg', 'message', 'error', 'reason']) {
+      const v = o[key];
+      if (typeof v === 'string' && v.trim() !== '') return v;
+    }
+  }
+  try {
+    return JSON.stringify(a);
+  } catch {
+    return String(a);
+  }
+};
+
 const consoleText = (e: HostStoredEvent): string => {
   const args = (e as { args?: unknown }).args;
   const parts = Array.isArray(args) ? args : [];
   const text = parts
-    .map((a) => {
-      if (typeof a === 'string') return a;
-      try {
-        return JSON.stringify(a);
-      } catch {
-        return String(a);
-      }
-    })
+    .map(argText)
     .join(' ')
     .trim();
   return text.slice(0, CONSOLE_TEXT_CAP);
@@ -116,6 +139,18 @@ export const correlatePopupFailures = (
   for (const id of order) {
     const events = groups.get(id)!;
     const first = events[0]!;
+    // Role/parent come from any event in the group (the producer stamps them on
+    // every phase). Default to 'primary' when absent (pre-two-tier events).
+    const roleRaw = events
+      .map((e) => str((e as { role?: unknown }).role))
+      .find((r) => r !== undefined);
+    const role: 'primary' | 'nested' = roleRaw === 'nested' ? 'nested' : 'primary';
+    // Primary-only by default — nested components of one widget share the
+    // frame+window, so the primary's report already aggregates their errors.
+    if (role === 'nested' && input.includeNested !== true) continue;
+    const parentRaw = (first as { parentPopupId?: unknown }).parentPopupId;
+    const parentPopupId =
+      typeof parentRaw === 'string' ? parentRaw : null;
     const frameKey = str(first.frameKey) ?? '';
     const library = str((first as { library?: unknown }).library) ?? 'unknown';
     const detection =
@@ -162,15 +197,32 @@ export const correlatePopupFailures = (
       )
       .map(toNetworkError);
 
+    const pageErrors: PopupPageError[] = (input.errorEvents ?? [])
+      .filter((e) => str(e.frameKey) === frameKey && inWindow(e.ts, from, to))
+      .map((e) => {
+        const name = str((e as { name?: unknown }).name);
+        return {
+          subkind: str((e as { subkind?: unknown }).subkind) ?? 'error',
+          message: str((e as { message?: unknown }).message) ?? '',
+          ...(name !== undefined ? { name } : {}),
+          ts: e.ts,
+          sequenceNumber: e.sequenceNumber,
+        };
+      });
+
     const hasSignal =
       reasonFromState !== undefined ||
       alerts.length > 0 ||
+      pageErrors.length > 0 ||
       consoleErrors.length > 0 ||
       networkErrors.length > 0;
     if (!hasSignal && input.includeAll !== true) continue;
 
+    // An uncaught error/rejection is a stronger, more meaningful signal than a
+    // generic console line, so it precedes console in the reason fallback.
     const reason =
       reasonFromState ??
+      (pageErrors.find((p) => p.message !== '')?.message) ??
       (consoleErrors[0]?.text) ??
       (networkErrors[0] !== undefined
         ? `network ${networkErrors[0].kind} ${networkErrors[0].url ?? ''} ${networkErrors[0].status ?? networkErrors[0].phase ?? ''}`.trim()
@@ -181,11 +233,14 @@ export const correlatePopupFailures = (
       library,
       detection,
       frameKey,
+      role,
+      parentPopupId,
       ...(reason !== undefined ? { reason } : {}),
       ...(alerts.length > 0 ? { alerts } : {}),
       window: { from, to, open },
       console: consoleErrors,
       network: networkErrors,
+      errors: pageErrors,
     });
   }
 

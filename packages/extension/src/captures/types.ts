@@ -21,9 +21,11 @@ export type {
   PopupHostSummary,
   PopupPhase,
   PopupDetection,
+  PopupRole,
   PopupActionButton,
   PopupFailure,
   PopupState,
   PopupCapturedEvent,
+  PageErrorCapturedEvent,
   CapturedEvent,
 } from '@pwa-debug/shared';

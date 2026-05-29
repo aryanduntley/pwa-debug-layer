@@ -14,6 +14,8 @@ import { installWebSocketCapture } from './captures/capture_websocket.js';
 import { installDomMutationCapture } from './captures/capture_dom_mutation.js';
 import { installLifecycleCapture } from './captures/capture_lifecycle.js';
 import { installPopupCapture } from './captures/capture_popup.js';
+import { installErrorCapture } from './captures/capture_errors.js';
+import { installWalletCapture } from './captures/capture_wallet.js';
 import type { CapturedEvent } from './captures/types.js';
 import { computeFrameMeta } from './frame_meta/frame_meta.js';
 import {
@@ -116,6 +118,7 @@ type CaptureKinds = {
   readonly dom_mutation: boolean;
   readonly lifecycle: boolean;
   readonly library_popup: boolean;
+  readonly page_error: boolean;
 };
 
 const installCaptures = (
@@ -140,6 +143,9 @@ const installCaptures = (
       typeof MutationObserver !== 'undefined' &&
       typeof document !== 'undefined' &&
       typeof Element !== 'undefined',
+    page_error:
+      typeof window !== 'undefined' &&
+      typeof window.addEventListener === 'function',
   };
   const disposers: Disposer[] = [
     installConsoleCapture(emit, frame),
@@ -149,6 +155,8 @@ const installCaptures = (
     installDomMutationCapture(emit, frame),
     installLifecycleCapture(emit, frame),
     installPopupCapture(emit, frame),
+    installErrorCapture(emit, frame),
+    installWalletCapture(emit, frame),
   ];
   const dispose: Disposer = () => {
     for (const d of disposers) d();

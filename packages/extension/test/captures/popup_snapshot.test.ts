@@ -67,6 +67,78 @@ describe('buildPopupState — shadow (ShadowRoot contentRoot)', () => {
   });
 });
 
+describe('buildPopupState — shadow-piercing (nested shadow roots)', () => {
+  it('composes title, text, and buttons across nested open shadow boundaries', () => {
+    // Mirrors a component-based widget (Reown): the top-level host has an open
+    // shadow root, but the visible content lives in nested components' OWN open
+    // shadow roots that textContent/querySelectorAll would never reach.
+    const host = document.createElement('w3m-modal');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const inner = document.createElement('w3m-router');
+    root.appendChild(inner);
+    const innerRoot = inner.attachShadow({ mode: 'open' });
+    innerRoot.innerHTML = '<h1>Connect a wallet</h1><p>Choose a wallet to continue.</p>';
+    const btnHost = document.createElement('wui-button');
+    innerRoot.appendChild(btnHost);
+    const btnRoot = btnHost.attachShadow({ mode: 'open' });
+    btnRoot.innerHTML = '<button>MetaMask</button>';
+
+    const state = buildPopupState(host, root);
+
+    expect(state.title).toBe('Connect a wallet');
+    expect(state.text).toContain('Choose a wallet to continue');
+    expect(state.buttons).toEqual([{ label: 'MetaMask', role: 'button' }]);
+  });
+
+  it('surfaces an in-widget alert/failure rendered inside a nested shadow root', () => {
+    const host = document.createElement('w3m-modal');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const view = document.createElement('w3m-connecting-view');
+    root.appendChild(view);
+    const viewRoot = view.attachShadow({ mode: 'open' });
+    viewRoot.innerHTML =
+      '<div role="alert">Connection failed: user rejected the request.</div>';
+
+    const state = buildPopupState(host, root);
+
+    expect(state.alerts).toEqual([
+      'Connection failed: user rejected the request.',
+    ]);
+    expect(state.failure?.reason).toBe(
+      'Connection failed: user rejected the request.',
+    );
+  });
+
+  it('composes slotted (projected) light-DOM text through <slot>', () => {
+    const host = document.createElement('w3m-modal');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<div class="wrap"><slot></slot></div>';
+    // Light-DOM child projected into the slot (how component widgets pass content).
+    const light = document.createElement('span');
+    light.textContent = 'Projected wallet label';
+    host.appendChild(light);
+
+    const state = buildPopupState(host, root);
+    expect(state.text).toContain('Projected wallet label');
+  });
+
+  it('does not descend into closed shadow roots', () => {
+    const host = document.createElement('w3m-modal');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const inner = document.createElement('div');
+    root.appendChild(inner);
+    const closed = inner.attachShadow({ mode: 'closed' });
+    closed.innerHTML = '<h1>Hidden inside closed shadow</h1>';
+
+    const state = buildPopupState(host, root);
+    expect(state.title).toBeUndefined();
+  });
+});
+
 describe('buildPopupState — caps and visibility', () => {
   it('caps visible text and flags truncated', () => {
     const node = document.createElement('div');

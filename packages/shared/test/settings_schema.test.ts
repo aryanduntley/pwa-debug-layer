@@ -63,7 +63,7 @@ describe('SETTINGS_SCHEMA integrity', () => {
   });
 
   it('CAPTURE_KINDS lists every expected kind', () => {
-    expect(CAPTURE_KINDS).toEqual(['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay', 'library_popup']);
+    expect(CAPTURE_KINDS).toEqual(['console', 'network', 'dom_mutations', 'lifecycle', 'store_change', 'replay', 'library_popup', 'page_error']);
   });
 
   it('SETTINGS_SCHEMA is frozen', () => {

@@ -26,7 +26,8 @@ export type BufferKind =
   | 'lifecycle'
   | 'store_change'
   | 'replay'
-  | 'library_popup';
+  | 'library_popup'
+  | 'page_error';
 
 export interface CapturesInOptions {
   readonly extensionId: string;
@@ -60,6 +61,9 @@ export interface CapturesInStats {
   readonly extensionId: string;
 }
 
+/** Fired once per received+stored event, after it lands in its ring buffer. */
+export type CapturesListener = (kind: BufferKind, event: HostStoredEvent) => void;
+
 export interface CapturesIn {
   readonly receive: (input: CapturesInReceiveInput) => void;
   readonly tail: (
@@ -69,6 +73,13 @@ export interface CapturesIn {
   readonly buffer: (kind: BufferKind) => RingBuffer<HostStoredEvent>;
   readonly getStats: () => CapturesInStats;
   readonly clear: () => void;
+  /**
+   * Register a listener fired on every received+stored event (forward-only,
+   * after ring-buffer push). Returns an unsubscribe fn. Consumed by popup
+   * recording to capture a full-fidelity event stream into memory, immune to
+   * ring-buffer eviction during a long session.
+   */
+  readonly subscribe: (listener: CapturesListener) => () => void;
 }
 
 const DEFAULT_CAPACITY_PER_KIND = 5000;
@@ -81,6 +92,7 @@ const BUFFER_KINDS: readonly BufferKind[] = [
   'store_change',
   'replay',
   'library_popup',
+  'page_error',
 ];
 
 const kindToBucket = (kind: string): BufferKind | undefined => {
@@ -101,6 +113,8 @@ const kindToBucket = (kind: string): BufferKind | undefined => {
       return 'replay';
     case 'library_popup':
       return 'library_popup';
+    case 'page_error':
+      return 'page_error';
     default:
       return undefined;
   }
@@ -129,6 +143,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     store_change: makeBuffer('store_change'),
     replay: makeBuffer('replay'),
     library_popup: makeBuffer('library_popup'),
+    page_error: makeBuffer('page_error'),
   };
 
   const received: Record<BufferKind, number> = {
@@ -139,6 +154,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     store_change: 0,
     replay: 0,
     library_popup: 0,
+    page_error: 0,
   };
   const dropped: Record<BufferKind, number> = {
     console: 0,
@@ -148,6 +164,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     store_change: 0,
     replay: 0,
     library_popup: 0,
+    page_error: 0,
   };
   const sequence: Record<BufferKind, number> = {
     console: 0,
@@ -157,8 +174,17 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     store_change: 0,
     replay: 0,
     library_popup: 0,
+    page_error: 0,
   };
   let droppedUnknown = 0;
+  const listeners = new Set<CapturesListener>();
+
+  const subscribe = (listener: CapturesListener): (() => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
 
   const receive = (input: CapturesInReceiveInput): void => {
     for (const event of input.events) {
@@ -190,6 +216,13 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
       };
       buffers[bucket].push(stored);
       received[bucket]++;
+      for (const listener of listeners) {
+        try {
+          listener(bucket, stored);
+        } catch {
+          // A faulty subscriber must never break intake.
+        }
+      }
     }
   };
 
@@ -243,7 +276,7 @@ export const createCapturesIn = (opts: CapturesInOptions): CapturesIn => {
     droppedUnknown = 0;
   };
 
-  return Object.freeze({ receive, tail, buffer, getStats, clear });
+  return Object.freeze({ receive, tail, buffer, getStats, clear, subscribe });
 };
 
 export const CAPTURES_EVENT_TOOL = 'captures' as const;

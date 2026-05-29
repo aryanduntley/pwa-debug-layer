@@ -4,6 +4,8 @@
   flatpak uninstall --unused   
 
   note #207
+  Note #207 (file profile_dirs.ts, task 81) —
+  actually Flatpak/Linux,
 
   Path: 4CHECK— Store Introspection
   Status: partial

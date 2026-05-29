@@ -16,7 +16,12 @@
 // hosts for !isConnected. All emits are wrapped so capture never breaks the page.
 
 import { safeRandomId } from '../ids/safe_random_id.js';
-import { discoverShadowRoots, installAttachShadowPatch } from './walk_shadow.js';
+import {
+  composedContains,
+  discoverShadowRoots,
+  findEnclosingHost,
+  installAttachShadowPatch,
+} from './walk_shadow.js';
 import { buildPopupState, type PopupSnapshotOptions } from './popup_snapshot.js';
 import type { Disposer, FrameMeta } from './capture_console.js';
 import type {
@@ -24,6 +29,7 @@ import type {
   PopupDetection,
   PopupHostSummary,
   PopupPhase,
+  PopupRole,
   PopupState,
 } from './types.js';
 
@@ -181,6 +187,11 @@ type TrackedPopup = {
   readonly library: string;
   readonly hostSummary: PopupHostSummary;
   readonly contentRoot: ParentNode & Node;
+  // role/parentPopupId are mutable: a popup first seen as 'primary' is
+  // re-tagged 'nested' if a later-registered popup is found to enclose it
+  // (child web component upgraded before its parent — retroactive re-parenting).
+  role: PopupRole;
+  parentPopupId: string | null;
   lastSig: string;
   readonly observers: MutationObserver[];
   timer: ReturnType<typeof setTimeout> | null;
@@ -235,6 +246,8 @@ export const installPopupCapture = (
       detection: info.detection,
       library: info.library,
       host: info.hostSummary,
+      role: info.role,
+      parentPopupId: info.parentPopupId,
       ...(state !== undefined ? { state } : {}),
     }) as PopupCapturedEvent;
 
@@ -298,12 +311,36 @@ export const installPopupCapture = (
     return observers;
   };
 
+  // Re-tag any already-tracked PRIMARY popups that actually live inside a newly
+  // registered primary host (their shadow attached before the parent's was
+  // tracked). They become nested children of the new popup; their update
+  // observers are torn down (only primaries re-snapshot) and a corrective
+  // 'updated' carries the new role so consumers can re-classify.
+  const reparentInto = (newHost: Element, newInfo: TrackedPopup): void => {
+    for (const [host, info] of tracked) {
+      if (host === newHost || info.role !== 'primary') continue;
+      if (composedContains(newHost, host)) {
+        info.role = 'nested';
+        info.parentPopupId = newInfo.popupId;
+        teardown(info);
+        tryEmit(makeEvent(info, 'updated', snapshot(host, info.contentRoot)));
+      }
+    }
+  };
+
   const registerPopup = (
     host: Element,
     detection: PopupDetection,
     contentRoot: ParentNode & Node,
   ): void => {
     if (disposed || tracked.has(host)) return;
+    // Containment: a host inside an already-tracked popup is a NESTED component
+    // of that popup (e.g. Reown <wui-*>/<ph-*> inside <w3m-modal>), not a new
+    // top-level popup. parentPopupId points at the nearest enclosing tracked
+    // popup so consumers can reconstruct the widget hierarchy.
+    const parentHost = findEnclosingHost(host, (el) => tracked.has(el));
+    const parent = parentHost !== null ? tracked.get(parentHost) : undefined;
+    const role: PopupRole = parent !== undefined ? 'nested' : 'primary';
     const state = snapshot(host, contentRoot);
     const info: TrackedPopup = {
       popupId: idGen(),
@@ -311,13 +348,32 @@ export const installPopupCapture = (
       library: matchLibrary(host, signatures),
       hostSummary: buildHostSummary(host),
       contentRoot,
+      role,
+      parentPopupId: parent !== undefined ? parent.popupId : null,
       lastSig: state !== undefined ? stateSignature(state) : '',
       observers: [],
       timer: null,
     };
     tracked.set(host, info);
+    if (role === 'primary') reparentInto(host, info);
     tryEmit(makeEvent(info, 'appeared', state));
-    info.observers.push(...observeWidget(host, contentRoot));
+    if (role === 'primary') {
+      // Only PRIMARY popups get a per-widget update observer. Nested components
+      // would otherwise each fire their own 'updated' storm (a single Reown
+      // modal is ~50 nested web components) and drown the primary's events.
+      info.observers.push(...observeWidget(host, contentRoot));
+    } else {
+      // A nested component rendering is exactly when the enclosing primary's
+      // content (which lives across these nested shadow roots) fills in. Re-
+      // snapshot that primary — debounced, so the ~50 nested attachments of one
+      // modal coalesce into a few primary re-snapshots rather than a storm, and
+      // WITHOUT giving any nested its own observer.
+      const primaryHost = findEnclosingHost(host, (el) => {
+        const t = tracked.get(el);
+        return t !== undefined && t.role === 'primary';
+      });
+      if (primaryHost !== null) scheduleReSnapshot(primaryHost);
+    }
   };
 
   const teardown = (info: TrackedPopup): void => {

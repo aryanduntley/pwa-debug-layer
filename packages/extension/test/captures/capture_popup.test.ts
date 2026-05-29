@@ -321,6 +321,149 @@ describe('installPopupCapture — debounced updated re-snapshot', () => {
   });
 });
 
+describe('installPopupCapture — two-tier (primary/nested)', () => {
+  let received: PopupCapturedEvent[];
+  let dispose: (() => void) | undefined;
+  let harness: ReturnType<typeof makeObserverHarness>;
+
+  beforeEach(() => {
+    received = [];
+    document.body.innerHTML = '';
+    harness = makeObserverHarness();
+  });
+
+  afterEach(() => {
+    if (dispose) dispose();
+    dispose = undefined;
+    document.body.innerHTML = '';
+  });
+
+  const install = (): void => {
+    let n = 0;
+    dispose = installPopupCapture((e) => received.push(e), FRAME, {
+      observerFactory: harness.factory,
+      idGen: () => `id-${(n += 1)}`,
+    });
+  };
+
+  it('classifies a shadow host inside a tracked popup as nested with parentPopupId', () => {
+    install();
+    // Primary widget: <w3m-modal> attaches its shadow after install.
+    const modal = document.createElement('w3m-modal');
+    document.body.appendChild(modal);
+    const modalRoot = modal.attachShadow({ mode: 'open' });
+    // A component web element rendered INSIDE the modal's shadow tree.
+    const inner = document.createElement('wui-flex');
+    modalRoot.appendChild(inner);
+    inner.attachShadow({ mode: 'open' });
+
+    expect(received).toHaveLength(2);
+    const [primary, nested] = received;
+    expect(primary!.host.tagName).toBe('W3M-MODAL');
+    expect(primary!.role).toBe('primary');
+    expect(primary!.parentPopupId).toBeNull();
+    expect(primary!.library).toBe('walletconnect');
+
+    expect(nested!.host.tagName).toBe('WUI-FLEX');
+    expect(nested!.role).toBe('nested');
+    expect(nested!.parentPopupId).toBe(primary!.popupId);
+  });
+
+  it('surfaces a single primary popup for a one-host widget (fixture <w3m-modal>)', () => {
+    install();
+    const modal = document.createElement('w3m-modal');
+    document.body.appendChild(modal);
+    modal.attachShadow({ mode: 'open' });
+
+    const primaries = received.filter((e) => e.role === 'primary');
+    expect(primaries).toHaveLength(1);
+    expect(primaries[0]!.parentPopupId).toBeNull();
+  });
+
+  it('does NOT attach an update observer to nested components', () => {
+    install();
+    const modal = document.createElement('w3m-modal');
+    document.body.appendChild(modal);
+    const modalRoot = modal.attachShadow({ mode: 'open' });
+    const inner = document.createElement('wui-flex');
+    modalRoot.appendChild(inner);
+    const innerRoot = inner.attachShadow({ mode: 'open' });
+
+    // Firing a mutation at the nested shadow root reaches no observer, so no
+    // 'updated' storm from nested components.
+    harness.fireObserving(innerRoot, [childListRecord([])]);
+    expect(received.filter((e) => e.phase === 'updated')).toHaveLength(0);
+  });
+
+  it('re-snapshots the primary (updated) as nested components render content', () => {
+    vi.useFakeTimers();
+    try {
+      let n = 0;
+      const events: PopupCapturedEvent[] = [];
+      const d = installPopupCapture((e) => events.push(e), FRAME, {
+        observerFactory: harness.factory,
+        idGen: () => `id-${(n += 1)}`,
+        updateDebounceMs: 50,
+      });
+
+      const modal = document.createElement('w3m-modal');
+      document.body.appendChild(modal);
+      const modalRoot = modal.attachShadow({ mode: 'open' }); // primary, empty
+
+      // A nested component attaches, then fills its own shadow with content.
+      const inner = document.createElement('w3m-router');
+      modalRoot.appendChild(inner);
+      const innerRoot = inner.attachShadow({ mode: 'open' });
+      innerRoot.innerHTML = '<h1>Connect a wallet</h1>';
+
+      vi.runAllTimers(); // flush the debounced primary re-snapshot
+
+      const primaryUpdated = events.filter(
+        (e) => e.role === 'primary' && e.phase === 'updated',
+      );
+      expect(primaryUpdated.length).toBeGreaterThanOrEqual(1);
+      // The primary now carries the content that lives in the nested shadow.
+      expect(primaryUpdated[primaryUpdated.length - 1]!.state?.title).toBe(
+        'Connect a wallet',
+      );
+      d();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retroactively re-parents a popup when its enclosing parent registers later', () => {
+    install();
+    // Child custom element is a light-DOM descendant of the parent, and its
+    // shadow upgrades BEFORE the parent attaches its own shadow.
+    const parent = document.createElement('w3m-modal');
+    const child = document.createElement('wui-flex');
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+
+    child.attachShadow({ mode: 'open' }); // child registers first → primary
+    parent.attachShadow({ mode: 'open' }); // parent now encloses child
+
+    const childAppeared = received.find(
+      (e) => e.host.tagName === 'WUI-FLEX' && e.phase === 'appeared',
+    );
+    const parentAppeared = received.find(
+      (e) => e.host.tagName === 'W3M-MODAL' && e.phase === 'appeared',
+    );
+    const childReparent = received.find(
+      (e) => e.host.tagName === 'WUI-FLEX' && e.phase === 'updated',
+    );
+
+    expect(childAppeared!.role).toBe('primary'); // first seen as top-level
+    expect(parentAppeared!.role).toBe('primary');
+    expect(parentAppeared!.parentPopupId).toBeNull();
+    // Corrective re-parent event re-tags the child as nested under the parent.
+    expect(childReparent).toBeDefined();
+    expect(childReparent!.role).toBe('nested');
+    expect(childReparent!.parentPopupId).toBe(parentAppeared!.popupId);
+  });
+});
+
 describe('installPopupCapture — environment + disposer', () => {
   it('disposer is idempotent', () => {
     const dispose = installPopupCapture(() => {}, FRAME, {

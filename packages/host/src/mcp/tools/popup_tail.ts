@@ -15,10 +15,31 @@ import {
   tailErrorToResponse,
   toFilterSpec,
 } from './_filter_helpers.js';
+import type { FilterSpec } from '@pwa-debug/shared';
 
 const inputSchema = {
   extension_id: z.string().min(1).optional(),
+  include_nested: z.boolean().optional(),
   filter: filterSchema,
+};
+
+// Regex (matched against each entry's JSON) that drops NESTED popup events —
+// the component-level web components inside a widget (e.g. Reown <wui-*>/<ph-*>
+// inside <w3m-modal>). Top-level button roles serialize as "role":"button", so
+// this only matches the event's own role field. Injected unless include_nested.
+const NESTED_EXCLUDE_PATTERN = '"role":"nested"';
+
+const withNestedExcluded = (
+  spec: FilterSpec | undefined,
+): FilterSpec => {
+  const pattern = spec?.pattern ?? {};
+  return {
+    ...(spec ?? {}),
+    pattern: {
+      ...pattern,
+      exclude: [...(pattern.exclude ?? []), NESTED_EXCLUDE_PATTERN],
+    },
+  };
 };
 
 export const popupTailHandler = async (
@@ -46,7 +67,11 @@ export const popupTailHandler = async (
 
   const sessionId = captures.getStats().sessionId;
   const popupBuffer = captures.buffer('library_popup');
-  const filterSpec = toFilterSpec(args.filter);
+  const baseSpec = toFilterSpec(args.filter);
+  // Default view = PRIMARY popups only (one entry per logical widget). Pass
+  // include_nested=true to also surface the nested component events.
+  const filterSpec =
+    args.include_nested === true ? baseSpec : withNestedExcluded(baseSpec);
   const result = await tailWithFilterMerged({
     buffer: popupBuffer,
     spec: filterSpec,
@@ -69,8 +94,9 @@ export const popupTailHandler = async (
       }) as unknown as PopupEntry,
   );
 
+  const scope = args.include_nested === true ? 'primary + nested' : 'primary-only';
   const nextSteps: string[] = [
-    `Returned ${entries.length} PopupEntry record(s) for extension ${target.extensionId} (host session ${sessionId}). Each entry carries page-world fields (ts, frameUrl, frameKey, popupId, phase=appeared|updated|disappeared, detection=shadow|portal, library tag with 'unknown' fallback, host{tagName, id?, classes?, selector}) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). On appeared/updated, state{visible, title?, text?, buttons?[{label,role}], content?, truncated?} is a content snapshot of the widget so you can read what the modal says and which actions it offers. popupId is stable across a popup's appeared→updated→disappeared lifecycle; filter by library or pattern to isolate a known widget.`,
+    `Returned ${entries.length} PopupEntry record(s) for extension ${target.extensionId} (host session ${sessionId}); scope=${scope}. Each entry carries page-world fields (ts, frameUrl, frameKey, popupId, phase=appeared|updated|disappeared, detection=shadow|portal, library tag with 'unknown' fallback, host{tagName, id?, classes?, selector}, role=primary|nested, parentPopupId) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). By DEFAULT only role='primary' popups are returned — one entry per logical widget, so a component-heavy modal (e.g. Reown/WalletConnect, ~50 nested web components) shows as a single popup. Pass include_nested=true to also see the nested component events (each carries parentPopupId pointing at its enclosing popup, for reconstructing the widget tree). On appeared/updated, state{visible, title?, text?, buttons?[{label,role}], content?, truncated?} snapshots the widget content. popupId is stable across a popup's appeared→updated→disappeared lifecycle.`,
   ];
   if (result.hasMore) {
     nextSteps.push(
@@ -96,7 +122,7 @@ export const popupTailHandler = async (
 export const popupTailTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'popup_tail',
   description:
-    "Tail the host-side library_popup ring buffer (injected library widgets/popups: WalletConnect, RainbowKit, ConnectKit, Privy, and generic shadow/portal overlays) for a target extension with cursor pagination + FilterSpec. Returns { entries: PopupEntry[]; cursor: Cursor|null; hasMore: bool }. Each PopupEntry carries page-world fields (ts, frameUrl, frameKey, popupId, phase=appeared|updated|disappeared, detection=shadow|portal, library tag ('unknown' when no signature matched), host{tagName, id?, classes?, selector}, and on appeared/updated a state snapshot {visible, title?, text?, buttons?[{label,role}], content?, truncated?} of the widget content) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber) and a per-entry cursor. popupId is stable across a popup's appeared→updated→disappeared lifecycle. With no extension_id, targets the single connected NMH (errors if zero or multiple). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]} matches JSON.stringify of each entry (use it to filter by library, e.g. include:['walletconnect']); since/until=opaque cursor strings; limit=int 1..1000 (default 200); level is ignored (popup events have no console-level field). Errors carry kind in next_steps for AI self-correction.",
+    "Tail the host-side library_popup ring buffer (injected library widgets/popups: WalletConnect, RainbowKit, ConnectKit, Privy, and generic shadow/portal overlays) for a target extension with cursor pagination + FilterSpec. Returns { entries: PopupEntry[]; cursor: Cursor|null; hasMore: bool }. Each PopupEntry carries page-world fields (ts, frameUrl, frameKey, popupId, phase=appeared|updated|disappeared, detection=shadow|portal, library tag ('unknown' when no signature matched), host{tagName, id?, classes?, selector}, role=primary|nested, parentPopupId, and on appeared/updated a state snapshot {visible, title?, text?, buttons?[{label,role}], content?, truncated?} of the widget content) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber) and a per-entry cursor. By DEFAULT only PRIMARY popups are returned — one entry per logical widget — so a component-heavy modal (e.g. a Reown/WalletConnect modal built from ~50 nested shadow-DOM web components) surfaces as a SINGLE popup instead of dozens. Pass include_nested=true to also return the nested component events; each nested entry's parentPopupId points at its enclosing popup so you can reconstruct the widget tree. popupId is stable across a popup's appeared→updated→disappeared lifecycle. With no extension_id, targets the single connected NMH (errors if zero or multiple). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]} matches JSON.stringify of each entry (use it to filter by library, e.g. include:['walletconnect']); since/until=opaque cursor strings; limit=int 1..1000 (default 200); level is ignored (popup events have no console-level field). Errors carry kind in next_steps for AI self-correction.",
   inputSchema,
   handler: popupTailHandler,
 });

@@ -18,7 +18,7 @@ import type { FilterSpec } from './filter_spec.js';
 /** Which runtime(s) consume a setting. */
 export type SettingScope = 'host' | 'extension' | 'both';
 
-/** Capture-pipeline event kinds. M11 T3 added 'store_change'; M12 T1 added 'replay' (rrweb); Path 6 M-A added 'library_popup'. */
+/** Capture-pipeline event kinds. M11 T3 added 'store_change'; M12 T1 added 'replay' (rrweb); Path 6 M-A added 'library_popup'; Path 6 M-D added 'page_error' (window error + unhandledrejection). */
 export type CaptureKind =
   | 'console'
   | 'network'
@@ -26,7 +26,8 @@ export type CaptureKind =
   | 'lifecycle'
   | 'store_change'
   | 'replay'
-  | 'library_popup';
+  | 'library_popup'
+  | 'page_error';
 
 /** Runtime tuple of every {@link CaptureKind}, for validation and introspection. */
 export const CAPTURE_KINDS: readonly CaptureKind[] = [
@@ -37,6 +38,7 @@ export const CAPTURE_KINDS: readonly CaptureKind[] = [
   'store_change',
   'replay',
   'library_popup',
+  'page_error',
 ] as const;
 
 /**

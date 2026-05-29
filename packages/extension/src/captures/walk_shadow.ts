@@ -51,6 +51,53 @@ export const discoverShadowRoots = (node: Node): ShadowRoot[] => {
   return out;
 };
 
+/**
+ * The composed parent of a node: its DOM parentNode, or — when the node is a
+ * ShadowRoot (no parentNode) — the shadow host it belongs to. Returns null at
+ * the document root. This is the single hop used to walk UP across shadow
+ * boundaries (light DOM and shadow trees stitched into one composed chain).
+ */
+export const composedParentNode = (node: Node): Node | null => {
+  const parent = node.parentNode;
+  if (parent !== null) return parent;
+  // No parentNode: a ShadowRoot stitches to its host; everything else stops.
+  const host = (node as Node & { host?: Element | null }).host;
+  return host ?? null;
+};
+
+/**
+ * Walk the composed ancestor chain strictly ABOVE `start` (across shadow
+ * boundaries) and return the nearest ancestor Element for which isHost() is
+ * true, else null. Used by the popup producer to decide whether a freshly
+ * attached shadow host lives inside an already-tracked popup (so it is a NESTED
+ * component, e.g. a Reown <wui-*> inside <w3m-modal>) rather than a new
+ * top-level popup. Never throws — a faulty predicate is treated as no-match.
+ */
+export const findEnclosingHost = (
+  start: Element,
+  isHost: (el: Element) => boolean,
+): Element | null => {
+  let node: Node | null = composedParentNode(start);
+  while (node !== null) {
+    if (node.nodeType === 1) {
+      const el = node as Element;
+      try {
+        if (isHost(el)) return el;
+      } catch {
+        // A faulty predicate must not abort the ancestor walk.
+      }
+    }
+    node = composedParentNode(node);
+  }
+  return null;
+};
+
+/** True when `ancestor` is on the composed ancestor chain above `descendant`. */
+export const composedContains = (
+  ancestor: Element,
+  descendant: Element,
+): boolean => findEnclosingHost(descendant, (el) => el === ancestor) !== null;
+
 const walkForShadows = (node: Node, out: ShadowRoot[]): void => {
   if (node.nodeType === 1) {
     const element = node as Element;

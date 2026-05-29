@@ -6,6 +6,7 @@ import type {
   StoreChangeCapturedEvent,
   ReplayCapturedEvent,
   PopupCapturedEvent,
+  PageErrorCapturedEvent,
 } from './captured_event.js';
 import type { Cursor } from './filter_spec.js';
 
@@ -28,6 +29,17 @@ export type StoreChangeEntry = StoreChangeCapturedEvent & EntryEnvelope;
 export type ReplayEntry = ReplayCapturedEvent & EntryEnvelope;
 
 export type PopupEntry = PopupCapturedEvent & EntryEnvelope;
+
+export type PageErrorEntry = PageErrorCapturedEvent & EntryEnvelope;
+
+/** An uncaught page error correlated to an open popup window by popup_failures. */
+export type PopupPageError = {
+  readonly subkind: string;
+  readonly message: string;
+  readonly name?: string;
+  readonly ts: number;
+  readonly sequenceNumber: number;
+};
 
 /** A console error correlated to an open popup window by the popup_failures tool. */
 export type PopupConsoleError = {
@@ -65,9 +77,15 @@ export type PopupFailureReport = {
   readonly library: string;
   readonly detection: 'shadow' | 'portal';
   readonly frameKey: string;
+  /** 'primary' (one report per logical widget; the default) or 'nested'. */
+  readonly role?: 'primary' | 'nested';
+  /** popupId of the immediate enclosing popup, null for a primary. */
+  readonly parentPopupId?: string | null;
   readonly reason?: string;
   readonly alerts?: readonly string[];
   readonly window: PopupFailureWindow;
   readonly console: readonly PopupConsoleError[];
   readonly network: readonly PopupNetworkError[];
+  /** Uncaught window errors / unhandled rejections in the window (same frame). */
+  readonly errors: readonly PopupPageError[];
 };

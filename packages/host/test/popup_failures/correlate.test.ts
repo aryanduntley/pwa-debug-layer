@@ -130,6 +130,95 @@ describe('correlatePopupFailures', () => {
     expect(reports[0]!.network[0]!.status).toBe(500);
   });
 
+  it('reports only PRIMARY popups by default; include_nested adds nested', () => {
+    const popups = [
+      popup(100, {
+        popupId: 'modal',
+        role: 'primary',
+        parentPopupId: null,
+        phase: 'appeared',
+        state: { failure: { reason: 'connect rejected' } },
+      }),
+      popup(110, {
+        popupId: 'inner',
+        role: 'nested',
+        parentPopupId: 'modal',
+        phase: 'appeared',
+        state: { failure: { reason: 'connect rejected' } },
+      }),
+    ];
+    const base = { popups, consoleEvents: [], networkEvents: [], now: 200 };
+
+    const def = correlatePopupFailures(base);
+    expect(def).toHaveLength(1);
+    expect(def[0]!.popupId).toBe('modal');
+    expect(def[0]!.role).toBe('primary');
+    expect(def[0]!.parentPopupId).toBeNull();
+
+    const all = correlatePopupFailures({ ...base, includeNested: true });
+    expect(all.map((r) => r.popupId).sort()).toEqual(['inner', 'modal']);
+    const nested = all.find((r) => r.popupId === 'inner')!;
+    expect(nested.role).toBe('nested');
+    expect(nested.parentPopupId).toBe('modal');
+  });
+
+  it('treats a roleless (pre-two-tier) popup as primary', () => {
+    const popups = [popup(100, { phase: 'appeared', state: { failure: { reason: 'x' } } })];
+    const reports = correlatePopupFailures({
+      popups,
+      consoleEvents: [],
+      networkEvents: [],
+      now: 200,
+    });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.role).toBe('primary');
+  });
+
+  it('unwraps a structured-logger console arg to its message for the reason', () => {
+    const popups = [popup(100, { role: 'primary', phase: 'appeared' })];
+    const consoleEvents = [
+      ev('console', 120, {
+        level: 'error',
+        args: [{ level: 50, time: 123, msg: 'WalletConnect: user rejected' }],
+      }),
+    ];
+    const reports = correlatePopupFailures({
+      popups,
+      consoleEvents,
+      networkEvents: [],
+      now: 200,
+    });
+    expect(reports[0]!.reason).toBe('WalletConnect: user rejected');
+    expect(reports[0]!.console[0]!.text).toBe('WalletConnect: user rejected');
+  });
+
+  it('correlates uncaught page errors and prefers them over console in the reason', () => {
+    const popups = [popup(100, { role: 'primary', phase: 'appeared' })];
+    const errorEvents = [
+      ev('page_error', 120, {
+        subkind: 'unhandledrejection',
+        message: 'User rejected the request',
+        name: 'UserRejectedRequestError',
+      }),
+    ];
+    const consoleEvents = [
+      ev('console', 121, { level: 'error', args: ['noisy console line'] }),
+    ];
+    const reports = correlatePopupFailures({
+      popups,
+      consoleEvents,
+      networkEvents: [],
+      errorEvents,
+      now: 200,
+    });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.errors).toHaveLength(1);
+    expect(reports[0]!.errors[0]!.message).toBe('User rejected the request');
+    expect(reports[0]!.errors[0]!.subkind).toBe('unhandledrejection');
+    // page error outranks the console line in the reason fallback
+    expect(reports[0]!.reason).toBe('User rejected the request');
+  });
+
   it('filters to a single popupId when requested', () => {
     const popups = [
       popup(100, { popupId: 'p1', phase: 'appeared', state: { failure: { reason: 'a' } } }),

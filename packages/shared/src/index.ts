@@ -31,10 +31,12 @@ export type {
   PopupHostSummary,
   PopupPhase,
   PopupDetection,
+  PopupRole,
   PopupActionButton,
   PopupFailure,
   PopupState,
   PopupCapturedEvent,
+  PageErrorCapturedEvent,
   CapturedEvent,
 } from './types/captured_event.js';
 
@@ -63,8 +65,10 @@ export type {
   StoreChangeEntry,
   ReplayEntry,
   PopupEntry,
+  PageErrorEntry,
   PopupConsoleError,
   PopupNetworkError,
+  PopupPageError,
   PopupFailureWindow,
   PopupFailureReport,
 } from './types/wire_entries.js';

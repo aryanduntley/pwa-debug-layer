@@ -11,6 +11,9 @@ import { evaluateTool } from './evaluate.js';
 import { networkTailTool } from './network_tail.js';
 import { popupTailTool } from './popup_tail.js';
 import { popupFailuresTool } from './popup_failures.js';
+import { errorTailTool } from './error_tail.js';
+import { popupRecordTool } from './popup_record.js';
+import { popupReplayTool } from './popup_replay.js';
 import { reactTreeTool } from './react_tree.js';
 import { reactGetStateTool } from './react_get_state.js';
 import { reactFindByTextTool } from './react_find_by_text.js';
@@ -62,6 +65,9 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   networkTailTool,
   popupTailTool,
   popupFailuresTool,
+  errorTailTool,
+  popupRecordTool,
+  popupReplayTool,
   evaluateTool,
   settingsListSchemaTool,
   settingsGetTool,
