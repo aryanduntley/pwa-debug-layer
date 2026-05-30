@@ -78,6 +78,12 @@ export type LaunchExistingInput = {
   readonly execPath: string;
   readonly port: number;
   readonly userDataDir: string;
+  /**
+   * Flatpak app-id when the target is a flatpak browser. When set, spawns use
+   * the `flatpak run <app-id> …` command form instead of exec-by-path
+   * (execPath is the app-id, not a host binary, for flatpak targets).
+   */
+  readonly appId?: string;
 };
 
 /** Inputs for a sandbox-mode launch (dedicated profile + preloaded extension). */
@@ -89,6 +95,15 @@ export type LaunchSandboxInput = {
   /** Unpacked extension dir passed to --load-extension / --disable-extensions-except. */
   readonly extensionPath: string;
   readonly mode: SandboxMode;
+  /** Flatpak app-id when the target is a flatpak browser (see LaunchExistingInput.appId). */
+  readonly appId?: string;
+  /**
+   * Snap package name when the target is a snap browser. Present => the launch
+   * writes a SNAP manifest (pointing at the snap relay launcher) into the
+   * sandbox profile's NativeMessagingHosts/, since a snap Chromium with a
+   * custom --user-data-dir searches there. Mutually exclusive with appId.
+   */
+  readonly snapPackage?: string;
 };
 
 /**
@@ -101,4 +116,18 @@ export type LaunchSandboxDeps = Pick<
   'probeDebugPort' | 'spawnBrowser'
 > & {
   readonly registerTempProfile: (dir: string) => void;
+  /**
+   * Confined-browser only: write the NMH manifest into
+   * `<userDataDir>/NativeMessagingHosts/` before spawn, because a flatpak/snap
+   * Chromium launched with a custom --user-data-dir searches THAT dir (not the
+   * install location). When snapPackage is given the manifest points at the
+   * SNAP relay launcher (and ensures the relay files exist); otherwise (flatpak)
+   * it points at the canonical node launcher. Native finds the manifest at the
+   * default config location, so the launch flow only invokes this for
+   * flatpak (appId) or snap (snapPackage).
+   */
+  readonly writeSandboxManifest: (
+    userDataDir: string,
+    snapPackage?: string,
+  ) => Promise<void>;
 };

@@ -20,19 +20,22 @@ import {
 import {
   buildHostManifest,
   installManifestForBrowsers,
+  writeHostManifestToDir,
+  HOST_NAME,
+  HOST_DESCRIPTION,
   type ManifestInstallOptions,
+  type ManifestWriteResult,
 } from '../../native-messaging/manifest_writer.js';
 import {
   defaultLauncherPath,
   writeLauncher,
 } from '../../native-messaging/launcher.js';
+import { writeSnapHostFiles } from '../../native-messaging/snap_host.js';
+import { defaultSocketPath } from '../ipc/socket_path.js';
 import {
   defaultRegistryGateway,
   defaultRegistryJsonPath,
 } from '../../native-messaging/registry_writer.js';
-
-const HOST_NAME = 'com.pwa_debug.host';
-const HOST_DESCRIPTION = 'PWA Debug Layer native messaging host';
 
 const fileExists = async (p: string): Promise<boolean> => {
   try {
@@ -85,9 +88,17 @@ export const hostRegisterExtensionHandler = async (
       );
     }
     const launcherPath = defaultLauncherPath(process.platform, process.env);
+    // Resolve the socket path HERE, in the unconfined MCP host process whose
+    // env matches the listening socket (mcp_mode resolves it the same way), and
+    // bake it into the canonical (node) launcher. A flatpak-spawned NMH then
+    // connects to the real socket instead of an XDG path remapped by
+    // confinement. Snap is handled separately below (node is exec-denied +
+    // glibc-incompatible under snap), so the canonical launcher serves
+    // native + flatpak.
+    const socketPath = defaultSocketPath(process.env, process.platform);
     await writeLauncher(
       process.platform,
-      { nodePath: process.execPath, mainJsPath },
+      { nodePath: process.execPath, mainJsPath, socketPath },
       launcherPath,
     );
 
@@ -98,7 +109,17 @@ export const hostRegisterExtensionHandler = async (
       allowedExtensionIds: after.extensionIds,
     });
 
-    const hasRegistry = installs.some((i) => i.kind === 'registry');
+    // Snap installs need a DIFFERENT host: a python3 byte-relay under
+    // ~/snap/<pkg>/common (AppArmor-exec-allowed, snap-glibc-compatible)
+    // connecting to a snap-common socket the host also listens on. Their
+    // manifest `path` points at that relay launcher, not the canonical one.
+    const snapInstalls = installs.filter(
+      (i): i is Extract<BrowserInstall, { manifestDir: string }> =>
+        i.kind === 'snap',
+    );
+    const nonSnapInstalls = installs.filter((i) => i.kind !== 'snap');
+
+    const hasRegistry = nonSnapInstalls.some((i) => i.kind === 'registry');
     const options: ManifestInstallOptions = hasRegistry
       ? {
           registryJsonPath: defaultRegistryJsonPath(process.env, HOST_NAME),
@@ -106,8 +127,34 @@ export const hostRegisterExtensionHandler = async (
         }
       : {};
 
-    const writes = await installManifestForBrowsers(manifest, installs, options);
-    const written = dedupe(writes.map((w) => w.manifestPath));
+    const writes = await installManifestForBrowsers(
+      manifest,
+      nonSnapInstalls,
+      options,
+    );
+
+    const snapWrites: ManifestWriteResult[] = [];
+    for (const si of snapInstalls) {
+      if (si.snapPackage === undefined) continue;
+      const snapHost = await writeSnapHostFiles(si.snapPackage, process.env);
+      if (!snapHost) continue;
+      const snapManifest = buildHostManifest({
+        name: HOST_NAME,
+        description: HOST_DESCRIPTION,
+        hostBinaryPath: snapHost.launcherPath,
+        allowedExtensionIds: after.extensionIds,
+      });
+      const manifestPath = await writeHostManifestToDir(
+        snapManifest,
+        si.manifestDir,
+      );
+      snapWrites.push(
+        Object.freeze({ browser: si.browser, kind: 'snap', manifestPath }),
+      );
+    }
+
+    const allWrites = [...writes, ...snapWrites];
+    const written = dedupe(allWrites.map((w) => w.manifestPath));
 
     const final = setManifestPaths(
       { ...after, lastUpdated: new Date().toISOString() },
@@ -119,7 +166,7 @@ export const hostRegisterExtensionHandler = async (
       added,
       allRegisteredIds: [...final.extensionIds],
       manifestPathsWritten: written,
-      installs: writes.map((w) => ({
+      installs: allWrites.map((w) => ({
         browser: w.browser,
         kind: w.kind,
         manifestPath: w.manifestPath,

@@ -5,8 +5,10 @@ import {
 } from '../../src/browser_launch/run_state.js';
 import {
   browserUrlFor,
+  buildFreshFlatpakArgs,
   buildFreshSpawnArgs,
   buildNewWindowArgs,
+  buildNewWindowFlatpakArgs,
 } from '../../src/browser_launch/spawn_args.js';
 import { defaultUserDataDir } from '../../src/browser_launch/profile_dirs.js';
 import { launchExisting } from '../../src/browser_launch/launch_existing.js';
@@ -77,6 +79,29 @@ describe('spawn_args builders', () => {
     expect(cmd).toBe('/usr/bin/brave-browser');
     expect(args).toEqual(['--new-window']);
   });
+  it('buildFreshFlatpakArgs prefixes `flatpak run <app-id>` with NO `--` (chrome would eat it)', () => {
+    const { cmd, args } = buildFreshFlatpakArgs(
+      'org.chromium.Chromium',
+      9222,
+      '/h/.var/app/org.chromium.Chromium/config/chromium',
+    );
+    expect(cmd).toBe('flatpak');
+    expect(args).toEqual([
+      'run',
+      'org.chromium.Chromium',
+      '--remote-debugging-port=9222',
+      '--user-data-dir=/h/.var/app/org.chromium.Chromium/config/chromium',
+      '--no-first-run',
+      '--no-default-browser-check',
+    ]);
+    // A literal '--' would become chrome's end-of-switches marker and drop the port.
+    expect(args).not.toContain('--');
+  });
+  it('buildNewWindowFlatpakArgs is `flatpak run <app-id> --new-window` (no `--`)', () => {
+    const { cmd, args } = buildNewWindowFlatpakArgs('org.chromium.Chromium');
+    expect(cmd).toBe('flatpak');
+    expect(args).toEqual(['run', 'org.chromium.Chromium', '--new-window']);
+  });
 });
 
 describe('defaultUserDataDir', () => {
@@ -117,6 +142,32 @@ describe('defaultUserDataDir', () => {
     expect(
       defaultUserDataDir('chromium', 'linux', { HOME: '/h' }, '/usr/bin/chromium'),
     ).toBe('/h/.config/chromium');
+  });
+  it('resolves the flatpak profile when execPath is a slash-free app-id', () => {
+    // flatpak chromium stores its profile at ~/.var/app/<app-id>/config/chromium.
+    expect(
+      defaultUserDataDir(
+        'chromium',
+        'linux',
+        { HOME: '/h' },
+        'org.chromium.Chromium',
+      ),
+    ).toBe('/h/.var/app/org.chromium.Chromium/config/chromium');
+  });
+  it('ignores XDG_CONFIG_HOME for flatpak (profile is ~/.var/app based)', () => {
+    expect(
+      defaultUserDataDir(
+        'chromium',
+        'linux',
+        { HOME: '/h', XDG_CONFIG_HOME: '/c' },
+        'org.chromium.Chromium',
+      ),
+    ).toBe('/h/.var/app/org.chromium.Chromium/config/chromium');
+  });
+  it('degrades to null for an unknown flatpak app-id', () => {
+    expect(
+      defaultUserDataDir('chromium', 'linux', { HOME: '/h' }, 'com.unknown.App'),
+    ).toBeNull();
   });
   it('resolves best-effort macOS + Windows paths from env', () => {
     expect(defaultUserDataDir('chrome', 'darwin', { HOME: '/Users/u' })).toBe(
@@ -205,5 +256,48 @@ describe('launchExisting — triad', () => {
     };
     await launchExisting(input, deps);
     expect(processChecked).toBe(false);
+  });
+});
+
+describe('launchExisting — flatpak (appId set → `flatpak run` spawn form)', () => {
+  // For a flatpak target, execPath is the app-id and appId is set; spawns must
+  // go through `flatpak run <app-id> -- …`, never exec-by-path.
+  const input = {
+    browser: 'chromium' as const,
+    execPath: 'org.chromium.Chromium',
+    port: 9222,
+    userDataDir: '/h/.var/app/org.chromium.Chromium/config/chromium',
+    appId: 'org.chromium.Chromium',
+  };
+
+  it('(b) opens a new window via `flatpak run <app-id> -- --new-window`', async () => {
+    const deps = makeDeps({ portLive: false, processRunning: true });
+    const r = await launchExisting(input, deps);
+    expect(r.action).toBe('new-window');
+    expect(deps.spawns).toEqual([
+      {
+        cmd: 'flatpak',
+        args: ['run', 'org.chromium.Chromium', '--new-window'],
+      },
+    ]);
+  });
+
+  it('(c) spawns fresh via `flatpak run <app-id> <fresh flags>`', async () => {
+    const deps = makeDeps({ portLive: false, processRunning: false });
+    const r = await launchExisting(input, deps);
+    expect(r.action).toBe('spawn-fresh');
+    expect(deps.spawns).toEqual([
+      {
+        cmd: 'flatpak',
+        args: [
+          'run',
+          'org.chromium.Chromium',
+          '--remote-debugging-port=9222',
+          '--user-data-dir=/h/.var/app/org.chromium.Chromium/config/chromium',
+          '--no-first-run',
+          '--no-default-browser-check',
+        ],
+      },
+    ]);
   });
 });

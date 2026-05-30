@@ -21,6 +21,15 @@ export type IpcSendResult =
 
 export type IpcServerOptions = {
   readonly socketPath: string;
+  /**
+   * Additional unix socket paths to listen on, all feeding the SAME
+   * extensionId-keyed connection map. Used for snap confinement: a
+   * snap-spawned relay can only connect() to a socket under
+   * ~/snap/<pkg>/common/, so the host binds one there per installed snap in
+   * addition to the canonical socketPath (native/flatpak). Empty/omitted on
+   * platforms or installs without confined snaps.
+   */
+  readonly extraSocketPaths?: readonly string[];
   readonly onRegister?: (info: IpcConnectionInfo) => void;
   readonly onRequest?: (extensionId: string, env: IpcRequestEnvelope) => void;
   readonly onEvent?: (extensionId: string, env: IpcEventEnvelope) => void;
@@ -159,16 +168,20 @@ export const createIpcServer = async (
     });
   };
 
-  const server: Server = createServer(handleSocket);
+  const socketPaths = [opts.socketPath, ...(opts.extraSocketPaths ?? [])];
+  const servers: Server[] = socketPaths.map(() => createServer(handleSocket));
 
-  await new Promise<void>((resolve, reject) => {
-    const onError = (err: Error): void => reject(err);
-    server.once('error', onError);
-    server.listen(opts.socketPath, () => {
-      server.off('error', onError);
-      resolve();
+  const listenOne = (server: Server, path: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const onError = (err: Error): void => reject(err);
+      server.once('error', onError);
+      server.listen(path, () => {
+        server.off('error', onError);
+        resolve();
+      });
     });
-  });
+
+  await Promise.all(servers.map((s, i) => listenOne(s, socketPaths[i] as string)));
 
   const sendTo = (extensionId: string, env: IpcEnvelope): IpcSendResult => {
     const conn = connections.get(extensionId);
@@ -235,15 +248,24 @@ export const createIpcServer = async (
       conn.socket.destroy();
     }
     connections.clear();
-    await new Promise<void>((resolve, reject) => {
-      server.close((err) => (err ? reject(err) : resolve()));
-    });
+    await Promise.all(
+      servers.map(
+        (s) =>
+          new Promise<void>((resolve, reject) => {
+            s.close((err) => (err ? reject(err) : resolve()));
+          }),
+      ),
+    );
     if (process.platform !== 'win32') {
-      try {
-        await unlink(opts.socketPath);
-      } catch {
-        // socket file may already be gone
-      }
+      await Promise.all(
+        socketPaths.map(async (p) => {
+          try {
+            await unlink(p);
+          } catch {
+            // socket file may already be gone
+          }
+        }),
+      );
     }
   };
 

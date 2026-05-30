@@ -21,15 +21,36 @@ export type BinarySource =
   /** Resolved by name on the user's PATH. */
   | 'path'
   /** Found at a known standard install path for the OS. */
-  | 'standard-path';
+  | 'standard-path'
+  /** A flatpak-packaged app (no host binary — launched via `flatpak run`). */
+  | 'flatpak';
+
+/**
+ * How a browser is packaged on the host — the selection axis ORTHOGONAL to
+ * `source` (how it was located). The same browser name can appear under several
+ * packagings (e.g. snap + flatpak chromium); this is what disambiguates them so
+ * the launch tool can target a specific one.
+ */
+export type Packaging = 'native' | 'snap' | 'flatpak';
 
 /** A located, launchable browser executable. */
 export type DiscoveredBrowser = {
   readonly browser: BrowserName;
+  /**
+   * For native/snap browsers: the absolute executable path. For flatpak
+   * (source === 'flatpak'): the flatpak app-id (e.g. 'org.chromium.Chromium'),
+   * which is what `flatpak run` takes and what profile-dir resolution looks up.
+   * App-ids are reverse-DNS and never contain '/', so a missing-slash test
+   * distinguishes a flatpak app-id from a real exec path downstream.
+   */
   readonly execPath: string;
   readonly source: BinarySource;
+  /** How this browser is packaged — the disambiguation axis for selection. */
+  readonly packaging: Packaging;
   /** True when this browser is the system default web browser. */
   readonly isDefault: boolean;
+  /** The flatpak app-id; present only when source === 'flatpak'. */
+  readonly appId?: string;
 };
 
 /** Result of a full discovery pass. */

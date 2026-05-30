@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildSandboxSpawnArgs } from '../../src/browser_launch/spawn_args.js';
+import {
+  buildSandboxFlatpakArgs,
+  buildSandboxSpawnArgs,
+} from '../../src/browser_launch/spawn_args.js';
 import {
   defaultExtensionCandidates,
   isLoadableExtensionDir,
@@ -38,6 +41,31 @@ describe('buildSandboxSpawnArgs', () => {
     const { args } = buildSandboxSpawnArgs('/b', 9222, '/p', '/e');
     expect(args).toContain('--disable-session-crashed-bubble');
     expect(args).toContain('--hide-crash-restore-bubble');
+  });
+});
+
+describe('buildSandboxFlatpakArgs', () => {
+  it('wraps the same sandbox flags in `flatpak run <app-id> --`', () => {
+    const { cmd, args } = buildSandboxFlatpakArgs(
+      'org.chromium.Chromium',
+      9222,
+      '/home/u/.pwa-debug/profiles/chromium',
+      '/ext/dist',
+    );
+    expect(cmd).toBe('flatpak');
+    expect(args).toEqual([
+      'run',
+      'org.chromium.Chromium',
+      '--remote-debugging-port=9222',
+      '--user-data-dir=/home/u/.pwa-debug/profiles/chromium',
+      '--load-extension=/ext/dist',
+      '--disable-extensions-except=/ext/dist',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-session-crashed-bubble',
+      '--hide-crash-restore-bubble',
+    ]);
+    expect(args).not.toContain('--');
   });
 });
 
@@ -168,18 +196,28 @@ describe('launchSandbox', () => {
   }): LaunchSandboxDeps & {
     spawns: Array<{ cmd: string; args: readonly string[] }>;
     registered: string[];
+    manifestWrites: Array<{ userDataDir: string; snapPackage?: string }>;
   } => {
     const spawns: Array<{ cmd: string; args: readonly string[] }> = [];
     const registered: string[] = [];
+    const manifestWrites: Array<{ userDataDir: string; snapPackage?: string }> = [];
     return {
       spawns,
       registered,
+      manifestWrites,
       probeDebugPort: async () => opts.portLive ?? false,
       spawnBrowser: async (cmd, args) => {
         spawns.push({ cmd, args });
         return { pid: opts.pid ?? 555 };
       },
       registerTempProfile: (dir) => registered.push(dir),
+      writeSandboxManifest: async (userDataDir, snapPackage) => {
+        manifestWrites.push(
+          snapPackage === undefined
+            ? { userDataDir }
+            : { userDataDir, snapPackage },
+        );
+      },
     };
   };
 
@@ -215,6 +253,8 @@ describe('launchSandbox', () => {
     });
     expect(deps.spawns[0]?.args).toContain('--load-extension=/ext/dist');
     expect(deps.registered).toHaveLength(0);
+    // native sandbox finds the manifest at the default config dir — no per-profile write.
+    expect(deps.manifestWrites).toHaveLength(0);
   });
 
   it('spawns a temp profile and registers it for cleanup', async () => {
@@ -223,5 +263,76 @@ describe('launchSandbox', () => {
     expect(r.profileType).toBe('sandbox-temp');
     expect(deps.spawns).toHaveLength(1);
     expect(deps.registered).toEqual(['/h/.pwa-debug/profiles/chrome']);
+  });
+
+  it('spawns a flatpak sandbox via `flatpak run <app-id> --` when appId is set', async () => {
+    const deps = makeDeps({ portLive: false });
+    const r = await launchSandbox(
+      {
+        browser: 'chromium',
+        execPath: 'org.chromium.Chromium',
+        port: 9222,
+        userDataDir: '/h/.pwa-debug/profiles/chromium',
+        extensionPath: '/ext/dist',
+        mode: 'sandbox-persistent',
+        appId: 'org.chromium.Chromium',
+      },
+      deps,
+    );
+    expect(r.action).toBe('spawn-fresh');
+    expect(deps.spawns[0]?.cmd).toBe('flatpak');
+    expect(deps.spawns[0]?.args.slice(0, 2)).toEqual([
+      'run',
+      'org.chromium.Chromium',
+    ]);
+    expect(deps.spawns[0]?.args).toContain('--load-extension=/ext/dist');
+    // 3a: flatpak writes the manifest (node launcher) into the sandbox profile.
+    expect(deps.manifestWrites).toEqual([
+      { userDataDir: '/h/.pwa-debug/profiles/chromium' },
+    ]);
+  });
+
+  it('writes a snap-launcher manifest into the snap sandbox profile before spawn', async () => {
+    const deps = makeDeps({ portLive: false });
+    const r = await launchSandbox(
+      {
+        browser: 'chromium',
+        execPath: '/snap/bin/chromium',
+        port: 9222,
+        userDataDir: '/h/snap/chromium/common/pwa-debug-profile',
+        extensionPath: '/ext/dist',
+        mode: 'sandbox-persistent',
+        snapPackage: 'chromium',
+      },
+      deps,
+    );
+    expect(r.action).toBe('spawn-fresh');
+    // snap spawns via execPath directly (NOT `flatpak run`)
+    expect(deps.spawns[0]?.cmd).toBe('/snap/bin/chromium');
+    // manifest written with the snap package so it points at the relay launcher
+    expect(deps.manifestWrites).toEqual([
+      {
+        userDataDir: '/h/snap/chromium/common/pwa-debug-profile',
+        snapPackage: 'chromium',
+      },
+    ]);
+  });
+
+  it('does NOT write a profile manifest when the flatpak port is already live (attach path)', async () => {
+    const deps = makeDeps({ portLive: true });
+    await launchSandbox(
+      {
+        browser: 'chromium',
+        execPath: 'org.chromium.Chromium',
+        port: 9222,
+        userDataDir: '/h/.pwa-debug/profiles/chromium',
+        extensionPath: '/ext/dist',
+        mode: 'sandbox-persistent',
+        appId: 'org.chromium.Chromium',
+      },
+      deps,
+    );
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.manifestWrites).toHaveLength(0);
   });
 });

@@ -9,8 +9,10 @@
 import { classifyRunState, chooseLaunchAction } from './run_state.js';
 import {
   browserUrlFor,
+  buildFreshFlatpakArgs,
   buildFreshSpawnArgs,
   buildNewWindowArgs,
+  buildNewWindowFlatpakArgs,
 } from './spawn_args.js';
 import type {
   LaunchDeps,
@@ -48,7 +50,9 @@ export const launchExisting = async (
   }
 
   if (action === 'new-window') {
-    const { cmd, args } = buildNewWindowArgs(input.execPath);
+    const { cmd, args } = input.appId
+      ? buildNewWindowFlatpakArgs(input.appId)
+      : buildNewWindowArgs(input.execPath);
     const { pid } = await deps.spawnBrowser(cmd, args);
     return Object.freeze({
       ...base,
@@ -60,11 +64,9 @@ export const launchExisting = async (
   }
 
   // spawn-fresh
-  const { cmd, args } = buildFreshSpawnArgs(
-    input.execPath,
-    input.port,
-    input.userDataDir,
-  );
+  const { cmd, args } = input.appId
+    ? buildFreshFlatpakArgs(input.appId, input.port, input.userDataDir)
+    : buildFreshSpawnArgs(input.execPath, input.port, input.userDataDir);
   const { pid } = await deps.spawnBrowser(cmd, args);
   return Object.freeze({
     ...base,

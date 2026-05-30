@@ -28,6 +28,38 @@ describe('buildPosixLauncher', () => {
       buildPosixLauncher({ nodePath: '/node', mainJsPath: "/path/with'q.js" }),
     ).toThrow(/single quotes/);
   });
+
+  it('bakes PWA_DEBUG_SOCKET (exported) before exec when socketPath given', () => {
+    const body = buildPosixLauncher({
+      nodePath: '/usr/local/bin/node',
+      mainJsPath: '/abs/dist/main.js',
+      socketPath: '/home/u/.config/pwa-debug/run/mcp.sock',
+    });
+    expect(body).toContain(
+      "PWA_DEBUG_SOCKET='/home/u/.config/pwa-debug/run/mcp.sock'",
+    );
+    expect(body).toContain('export PWA_DEBUG_SOCKET');
+    // env export must precede the exec line.
+    expect(body.indexOf('PWA_DEBUG_SOCKET=')).toBeLessThan(body.indexOf('exec '));
+  });
+
+  it('omits the env block when socketPath is absent', () => {
+    const body = buildPosixLauncher({
+      nodePath: '/node',
+      mainJsPath: '/main.js',
+    });
+    expect(body).not.toContain('PWA_DEBUG_SOCKET');
+  });
+
+  it('rejects a single-quoted socketPath', () => {
+    expect(() =>
+      buildPosixLauncher({
+        nodePath: '/node',
+        mainJsPath: '/main.js',
+        socketPath: "/run/with'quote.sock",
+      }),
+    ).toThrow(/single quotes/);
+  });
 });
 
 describe('buildWindowsLauncher', () => {
@@ -44,6 +76,28 @@ describe('buildWindowsLauncher', () => {
   it('rejects double-quoted paths', () => {
     expect(() =>
       buildWindowsLauncher({ nodePath: 'C:\\bad"path\\node.exe', mainJsPath: 'C:\\m.js' }),
+    ).toThrow(/double quotes/);
+  });
+
+  it('bakes PWA_DEBUG_SOCKET via set before the command when socketPath given', () => {
+    const body = buildWindowsLauncher({
+      nodePath: 'C:\\nodejs\\node.exe',
+      mainJsPath: 'C:\\app\\main.js',
+      socketPath: '\\\\.\\pipe\\pwa-debug-mcp',
+    });
+    expect(body).toContain('set "PWA_DEBUG_SOCKET=\\\\.\\pipe\\pwa-debug-mcp"');
+    expect(body.indexOf('PWA_DEBUG_SOCKET')).toBeLessThan(
+      body.indexOf('"C:\\nodejs\\node.exe"'),
+    );
+  });
+
+  it('rejects a double-quoted socketPath', () => {
+    expect(() =>
+      buildWindowsLauncher({
+        nodePath: 'C:\\node.exe',
+        mainJsPath: 'C:\\m.js',
+        socketPath: 'C:\\bad"pipe',
+      }),
     ).toThrow(/double quotes/);
   });
 });

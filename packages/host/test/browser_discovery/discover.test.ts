@@ -17,8 +17,13 @@ const makeDeps = (opts: {
   return {
     which: async (name: string) => whichMap[name] ?? null,
     fileExists: async (p: string) => existsSet.has(p),
-    runCommand: async (): Promise<CommandResult> =>
-      opts.xdg ?? { code: 1, stdout: '' },
+    // `opts.xdg` models the default-browser query (xdg-settings/defaults/reg).
+    // `flatpak info` is a distinct command — no flatpak apps are installed in
+    // these orchestration fixtures, so it must report not-found (code 1).
+    runCommand: async (cmd: string): Promise<CommandResult> =>
+      cmd === 'flatpak'
+        ? { code: 1, stdout: '' }
+        : (opts.xdg ?? { code: 1, stdout: '' }),
   };
 };
 

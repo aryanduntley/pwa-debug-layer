@@ -10,12 +10,15 @@ import type {
 const makeDeps = (opts: {
   which?: Readonly<Record<string, string>>;
   exists?: readonly string[];
+  /** flatpak app-ids for which `flatpak info <id>` should exit 0 (installed). */
+  flatpakApps?: readonly string[];
 }): DiscoveryDeps & {
   whichCalls: string[];
   existsCalls: string[];
 } => {
   const whichMap = opts.which ?? {};
   const existsSet = new Set(opts.exists ?? []);
+  const flatpakSet = new Set(opts.flatpakApps ?? []);
   const whichCalls: string[] = [];
   const existsCalls: string[] = [];
   return {
@@ -29,7 +32,16 @@ const makeDeps = (opts: {
       existsCalls.push(p);
       return existsSet.has(p);
     },
-    runCommand: async (): Promise<CommandResult> => ({ code: 1, stdout: '' }),
+    runCommand: async (
+      cmd: string,
+      args: readonly string[],
+    ): Promise<CommandResult> => {
+      // Model `flatpak info <app-id>`: exit 0 when the app-id is installed.
+      if (cmd === 'flatpak' && args[0] === 'info' && flatpakSet.has(args[1] ?? '')) {
+        return { code: 0, stdout: '' };
+      }
+      return { code: 1, stdout: '' };
+    },
   };
 };
 
@@ -42,6 +54,7 @@ describe('discoverBinaries — linux', () => {
         browser: 'chrome',
         execPath: '/usr/bin/google-chrome',
         source: 'path',
+        packaging: 'native',
         isDefault: false,
       },
     ]);
@@ -58,6 +71,23 @@ describe('discoverBinaries — linux', () => {
         browser: 'brave',
         execPath: '/opt/brave.com/brave/brave-browser',
         source: 'standard-path',
+        packaging: 'native',
+        isDefault: false,
+      },
+    ]);
+  });
+
+  it('tags packaging=snap when the standard path is under /snap/', async () => {
+    // chromium's standardPaths include /snap/bin/chromium; a /snap/ exec is
+    // snap-confined (different profile root), so packaging must say so.
+    const deps = makeDeps({ exists: ['/snap/bin/chromium'] });
+    const out = await discoverBinaries('linux', {}, deps);
+    expect(out).toEqual([
+      {
+        browser: 'chromium',
+        execPath: '/snap/bin/chromium',
+        source: 'standard-path',
+        packaging: 'snap',
         isDefault: false,
       },
     ]);
@@ -82,6 +112,39 @@ describe('discoverBinaries — linux', () => {
   });
 });
 
+describe('discoverBinaries — linux flatpak', () => {
+  it('surfaces an installed flatpak app with source=flatpak + app-id in execPath and appId', async () => {
+    const deps = makeDeps({ flatpakApps: ['org.chromium.Chromium'] });
+    const out = await discoverBinaries('linux', {}, deps);
+    expect(out).toEqual([
+      {
+        browser: 'chromium',
+        execPath: 'org.chromium.Chromium',
+        source: 'flatpak',
+        packaging: 'flatpak',
+        isDefault: false,
+        appId: 'org.chromium.Chromium',
+      },
+    ]);
+  });
+
+  it('omits flatpak apps that are not installed', async () => {
+    const out = await discoverBinaries('linux', {}, makeDeps({}));
+    expect(out).toEqual([]);
+  });
+
+  it('appends flatpak AFTER native so first-match prefers the native install', async () => {
+    const deps = makeDeps({
+      which: { chromium: '/usr/bin/chromium' },
+      flatpakApps: ['org.chromium.Chromium'],
+    });
+    const out = await discoverBinaries('linux', {}, deps);
+    // Both surface, native first → orchestrator's .find() picks native.
+    expect(out.map((b) => b.source)).toEqual(['path', 'flatpak']);
+    expect(out.filter((b) => b.browser === 'chromium')).toHaveLength(2);
+  });
+});
+
 describe('discoverBinaries — darwin (best-effort)', () => {
   it('detects a browser by its .app exec path', async () => {
     const deps = makeDeps({
@@ -94,6 +157,7 @@ describe('discoverBinaries — darwin (best-effort)', () => {
         execPath:
           '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         source: 'standard-path',
+        packaging: 'native',
         isDefault: false,
       },
     ]);
@@ -112,6 +176,7 @@ describe('discoverBinaries — win32 (best-effort)', () => {
         browser: 'chrome',
         execPath: exe,
         source: 'standard-path',
+        packaging: 'native',
         isDefault: false,
       },
     ]);

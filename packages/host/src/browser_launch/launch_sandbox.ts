@@ -8,7 +8,11 @@
  * otherwise spawn. sandbox-temp additionally registers its dir for shutdown
  * cleanup.
  */
-import { browserUrlFor, buildSandboxSpawnArgs } from './spawn_args.js';
+import {
+  browserUrlFor,
+  buildSandboxFlatpakArgs,
+  buildSandboxSpawnArgs,
+} from './spawn_args.js';
 import type {
   LaunchResult,
   LaunchSandboxDeps,
@@ -32,12 +36,28 @@ export const launchSandbox = async (
     return Object.freeze({ ...base, action: 'attach' as const, pid: null });
   }
 
-  const { cmd, args } = buildSandboxSpawnArgs(
-    input.execPath,
-    input.port,
-    input.userDataDir,
-    input.extensionPath,
-  );
+  // Confined browsers (flatpak + snap) search <user-data-dir>/NativeMessagingHosts/
+  // for the host manifest, NOT the install location. Drop a copy there before
+  // spawn so the SW's connectNative resolves the host. snapPackage routes the
+  // manifest at the snap relay launcher; flatpak (appId) at the node launcher.
+  // Native finds the manifest at the default config dir, so neither applies.
+  if (input.appId || input.snapPackage) {
+    await deps.writeSandboxManifest(input.userDataDir, input.snapPackage);
+  }
+
+  const { cmd, args } = input.appId
+    ? buildSandboxFlatpakArgs(
+        input.appId,
+        input.port,
+        input.userDataDir,
+        input.extensionPath,
+      )
+    : buildSandboxSpawnArgs(
+        input.execPath,
+        input.port,
+        input.userDataDir,
+        input.extensionPath,
+      );
   const { pid } = await deps.spawnBrowser(cmd, args);
   if (input.mode === 'sandbox-temp') {
     deps.registerTempProfile(input.userDataDir);

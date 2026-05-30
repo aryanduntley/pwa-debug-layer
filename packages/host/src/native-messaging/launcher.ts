@@ -4,6 +4,14 @@ import { dirname, join } from 'node:path';
 export type LauncherSpec = {
   readonly nodePath: string;
   readonly mainJsPath: string;
+  /**
+   * Absolute host IPC socket path (POSIX) or named pipe (Windows), resolved at
+   * install time in the UNCONFINED host env and baked into the launcher as the
+   * PWA_DEBUG_SOCKET env var. The spawned NMH reads it (via defaultSocketPath)
+   * instead of re-deriving from XDG, which snap/flatpak remap inside
+   * confinement. Omit to leave the NMH on default XDG resolution.
+   */
+  readonly socketPath?: string;
 };
 
 export type WrittenLauncher = {
@@ -24,13 +32,20 @@ const WINDOWS_HEADER = [
 ];
 
 export const buildPosixLauncher = (spec: LauncherSpec): string => {
-  if (spec.nodePath.includes("'") || spec.mainJsPath.includes("'")) {
+  const quoted = [spec.nodePath, spec.mainJsPath];
+  if (spec.socketPath !== undefined) quoted.push(spec.socketPath);
+  if (quoted.some((p) => p.includes("'"))) {
     throw new Error(
-      'launcher: nodePath/mainJsPath must not contain single quotes (POSIX shell quoting)',
+      'launcher: nodePath/mainJsPath/socketPath must not contain single quotes (POSIX shell quoting)',
     );
   }
+  const envLines =
+    spec.socketPath !== undefined
+      ? [`PWA_DEBUG_SOCKET='${spec.socketPath}'`, 'export PWA_DEBUG_SOCKET']
+      : [];
   const lines = [
     ...POSIX_HEADER,
+    ...envLines,
     `exec '${spec.nodePath}' '${spec.mainJsPath}' "$@"`,
     '',
   ];
@@ -38,13 +53,20 @@ export const buildPosixLauncher = (spec: LauncherSpec): string => {
 };
 
 export const buildWindowsLauncher = (spec: LauncherSpec): string => {
-  if (spec.nodePath.includes('"') || spec.mainJsPath.includes('"')) {
+  const quoted = [spec.nodePath, spec.mainJsPath];
+  if (spec.socketPath !== undefined) quoted.push(spec.socketPath);
+  if (quoted.some((p) => p.includes('"'))) {
     throw new Error(
-      'launcher: nodePath/mainJsPath must not contain double quotes (Windows .bat quoting)',
+      'launcher: nodePath/mainJsPath/socketPath must not contain double quotes (Windows .bat quoting)',
     );
   }
+  const envLines =
+    spec.socketPath !== undefined
+      ? [`set "PWA_DEBUG_SOCKET=${spec.socketPath}"`]
+      : [];
   const lines = [
     ...WINDOWS_HEADER,
+    ...envLines,
     `"${spec.nodePath}" "${spec.mainJsPath}" %*`,
     '',
   ];

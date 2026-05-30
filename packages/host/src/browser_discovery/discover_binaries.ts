@@ -7,6 +7,7 @@
  * one dispatcher branch; the data lives in binary_table.ts.
  */
 import { join } from 'node:path';
+import { LINUX_FLATPAK } from '../native-messaging/browser_paths.js';
 import {
   LINUX_BINARIES,
   MAC_BINARIES,
@@ -16,7 +17,16 @@ import type {
   DiscoveredBrowser,
   DiscoveryDeps,
   EnvSnapshot,
+  Packaging,
 } from './types.js';
+
+/**
+ * Linux packaging from the resolved exec path: a binary under /snap/ is snap-
+ * confined (different profile root + sandbox); everything else is native.
+ * Flatpak is detected separately (no host binary) and never reaches here.
+ */
+const linuxPackaging = (execPath: string): Packaging =>
+  execPath.includes('/snap/') ? 'snap' : 'native';
 
 /**
  * Linux: prefer a PATH hit (honours the user's real install + snap shims),
@@ -35,6 +45,7 @@ const detectLinuxBinaries = async (
           browser: entry.name,
           execPath,
           source: 'path' as const,
+          packaging: linuxPackaging(execPath),
           isDefault: false,
         });
         break;
@@ -47,6 +58,7 @@ const detectLinuxBinaries = async (
             browser: entry.name,
             execPath: p,
             source: 'standard-path' as const,
+            packaging: linuxPackaging(p),
             isDefault: false,
           });
           break;
@@ -54,6 +66,38 @@ const detectLinuxBinaries = async (
       }
     }
     if (resolved) out.push(resolved);
+  }
+  return Object.freeze(out);
+};
+
+/**
+ * Linux flatpak: surface installed flatpak Chromium-family apps. There is no
+ * host binary to probe (the executable lives inside the flatpak), so we ask
+ * flatpak directly — `flatpak info <app-id>` exits 0 when the app is installed.
+ * Each hit carries source:'flatpak' + the app-id in BOTH execPath (what
+ * `flatpak run` + profile-dir resolution consume) and appId (the explicit
+ * spawn-builder signal). App-id↔browser mapping is reused from LINUX_FLATPAK,
+ * never re-derived. Appended AFTER the PATH/standard pass so a native/snap
+ * install of the same browser is preferred by first-match selection.
+ */
+const detectLinuxFlatpak = async (
+  deps: DiscoveryDeps,
+): Promise<readonly DiscoveredBrowser[]> => {
+  const out: DiscoveredBrowser[] = [];
+  for (const entry of LINUX_FLATPAK) {
+    const { code } = await deps.runCommand('flatpak', ['info', entry.appId]);
+    if (code === 0) {
+      out.push(
+        Object.freeze({
+          browser: entry.name,
+          execPath: entry.appId,
+          source: 'flatpak' as const,
+          packaging: 'flatpak' as const,
+          isDefault: false,
+          appId: entry.appId,
+        }),
+      );
+    }
   }
   return Object.freeze(out);
 };
@@ -70,6 +114,7 @@ const detectDarwinBinaries = async (
           browser: entry.name,
           execPath: entry.execPath,
           source: 'standard-path' as const,
+          packaging: 'native' as const,
           isDefault: false,
         }),
       );
@@ -98,6 +143,7 @@ const detectWin32Binaries = async (
           browser: entry.name,
           execPath,
           source: 'standard-path' as const,
+          packaging: 'native' as const,
           isDefault: false,
         });
         break;
@@ -118,7 +164,11 @@ export const discoverBinaries = async (
   env: EnvSnapshot,
   deps: DiscoveryDeps,
 ): Promise<readonly DiscoveredBrowser[]> => {
-  if (platform === 'linux') return detectLinuxBinaries(deps);
+  if (platform === 'linux') {
+    const native = await detectLinuxBinaries(deps);
+    const flatpak = await detectLinuxFlatpak(deps);
+    return Object.freeze([...native, ...flatpak]);
+  }
   if (platform === 'darwin') return detectDarwinBinaries(deps);
   if (platform === 'win32') return detectWin32Binaries(env, deps);
   return Object.freeze([]);

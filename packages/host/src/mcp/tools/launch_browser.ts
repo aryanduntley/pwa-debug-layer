@@ -8,18 +8,20 @@ import {
 } from '../tool_registry.js';
 import { discoverBrowsers } from '../../browser_discovery/discover.js';
 import { defaultDiscoveryDeps } from '../../browser_discovery/node_deps.js';
-import type { BrowserDiscoveryResult } from '../../browser_discovery/types.js';
+import type {
+  BrowserDiscoveryResult,
+  DiscoveredBrowser,
+  Packaging,
+} from '../../browser_discovery/types.js';
 import { defaultUserDataDir } from '../../browser_launch/profile_dirs.js';
-import {
-  persistentProfileDir,
-} from '../../browser_launch/sandbox_paths.js';
 import { launchExisting } from '../../browser_launch/launch_existing.js';
 import { launchSandbox } from '../../browser_launch/launch_sandbox.js';
+import { snapPackageForBrowser } from '../../native-messaging/snap_host.js';
 import {
   defaultLaunchDeps,
   defaultSandboxDeps,
   getLaunchRegistry,
-  makeTempProfileDir,
+  resolveSandboxProfileDir,
   resolveExtensionPath,
 } from '../../browser_launch/node_deps.js';
 import type {
@@ -41,14 +43,60 @@ const BROWSERS = [
 
 const MODES = ['existing', 'sandbox-persistent', 'sandbox-temp'] as const;
 
+const PACKAGINGS = ['native', 'snap', 'flatpak'] as const;
+
 const inputSchema = {
   browser: z.enum(BROWSERS).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   mode: z.enum(MODES).optional(),
+  packaging: z.enum(PACKAGINGS).optional(),
 };
 
 const isSandboxMode = (mode: string): mode is SandboxMode =>
   mode === 'sandbox-persistent' || mode === 'sandbox-temp';
+
+/** Tiebreak order when several packagings of the requested browser exist and the
+ *  caller did not pin one: prefer a normal system install, then snap, then flatpak. */
+const PACKAGING_PREFERENCE: Record<Packaging, number> = {
+  native: 0,
+  snap: 1,
+  flatpak: 2,
+};
+
+/**
+ * Pure target selection. Resolves the requested (or system-default, or first)
+ * browser NAME, optionally narrows to a requested packaging, and tiebreaks by
+ * PACKAGING_PREFERENCE. Also reports the OTHER packagings of the chosen browser
+ * so the caller can tell the user/AI it could re-target (e.g. snap vs flatpak).
+ */
+const resolveTarget = (
+  discovery: BrowserDiscoveryResult,
+  requested: BrowserName | undefined,
+  packaging: Packaging | undefined,
+): {
+  readonly target: DiscoveredBrowser | undefined;
+  readonly alternatives: readonly Packaging[];
+} => {
+  const name =
+    requested ?? discovery.defaultBrowser ?? discovery.browsers[0]?.browser;
+  const sameBrowser = discovery.browsers.filter((b) => b.browser === name);
+  const filtered = packaging
+    ? sameBrowser.filter((b) => b.packaging === packaging)
+    : sameBrowser;
+  const target = [...filtered].sort(
+    (a, b) => PACKAGING_PREFERENCE[a.packaging] - PACKAGING_PREFERENCE[b.packaging],
+  )[0];
+  const alternatives = target
+    ? [
+        ...new Set(
+          sameBrowser
+            .filter((b) => b.packaging !== target.packaging)
+            .map((b) => b.packaging),
+        ),
+      ]
+    : [];
+  return { target, alternatives };
+};
 
 /**
  * Injected effects for launchBrowserCore so the orchestration (target
@@ -69,10 +117,13 @@ export type LaunchBrowserCoreDeps = {
   /** Default debug port when args.port is omitted (host launch.defaultPort setting). */
   readonly defaultPort: () => number;
   readonly launch: (input: LaunchExistingInput) => Promise<LaunchResult>;
-  /** Sandbox profile dir (persistent deterministic; temp via mkdtemp). */
+  /** Sandbox profile dir (persistent deterministic; temp via mkdtemp). Snap
+   *  browsers route to a snap-common dir (~/.pwa-debug is unreachable in snap
+   *  confinement), so packaging is required to pick the right base. */
   readonly resolveSandboxProfileDir: (
     browser: BrowserName,
     mode: SandboxMode,
+    packaging: Packaging,
     env: NodeJS.ProcessEnv,
   ) => string | null;
   readonly resolveExtensionPath: (env: NodeJS.ProcessEnv) => string | null;
@@ -115,6 +166,48 @@ const nextStepsFor = (result: LaunchResult): string[] => {
 };
 
 /**
+ * Flatpak-only onboarding guidance. A flatpak-sandboxed Chromium needs three
+ * user actions the host cannot perform programmatically: (1) Developer Mode ON
+ * at chrome://extensions, or the --load-extension unpacked extension is disabled
+ * on each start; (2) the extension's debug toggle, since its native-messaging
+ * connection is user-initiated (the MV3 SW only opens the host port on demand);
+ * (3) the host filesystem override so the sandboxed NMH can reach the launcher +
+ * IPC socket. Surfaced as a next_step so the AI relays it verbatim — without it
+ * pwa-debug tools silently report "no connection" on flatpak.
+ */
+const flatpakLaunchGuidance = (browser: string, appId: string): string =>
+  `${browser} is a flatpak app (${appId}). For the pwa-debug extension to load AND connect, the user must: (1) open chrome://extensions and turn ON Developer Mode (top-right) — a flatpak Chromium disables --load-extension unpacked extensions without it; (2) enable the pwa-debug extension's debug toggle — its native connection is user-initiated, so host_status/session_ping show "no connection" until then; (3) ensure \`flatpak override --user --filesystem=host ${appId}\` has been applied so the sandboxed native host can reach the launcher and IPC socket. Relay these three steps to the user.`;
+
+/** Tell the AI/user the chosen browser is also installed under other packagings,
+ *  so they can re-target — e.g. snap was launched but flatpak is available too. */
+const packagingChoiceHint = (
+  target: DiscoveredBrowser,
+  alternatives: readonly Packaging[],
+): string =>
+  `${target.browser} is also installed as: ${alternatives.join(', ')}. Launched the '${target.packaging}' packaging (default preference native > snap > flatpak). To target a different one, re-run pdl_launch_browser with packaging='${alternatives[0]}'.`;
+
+/**
+ * okResponse + selection-aware next_steps: a flatpak onboarding step when the
+ * target is a flatpak app, and a packaging-choice step when the chosen browser
+ * is also installed under other packagings (and none was explicitly requested).
+ */
+const launchOk = (
+  result: LaunchResult,
+  target: DiscoveredBrowser,
+  alternatives: readonly Packaging[],
+  packagingRequested: boolean,
+): ToolResponse => {
+  const steps = nextStepsFor(result);
+  if (target.source === 'flatpak' && target.appId) {
+    steps.push(flatpakLaunchGuidance(target.browser, target.appId));
+  }
+  if (!packagingRequested && alternatives.length > 0) {
+    steps.push(packagingChoiceHint(target, alternatives));
+  }
+  return okResponse(result, steps);
+};
+
+/**
  * Pure-at-edges orchestration core: resolve the target browser (requested or
  * system default), then dispatch on mode — 'existing' attaches/launches the
  * user's profile (graceful triad); sandbox modes spawn a dedicated profile
@@ -138,24 +231,34 @@ export const launchBrowserCore = async (
     ]);
   }
 
-  const target = args.browser
-    ? discovery.browsers.find((b) => b.browser === args.browser)
-    : discovery.defaultBrowser
-      ? discovery.browsers.find((b) => b.browser === discovery.defaultBrowser)
-      : discovery.browsers[0];
+  const { target, alternatives } = resolveTarget(
+    discovery,
+    args.browser,
+    args.packaging,
+  );
 
   if (!target) {
-    const detected = discovery.browsers.map((b) => b.browser).join(', ') || 'none';
-    return errorResponse(
-      args.browser
+    const detected =
+      discovery.browsers
+        .map((b) => `${b.browser}[${b.packaging}]`)
+        .join(', ') || 'none';
+    const msg = args.packaging
+      ? `No '${args.browser ?? 'default'}' browser with packaging '${args.packaging}' found. Detected: ${detected}.`
+      : args.browser
         ? `Requested browser '${args.browser}' is not installed. Detected: ${detected}.`
-        : `No Chromium-family browser detected to launch. Detected: ${detected}.`,
-      ['Install a supported browser or pass an explicit `browser` from the detected list.'],
-    );
+        : `No Chromium-family browser detected to launch. Detected: ${detected}.`;
+    return errorResponse(msg, [
+      'Install a supported browser, or pass an explicit `browser` (and optional `packaging`: native|snap|flatpak) from the detected list.',
+    ]);
   }
 
   if (isSandboxMode(mode)) {
-    const userDataDir = deps.resolveSandboxProfileDir(target.browser, mode, env);
+    const userDataDir = deps.resolveSandboxProfileDir(
+      target.browser,
+      mode,
+      target.packaging,
+      env,
+    );
     if (!userDataDir) {
       return errorResponse(
         `Could not resolve a ${mode} profile dir for ${target.browser} on ${platform}.`,
@@ -171,6 +274,10 @@ export const launchBrowserCore = async (
         ],
       );
     }
+    const snapPkg =
+      target.packaging === 'snap'
+        ? snapPackageForBrowser(target.browser)
+        : null;
     const result = await deps.launchSandbox({
       browser: target.browser,
       execPath: target.execPath,
@@ -178,9 +285,11 @@ export const launchBrowserCore = async (
       userDataDir,
       extensionPath,
       mode,
+      ...(target.appId !== undefined ? { appId: target.appId } : {}),
+      ...(snapPkg ? { snapPackage: snapPkg } : {}),
     });
     deps.recordLaunch(result, port);
-    return okResponse(result, nextStepsFor(result));
+    return launchOk(result, target, alternatives, args.packaging !== undefined);
   }
 
   // mode === 'existing'
@@ -194,7 +303,7 @@ export const launchBrowserCore = async (
     return errorResponse(
       `Could not resolve the default user-data-dir for ${target.browser} on ${platform}.`,
       [
-        'Linux native + snap profiles are handled; flatpak + macOS/Windows live verification is pending. Use sandbox-persistent mode as a workaround.',
+        'Linux native, snap, and flatpak profiles are handled; macOS/Windows live verification is pending. Use sandbox-persistent mode as a workaround.',
       ],
     );
   }
@@ -203,9 +312,10 @@ export const launchBrowserCore = async (
     execPath: target.execPath,
     port,
     userDataDir,
+    ...(target.appId !== undefined ? { appId: target.appId } : {}),
   });
   deps.recordLaunch(result, port);
-  return okResponse(result, nextStepsFor(result));
+  return launchOk(result, target, alternatives, args.packaging !== undefined);
 };
 
 export const launchBrowserHandler = async (
@@ -218,10 +328,7 @@ export const launchBrowserHandler = async (
     resolveUserDataDir: defaultUserDataDir,
     defaultPort: () => ctx.settingsStore.getSetting('launch.defaultPort'),
     launch: (input) => launchExisting(input, defaultLaunchDeps()),
-    resolveSandboxProfileDir: (browser, mode, env) =>
-      mode === 'sandbox-temp'
-        ? makeTempProfileDir()
-        : persistentProfileDir(browser, env),
+    resolveSandboxProfileDir,
     resolveExtensionPath,
     launchSandbox: (input) => launchSandbox(input, defaultSandboxDeps()),
     recordLaunch: (result, port) =>
@@ -240,7 +347,7 @@ export const launchBrowserHandler = async (
 export const launchBrowserTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'pdl_launch_browser',
   description:
-    "Launch or attach to a Chromium-family browser with a live remote-debugging port, for use alongside chrome-devtools-mcp. Modes: mode='existing' (default) targets the user's normal profile and degrades gracefully — (a) port already live → attach; (b) running without a debug port → opens a NEW WINDOW in the existing session (never kills it), attached:false + degradation message; (c) not running → spawns fresh with --remote-debugging-port + --user-data-dir=<your profile>. mode='sandbox-persistent' spawns a dedicated, persistent dev profile at ~/.pwa-debug/profiles/<browser>/ beside your normal browser, with the pwa-debug extension PRELOADED (no reload needed); mode='sandbox-temp' is the same but in a throwaway mkdtemp profile cleaned up on host shutdown. Sandbox modes always work standalone (separate profile → no lock collision) and both pwa-debug + CDP tools are available. Args: browser? (chrome|chromium|edge|brave|vivaldi|opera; defaults to system-default), port? (default 9222), mode?. Linux is first-class; macOS/Windows deferred. Follow next_steps[] — it carries the chrome-devtools-mcp registration snippet, the profile location, or the degradation guidance.",
+    "Launch or attach to a Chromium-family browser with a live remote-debugging port, for use alongside chrome-devtools-mcp. Modes: mode='existing' (default) targets the user's normal profile and degrades gracefully — (a) port already live → attach; (b) running without a debug port → opens a NEW WINDOW in the existing session (never kills it), attached:false + degradation message; (c) not running → spawns fresh with --remote-debugging-port + --user-data-dir=<your profile>. mode='sandbox-persistent' spawns a dedicated, persistent dev profile at ~/.pwa-debug/profiles/<browser>/ beside your normal browser, with the pwa-debug extension PRELOADED (no reload needed); mode='sandbox-temp' is the same but in a throwaway mkdtemp profile cleaned up on host shutdown. Sandbox modes always work standalone (separate profile → no lock collision) and both pwa-debug + CDP tools are available. Args: browser? (chrome|chromium|edge|brave|vivaldi|opera; defaults to system-default), port? (default 9222), mode?, packaging? (native|snap|flatpak). When the same browser is installed under multiple packagings (e.g. snap AND flatpak chromium), pass packaging to pick one; without it the default preference is native > snap > flatpak and next_steps lists the alternatives so you can re-target. Linux is first-class; macOS/Windows deferred. Follow next_steps[] — it carries the chrome-devtools-mcp registration snippet, the profile location, the flatpak onboarding steps, or the degradation guidance.",
   inputSchema,
   handler: launchBrowserHandler,
 });

@@ -18,6 +18,14 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { xdgConfigPath } from '../host_io/host_io.js';
+import { defaultStatePath, loadHostState } from '../state/host_state.js';
+import { defaultLauncherPath } from '../native-messaging/launcher.js';
+import {
+  buildHostManifest,
+  writeHostManifestToDir,
+  HOST_NAME,
+  HOST_DESCRIPTION,
+} from '../native-messaging/manifest_writer.js';
 import {
   TEMP_PROFILE_PREFIX,
   createTempCleanupRegistry,
@@ -33,15 +41,23 @@ import {
 import {
   defaultExtensionCandidates,
   isLoadableExtensionDir,
+  persistentProfileDir,
   pickExtensionPath,
   type SandboxEnv,
 } from './sandbox_paths.js';
+import {
+  snapPackageForBrowser,
+  snapSandboxProfileDir,
+  writeSnapHostFiles,
+} from '../native-messaging/snap_host.js';
 import type {
   BrowserName,
   LaunchDeps,
   LaunchSandboxDeps,
+  SandboxMode,
   SpawnOutcome,
 } from './types.js';
+import type { Packaging } from '../browser_discovery/types.js';
 
 const PROBE_TIMEOUT_MS = 800;
 
@@ -110,6 +126,34 @@ export const makeTempProfileDir = (): string =>
   mkdtempSync(join(tmpdir(), TEMP_PROFILE_PREFIX));
 
 /**
+ * Resolve a sandbox-mode profile dir, packaging-aware. Snap browsers cannot use
+ * ~/.pwa-debug (a hidden dir the snap home interface blocks → the browser exits
+ * instantly), so they route to ~/snap/<pkg>/common: a persistent
+ * pwa-debug-profile dir, or a fresh mkdtemp under common for sandbox-temp. The
+ * snap-common dir already exists (the snap is installed). Native/flatpak keep
+ * the ~/.pwa-debug layout. Returns null when the dir can't be resolved.
+ */
+export const resolveSandboxProfileDir = (
+  browser: BrowserName,
+  mode: SandboxMode,
+  packaging: Packaging,
+  env: SandboxEnv,
+): string | null => {
+  if (packaging === 'snap') {
+    const pkg = snapPackageForBrowser(browser);
+    if (!pkg || !env.HOME) return null;
+    if (mode === 'sandbox-temp') {
+      const common = join(env.HOME, 'snap', pkg, 'common');
+      return mkdtempSync(join(common, TEMP_PROFILE_PREFIX));
+    }
+    return snapSandboxProfileDir(pkg, env);
+  }
+  return mode === 'sandbox-temp'
+    ? makeTempProfileDir()
+    : persistentProfileDir(browser, env);
+};
+
+/**
  * Absolute paths of sandbox-temp profile dirs lingering under os.tmpdir() from
  * a previous run. Graceful shutdown removes its own, so any survivors imply a
  * crash/SIGKILL. Warn-only at boot: mkdtemp names don't identify the owning
@@ -160,12 +204,47 @@ export const resolveExtensionPath = (env: SandboxEnv): string | null =>
     isLoadableExtensionDir(dir, (p) => existsSync(p)),
   );
 
+/**
+ * Confined-browser sandbox manifest writer. Loads the registered extension IDs,
+ * builds the host manifest, and writes it into <userDataDir>/NativeMessagingHosts/
+ * so a flatpak/snap Chromium (which searches the user-data-dir, not the install
+ * location) finds the host. The launcher the manifest points at depends on the
+ * confinement: for SNAP, ensure the snap relay + launcher exist under
+ * ~/snap/<pkg>/common (node is exec-denied + glibc-incompatible there) and point
+ * at that launcher; otherwise (flatpak) point at the canonical node launcher.
+ * No-op when no extension is registered (connectNative would be rejected anyway;
+ * host_register_extension is the prerequisite).
+ */
+const writeSandboxManifestImpl = async (
+  userDataDir: string,
+  snapPackage?: string,
+): Promise<void> => {
+  const state = await loadHostState(defaultStatePath());
+  if (state.extensionIds.length === 0) return;
+  let hostBinaryPath: string;
+  if (snapPackage !== undefined) {
+    const snap = await writeSnapHostFiles(snapPackage, process.env);
+    if (!snap) return;
+    hostBinaryPath = snap.launcherPath;
+  } else {
+    hostBinaryPath = defaultLauncherPath(process.platform, process.env);
+  }
+  const manifest = buildHostManifest({
+    name: HOST_NAME,
+    description: HOST_DESCRIPTION,
+    hostBinaryPath,
+    allowedExtensionIds: state.extensionIds,
+  });
+  await writeHostManifestToDir(manifest, join(userDataDir, 'NativeMessagingHosts'));
+};
+
 /** Production LaunchSandboxDeps: probe + spawn reused, temp dirs auto-tracked. */
 export const defaultSandboxDeps = (): LaunchSandboxDeps =>
   Object.freeze({
     probeDebugPort: probeDebugPortImpl,
     spawnBrowser: spawnBrowserImpl,
     registerTempProfile: (dir: string) => getTempRegistry().register(dir),
+    writeSandboxManifest: writeSandboxManifestImpl,
   });
 
 // Lazy module-singleton launch registry, persisted to launches.json beside the

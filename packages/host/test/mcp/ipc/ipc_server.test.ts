@@ -96,6 +96,36 @@ describe('createIpcServer', () => {
     client.socket.destroy();
   });
 
+  it('binds extra socket paths and funnels them into the same connection map', async () => {
+    const extra = join(tmp, 'snap-mcp.sock');
+    const registered: string[] = [];
+    server = await createIpcServer({
+      socketPath,
+      extraSocketPaths: [extra],
+      onRegister: (info) => registered.push(info.extensionId),
+    });
+    // both listeners bound their socket file
+    expect((await stat(socketPath)).isSocket()).toBe(true);
+    expect((await stat(extra)).isSocket()).toBe(true);
+    // a client connecting via the EXTRA (snap-common) socket registers normally
+    const client = await connectAndRegister(extra, 'ext-snap');
+    await waitFor(() => registered.length === 1);
+    expect(server.listConnections().map((c) => c.extensionId)).toEqual([
+      'ext-snap',
+    ]);
+    // and the host can address it — proving it's in the shared connection map
+    expect(server.sendTo('ext-snap', { type: 'event', tool: 'x' }).ok).toBe(true);
+    client.socket.destroy();
+  });
+
+  it('unlinks every socket path (canonical + extra) on close', async () => {
+    const extra = join(tmp, 'snap-mcp.sock');
+    const s = await createIpcServer({ socketPath, extraSocketPaths: [extra] });
+    await s.close();
+    await expect(stat(socketPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(extra)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('sendTo returns ok:false for unknown extensionId', async () => {
     server = await createIpcServer({ socketPath });
     const result = server.sendTo('nope', { type: 'event' });

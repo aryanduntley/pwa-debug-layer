@@ -24,6 +24,9 @@ export type BrowserInstall =
       readonly kind: 'native' | 'snap' | 'flatpak';
       readonly manifestDir: string;
       readonly caveat?: string;
+      /** snap package name (e.g. 'chromium'); present only on kind === 'snap',
+       *  so the install path can locate ~/snap/<pkg>/common for the relay host. */
+      readonly snapPackage?: string;
     }
   | {
       readonly browser: BrowserName;
@@ -62,7 +65,7 @@ type LinuxSnapEntry = {
   readonly configRelative: readonly string[];
 };
 
-const LINUX_SNAP: readonly LinuxSnapEntry[] = Object.freeze([
+export const LINUX_SNAP: readonly LinuxSnapEntry[] = Object.freeze([
   {
     name: 'chromium',
     snapPackage: 'chromium',
@@ -75,13 +78,20 @@ const LINUX_SNAP: readonly LinuxSnapEntry[] = Object.freeze([
   },
 ]);
 
-type LinuxFlatpakEntry = {
+export type LinuxFlatpakEntry = {
   readonly name: BrowserName;
   readonly appId: string;
   readonly configSegments: readonly string[];
 };
 
-const LINUX_FLATPAK: readonly LinuxFlatpakEntry[] = Object.freeze([
+/**
+ * Flatpak Chromium-family app-ids + their config segment under
+ * ~/.var/app/<appId>/config/. Single source of truth for everything flatpak:
+ * the NMH install path (detectLinux below), launch-side discovery
+ * (browser_discovery), and profile-dir resolution (browser_launch/profile_dirs)
+ * all read this table rather than re-deriving the app-id↔segment mapping.
+ */
+export const LINUX_FLATPAK: readonly LinuxFlatpakEntry[] = Object.freeze([
   {
     name: 'chromium',
     appId: 'org.chromium.Chromium',
@@ -214,6 +224,7 @@ const detectLinux = async (
             kind: 'snap' as const,
             manifestDir: join(profile, NMH_DIR),
             caveat: SNAP_CAVEAT,
+            snapPackage: b.snapPackage,
           }),
         );
       }

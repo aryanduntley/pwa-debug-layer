@@ -82,13 +82,30 @@ const chrome = Object.freeze({
   browser: 'chrome' as const,
   execPath: '/usr/bin/google-chrome',
   source: 'path' as const,
+  packaging: 'native' as const,
   isDefault: true,
 });
 const brave = Object.freeze({
   browser: 'brave' as const,
   execPath: '/usr/bin/brave-browser',
   source: 'path' as const,
+  packaging: 'native' as const,
   isDefault: false,
+});
+const chromiumSnap = Object.freeze({
+  browser: 'chromium' as const,
+  execPath: '/snap/bin/chromium',
+  source: 'standard-path' as const,
+  packaging: 'snap' as const,
+  isDefault: false,
+});
+const chromiumFlatpak = Object.freeze({
+  browser: 'chromium' as const,
+  execPath: 'org.chromium.Chromium',
+  source: 'flatpak' as const,
+  packaging: 'flatpak' as const,
+  isDefault: false,
+  appId: 'org.chromium.Chromium',
 });
 
 describe('launchBrowserCore', () => {
@@ -174,6 +191,87 @@ describe('launchBrowserCore', () => {
     const res = await launchBrowserCore({}, 'linux', {}, deps);
     expect(res.next_steps[0]).toContain('claude mcp add chrome-devtools');
     expect(res.next_steps[0]).toContain('http://127.0.0.1:9222');
+  });
+
+  it('threads the flatpak app-id into the launch input + appends flatpak guidance', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chromiumFlatpak], 'chromium'),
+      userDataDir: '/h/.var/app/org.chromium.Chromium/config/chromium',
+    });
+    const res = await launchBrowserCore(
+      { browser: 'chromium' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(res.ok).toBe(true);
+    expect(deps.launched[0]).toMatchObject({
+      browser: 'chromium',
+      execPath: 'org.chromium.Chromium',
+      appId: 'org.chromium.Chromium',
+    });
+    const steps = res.next_steps.join(' ');
+    expect(steps).toContain('Developer Mode');
+    expect(steps).toContain('debug toggle');
+    expect(steps).toContain('--filesystem=host org.chromium.Chromium');
+  });
+
+  it('does NOT append flatpak guidance for a native browser', async () => {
+    const deps = makeDeps({ discovery: discovery([chrome], 'chrome') });
+    const res = await launchBrowserCore({}, 'linux', {}, deps);
+    expect(res.next_steps.join(' ')).not.toContain('Developer Mode');
+  });
+
+  it('with snap+flatpak both present and no packaging: picks snap, lists flatpak as an alternative', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chromiumSnap, chromiumFlatpak], 'chromium'),
+    });
+    const res = await launchBrowserCore(
+      { browser: 'chromium' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(deps.launched[0]?.execPath).toBe('/snap/bin/chromium'); // snap preferred over flatpak
+    const steps = res.next_steps.join(' ');
+    expect(steps).toContain('also installed as: flatpak');
+    expect(steps).toContain("packaging='flatpak'");
+  });
+
+  it('packaging=flatpak targets the flatpak app even when snap is also present', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chromiumSnap, chromiumFlatpak], 'chromium'),
+      userDataDir: '/h/.var/app/org.chromium.Chromium/config/chromium',
+    });
+    const res = await launchBrowserCore(
+      { browser: 'chromium', packaging: 'flatpak' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(deps.launched[0]).toMatchObject({
+      browser: 'chromium',
+      execPath: 'org.chromium.Chromium',
+      appId: 'org.chromium.Chromium',
+    });
+    // packaging explicitly requested → no "also installed as" choice hint.
+    expect(res.next_steps.join(' ')).not.toContain('also installed as');
+    expect(res.next_steps.join(' ')).toContain('Developer Mode'); // flatpak guidance still present
+  });
+
+  it('errors when the requested packaging is not installed', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chromiumSnap], 'chromium'),
+    });
+    const res = await launchBrowserCore(
+      { browser: 'chromium', packaging: 'flatpak' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("packaging 'flatpak'");
+    expect(deps.launched).toHaveLength(0);
   });
 
   it('returns a discovery-failure error when discover throws', async () => {

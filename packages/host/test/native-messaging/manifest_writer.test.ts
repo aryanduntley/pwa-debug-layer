@@ -6,6 +6,7 @@ import {
   buildHostManifest,
   installManifestForBrowsers,
   uninstallManifestForBrowsers,
+  writeHostManifestToDir,
 } from '../../src/native-messaging/manifest_writer.js';
 import type { BrowserInstall } from '../../src/native-messaging/browser_paths.js';
 import type { RegistryGateway } from '../../src/native-messaging/registry_writer.js';
@@ -283,5 +284,26 @@ describe('uninstallManifestForBrowsers', () => {
       'Software\\Google\\Chrome\\NativeMessagingHosts\\com.pwa_debug.host',
     );
     await expect(stat(jsonPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('writeHostManifestToDir', () => {
+  it('writes <dir>/<name>.json (creating the dir) and returns the path', async () => {
+    const manifest = buildHostManifest({
+      name: 'com.pwa_debug.host',
+      description: 'PWA Debug Layer native messaging host',
+      hostBinaryPath: '/home/u/.config/pwa-debug/bin/pwa-debug-host',
+      allowedExtensionIds: ['hbfmkcdpaobbhkknplcbihmfcicfcbod'],
+    });
+    const profileNmhDir = join(dir, 'profiles', 'chromium', 'NativeMessagingHosts');
+    const written = await writeHostManifestToDir(manifest, profileNmhDir);
+    expect(written).toBe(join(profileNmhDir, 'com.pwa_debug.host.json'));
+    const body = JSON.parse(await readFile(written, 'utf-8'));
+    expect(body).toMatchObject({
+      name: 'com.pwa_debug.host',
+      type: 'stdio',
+      path: '/home/u/.config/pwa-debug/bin/pwa-debug-host',
+      allowed_origins: ['chrome-extension://hbfmkcdpaobbhkknplcbihmfcicfcbod/'],
+    });
   });
 });

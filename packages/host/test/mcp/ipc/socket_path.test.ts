@@ -34,6 +34,33 @@ describe('defaultSocketPath — POSIX', () => {
   });
 });
 
+describe('defaultSocketPath — PWA_DEBUG_SOCKET override', () => {
+  it('wins over XDG resolution on POSIX (confinement-stable)', () => {
+    expect(
+      defaultSocketPath(
+        {
+          PWA_DEBUG_SOCKET: '/home/u/.config/pwa-debug/run/mcp.sock',
+          XDG_CONFIG_HOME: '/var/app/org.chromium.Chromium/config',
+          HOME: '/var/app/org.chromium.Chromium',
+        },
+        'linux',
+      ),
+    ).toBe('/home/u/.config/pwa-debug/run/mcp.sock');
+  });
+
+  it('wins over the named pipe on win32', () => {
+    expect(
+      defaultSocketPath({ PWA_DEBUG_SOCKET: '\\\\.\\pipe\\custom' }, 'win32'),
+    ).toBe('\\\\.\\pipe\\custom');
+  });
+
+  it('treats empty PWA_DEBUG_SOCKET as unset (falls back to XDG)', () => {
+    expect(
+      defaultSocketPath({ PWA_DEBUG_SOCKET: '', HOME: '/h' }, 'linux'),
+    ).toBe('/h/.config/pwa-debug/run/mcp.sock');
+  });
+});
+
 describe('defaultSocketPath — Windows', () => {
   it('returns the named-pipe path regardless of env', () => {
     expect(defaultSocketPath({}, 'win32')).toBe('\\\\.\\pipe\\pwa-debug-mcp');

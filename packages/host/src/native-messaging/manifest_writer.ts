@@ -27,6 +27,11 @@ export type ManifestInstallOptions = {
   readonly registry?: RegistryGateway;
 };
 
+/** Canonical native-messaging-host identity, shared by the install tool and the
+ *  flatpak sandbox-launch manifest writer so the name/description live once. */
+export const HOST_NAME = 'com.pwa_debug.host';
+export const HOST_DESCRIPTION = 'PWA Debug Layer native messaging host';
+
 const extensionIdToOrigin = (id: string): string => `chrome-extension://${id}/`;
 
 export const buildHostManifest = (input: {
@@ -51,6 +56,24 @@ export const buildHostManifest = (input: {
 };
 
 const manifestFilename = (manifestName: string): string => `${manifestName}.json`;
+
+/**
+ * Write a single host manifest into `<dir>/<name>.json` atomically and return
+ * the written path. The flatpak sandbox launch (3a) uses this: a flatpak
+ * Chromium spawned with a custom --user-data-dir searches
+ * `<user-data-dir>/NativeMessagingHosts/` for the host manifest (not the
+ * install location), so the launch flow drops a copy there pointing at the
+ * install-time launcher. Reuses the same atomic temp-then-rename as the
+ * per-browser install path.
+ */
+export const writeHostManifestToDir = async (
+  manifest: HostManifestJson,
+  dir: string,
+): Promise<string> => {
+  const path = join(dir, manifestFilename(manifest.name));
+  await writeAtomic(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  return path;
+};
 
 const writeAtomic = async (path: string, body: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });

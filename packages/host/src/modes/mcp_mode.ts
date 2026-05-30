@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -10,6 +10,7 @@ import { TOOLS } from '../mcp/tools/index.js';
 import { createIpcServer, type IpcServer } from '../mcp/ipc/ipc_server.js';
 import type { IpcEventEnvelope } from '../mcp/ipc/envelope.js';
 import { defaultSocketPath, socketParentDir } from '../mcp/ipc/socket_path.js';
+import { installedSnapSocketTargets } from '../native-messaging/snap_host.js';
 import {
   createCapturesRegistry,
   dispatchCapturesEvent,
@@ -83,6 +84,24 @@ export const runMcpMode = async (): Promise<void> => {
     await mkdir(parentDir, { recursive: true });
   }
 
+  // Snap confinement: a snap-spawned relay can only connect() to a socket under
+  // ~/snap/<pkg>/common/, so bind one extra socket per installed snap browser
+  // (in addition to the canonical socket above). Their parent dirs must exist
+  // before listen(). No-op when no snap browser is installed.
+  const pathExists = async (p: string): Promise<boolean> => {
+    try {
+      await access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const snapTargets = await installedSnapSocketTargets(process.env, pathExists);
+  const extraSocketPaths = snapTargets.map((t) => t.socketPath);
+  for (const p of extraSocketPaths) {
+    await mkdir(dirname(p), { recursive: true });
+  }
+
   const hostVersion = await readHostVersion();
   const settingsStore = createSettingsStore();
   await settingsStore.init();
@@ -130,6 +149,7 @@ export const runMcpMode = async (): Promise<void> => {
   let ipcServerRef: IpcServer | null = null;
   const ipcServer = await createIpcServer({
     socketPath,
+    extraSocketPaths,
     onRegister: (info) => {
       ipcServerRef?.sendTo(info.extensionId, snapshotEvent(settingsStore));
     },
@@ -162,7 +182,7 @@ export const runMcpMode = async (): Promise<void> => {
     await server.connect(transport);
 
     stderr.write(
-      `[pwa-debug-host mcp] server up on stdio; ${TOOLS.length} tools registered; ipc socket=${socketPath}\n`,
+      `[pwa-debug-host mcp] server up on stdio; ${TOOLS.length} tools registered; ipc socket=${socketPath}${extraSocketPaths.length > 0 ? ` (+${extraSocketPaths.length} snap socket(s): ${extraSocketPaths.join(', ')})` : ''}\n`,
     );
 
     const reason = await waitForShutdown();

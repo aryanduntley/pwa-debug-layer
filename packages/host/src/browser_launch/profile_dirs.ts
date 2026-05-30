@@ -6,11 +6,11 @@
  * first-class; macOS / Windows rows are present but unverified on a real
  * machine (see task 82). Linux SNAP confinement is handled: a snap browser
  * (execPath under /snap/) stores its profile at ~/snap/<snap>/common/<cfg>,
- * NOT ~/.config, so the native path would be wrong. Flatpak remains deferred —
- * flatpak browsers aren't surfaced by discovery and need `flatpak run` launch
- * support, a separate feature (see task 81 deferred note). Resolver returns
- * null when it cannot resolve, so the orchestrator can degrade with a clear
- * message rather than spawn against the wrong profile.
+ * NOT ~/.config, so the native path would be wrong. Linux FLATPAK is handled
+ * too: a flatpak browser (execPath is the slash-free app-id) stores its profile
+ * at ~/.var/app/<app-id>/config/<cfg>, resolved against the shared LINUX_FLATPAK
+ * table. Resolver returns null when it cannot resolve, so the orchestrator can
+ * degrade with a clear message rather than spawn against the wrong profile.
  *
  * NOTE: the Linux segment data overlaps native-messaging/browser_paths
  * LINUX_NATIVE (both describe ~/.config/<browser>). A future consolidation
@@ -18,7 +18,10 @@
  * refactoring the NMH-install path. See evolution note.
  */
 import { join } from 'node:path';
-import type { BrowserName } from '../native-messaging/browser_paths.js';
+import {
+  LINUX_FLATPAK,
+  type BrowserName,
+} from '../native-messaging/browser_paths.js';
 
 export type ProfileDirEnv = {
   readonly HOME?: string;
@@ -82,6 +85,16 @@ const rowFor = (
 const isSnapExec = (execPath: string | undefined): boolean =>
   execPath !== undefined && execPath.includes('/snap/');
 
+/**
+ * True when `execPath` is actually a flatpak app-id rather than a real binary
+ * path. Discovery sets execPath to the app-id for flatpak browsers; app-ids are
+ * reverse-DNS (e.g. org.chromium.Chromium) and never contain a path separator,
+ * so a non-empty, slash-free value is a flatpak app-id. A real exec path always
+ * contains '/'.
+ */
+const isFlatpakExec = (execPath: string | undefined): boolean =>
+  execPath !== undefined && execPath.length > 0 && !execPath.includes('/');
+
 /** snap confined profile dir, or null when HOME is missing / browser unknown. */
 const snapProfileDir = (
   browser: BrowserName,
@@ -90,6 +103,22 @@ const snapProfileDir = (
   const row = SNAP_PROFILE_DIRS.find((r) => r.name === browser);
   return row && env.HOME
     ? join(env.HOME, 'snap', row.snap, 'common', ...row.segments)
+    : null;
+};
+
+/**
+ * Flatpak profile dir: ~/.var/app/<app-id>/config/<configSegments>. Resolved by
+ * app-id (the flatpak execPath) against LINUX_FLATPAK — the same table the NMH
+ * install path and launch-side discovery use, so the app-id↔segment mapping
+ * lives in exactly one place. Null when HOME is missing or the app-id is unknown.
+ */
+const flatpakProfileDir = (
+  appId: string,
+  env: ProfileDirEnv,
+): string | null => {
+  const row = LINUX_FLATPAK.find((r) => r.appId === appId);
+  return row && env.HOME
+    ? join(env.HOME, '.var', 'app', row.appId, 'config', ...row.configSegments)
     : null;
 };
 
@@ -116,6 +145,7 @@ export const defaultUserDataDir = (
 ): string | null => {
   if (platform === 'linux') {
     if (isSnapExec(execPath)) return snapProfileDir(browser, env);
+    if (isFlatpakExec(execPath)) return flatpakProfileDir(execPath as string, env);
     const row = rowFor(LINUX_PROFILE_DIRS, browser);
     const root = linuxConfigRoot(env);
     return row && root ? join(root, ...row.segments) : null;

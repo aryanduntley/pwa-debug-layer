@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 export type SocketEnvSnapshot = {
   readonly HOME?: string;
   readonly XDG_CONFIG_HOME?: string;
+  readonly PWA_DEBUG_SOCKET?: string;
 };
 
 const PIPE_NAME = 'pwa-debug-mcp';
@@ -23,6 +24,16 @@ export const defaultSocketPath = (
   env: SocketEnvSnapshot = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string => {
+  // Confinement-stable override. Baked into the NMH launcher at install time
+  // with the host's REAL (unconfined) socket path. snap/flatpak remap
+  // XDG_CONFIG_HOME/HOME inside the sandbox, so an NMH that re-derived the
+  // socket from XDG would target a confined path the MCP host never listens on
+  // ('Native host has exited'). When this is set it wins, so the sandboxed NMH
+  // connects to the exact socket the host owns. Unset on native installs ->
+  // the XDG resolution below applies unchanged.
+  if (env.PWA_DEBUG_SOCKET && env.PWA_DEBUG_SOCKET.length > 0) {
+    return env.PWA_DEBUG_SOCKET;
+  }
   if (platform === 'win32') return `\\\\.\\pipe\\${PIPE_NAME}`;
   return join(posixRunRoot(env), 'mcp.sock');
 };
