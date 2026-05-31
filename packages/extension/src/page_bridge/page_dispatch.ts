@@ -18,6 +18,8 @@ import {
 } from '../react/serialize_component.js';
 import { findByText, type FindByTextResult } from '../react/find_by_text.js';
 import { findByRole, type FindByRoleResult } from '../react/find_by_role.js';
+import { runAction, readActionInput } from '../interaction_locator/action_dispatch.js';
+import { ACTION_TOOL_SPECS } from '@pwa-debug/shared';
 import {
   serializeVueTree,
   type VueTreeOptions,
@@ -1383,7 +1385,25 @@ export const sessionRecordHandler = (
   return Object.freeze(out);
 };
 
+// Path 7 interaction action tools (pdl_*): one handler per ACTION_TOOL_SPECS
+// entry, each bound to its action kind — resolve the locator, apply the action.
+const actionPageHandlers: Readonly<Record<string, PageWorldHandler>> = Object.freeze(
+  Object.fromEntries(
+    ACTION_TOOL_SPECS.map((s) => [
+      s.tool,
+      (env: PageBridgeRequestEnvelope) => {
+        const input = readActionInput(env.payload);
+        if (input === null) {
+          return { error: { message: `${s.tool}: payload must include a locator` } };
+        }
+        return runAction(document, s.action, input.locator, input.params);
+      },
+    ]),
+  ),
+);
+
 const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
+  ...actionPageHandlers,
   session_ping: () => sessionPingHandler(),
   evaluate: (env) => evaluateHandler(env),
   react_tree: (env) => reactTreeHandler(env),

@@ -164,7 +164,26 @@ const installCaptures = (
   return { dispose, kinds };
 };
 
+const INSTALL_GUARD = '__pwaDebugPageWorldInstalled';
+
 export const bootstrap = (): void => {
+  // Idempotency guard. page-world.js can run more than once in the same MAIN
+  // world: the manifest injects it at document_start, and the SW self-heal
+  // (sw_health_probe) re-injects it via chrome.scripting.executeScript. After an
+  // extension reload the original page-world is orphaned but STILL running (a
+  // MAIN-world 'message' listener survives reload — there is no navigation), so
+  // a second bootstrap would register a DUPLICATE bridge listener and capture
+  // set. Two bridge listeners dispatch every cs->page request twice, making
+  // every mutating pdl_* action (click/fill/check/...) run twice. The flag lives
+  // on `window` and persists across the reload, so the re-injection no-ops here
+  // and the (orphaned-but-functional) original listener stays the sole handler.
+  const w = window as unknown as Record<string, unknown>;
+  if (w[INSTALL_GUARD]) return;
+  Object.defineProperty(window, INSTALL_GUARD, {
+    value: true,
+    configurable: true,
+  });
+
   // Redux store capture is PASSIVE now — read-only react-redux fiber-context
   // discovery (see stores/redux/discover). We no longer impersonate
   // __REDUX_DEVTOOLS_EXTENSION_COMPOSE__, which used to break RTK apps by

@@ -3,24 +3,10 @@
 
   flatpak uninstall --unused   
 ===
+Two findings recorded
 
- Milestone 48 (Path 9): pwa-debug Claude Code 
-  plugin packaging — .claude-plugin/plugin.json
-  (bundled mcpServers host entry), bundle the
-  existing
-  skills/chrome-devtools-coexistence/SKILL.md, decide
-  whether to also declare chrome-devtools as a
-  plugin mcpServer, + marketplace wiring. Exit:
-  install as a plugin, /reload-plugins, MCP + skill
-  live with no restart.
 
-  Completing M48 finishes Path 9 (Public Release) —
-  every other path-9 milestone is done.
-
-  Beyond that, two paths are still marked pending but
-  have no milestones decomposed yet (no committed
-  work):
-  - Path 7 — Interaction Helpers: framework-aware
-  action tools (react synthetic-event click,
-  find-and-act by component/role, form-submit). Core
-  filtering + source-maps already shipped.
+  2. Vue live-verify deferred — React (the exit criterion) is green; the locator/action core is
+  framework-agnostic so vue/svelte/solid role/text/selector behave identically (only stableId
+  differs), and the vue finders are unit-tested. A headed vue round-trip should still be run to
+  fully close the all-framework claim.

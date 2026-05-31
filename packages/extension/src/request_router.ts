@@ -10,6 +10,7 @@ import type {
   GetRecentResult,
 } from './sw_event_sink/sw_event_sink.js';
 import type { PageWorldErrorCode } from './sw_health_probe/sw_health_probe.js';
+import { ACTION_TOOL_SPECS } from '@pwa-debug/shared';
 
 export type SwRequestEnvelope = {
   readonly type: 'request';
@@ -1149,7 +1150,46 @@ const handleSessionRecord: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// --- Path 7 interaction action tools (pdl_*) ---------------------------------
+// One generic handler per ACTION_TOOL_SPECS entry: extract tab_id for routing,
+// forward the locator + params payload to the page-world unchanged.
+
+const sanitizeActionInput = (
+  raw: unknown,
+): { tabId?: number; payload: Record<string, unknown> } | null => {
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const tabId =
+    typeof r['tab_id'] === 'number' && Number.isFinite(r['tab_id'])
+      ? (r['tab_id'] as number)
+      : undefined;
+  const payload: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (k !== 'tab_id' && k !== 'extension_id' && v !== undefined) payload[k] = v;
+  }
+  return tabId !== undefined ? { tabId, payload } : { payload };
+};
+
+const makeActionRequestHandler = (tool: string): RequestHandler => async (env) => {
+  const sanitized = sanitizeActionInput(env.payload);
+  if (sanitized === null) {
+    throw new Error(`${tool}: payload must be an object carrying a locator`);
+  }
+  const csReq = { tool, payload: sanitized.payload };
+  const response =
+    sanitized.tabId !== undefined
+      ? await dispatchToTab(sanitized.tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+const actionRequestHandlers: Readonly<Record<string, RequestHandler>> = Object.freeze(
+  Object.fromEntries(ACTION_TOOL_SPECS.map((s) => [s.tool, makeActionRequestHandler(s.tool)])),
+);
+
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
+  ...actionRequestHandlers,
   session_ping: handleSessionPing,
   recent_events: handleRecentEvents,
   evaluate: handleEvaluate,

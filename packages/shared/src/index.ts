@@ -97,3 +97,11 @@ export {
   validateSettingValue,
   defaultSettings,
 } from './types/settings_schema.js';
+
+export type {
+  ActionParamType,
+  ActionParamDef,
+  ActionToolSpec,
+} from './types/interaction_actions.js';
+
+export { ACTION_TOOL_SPECS } from './types/interaction_actions.js';
