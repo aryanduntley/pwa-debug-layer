@@ -27,6 +27,10 @@ npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
 
+# Local MCP server registration — machine-specific (e.g. chrome-devtools-mcp's
+# --browserUrl debug port). Each user/machine pins their own; not shared.
+.mcp.json
+
 # Local state databases (AIMFP project + user prefs, runtime state)
 *.db
 *.db-journal
