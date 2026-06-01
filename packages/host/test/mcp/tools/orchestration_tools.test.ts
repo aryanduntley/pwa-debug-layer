@@ -307,6 +307,64 @@ describe('checkSetupCore', () => {
     expect(data.gaps.join(' ')).toContain('not registered');
     expect(data.recommendations.join(' ')).toContain('host_register_extension bundled');
   });
+
+  it('flags an active sandbox profile missing its per-profile NMH manifest (FINDING #3)', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        // install-location manifest present, but the sandbox profile dir's is not
+        manifestExists: async (p: string) =>
+          !p.includes('/h/.pwa-debug/profiles/'),
+        listManagedPorts: () => [
+          {
+            port: 9222,
+            sandbox: true,
+            userDataDir: '/h/.pwa-debug/profiles/chrome',
+          },
+        ],
+        fetchLoadedExtensionIds: async () => ['abc'],
+      }),
+    );
+    const data = res.data as {
+      ok: boolean;
+      gaps: string[];
+      recommendations: string[];
+      detail: {
+        sandboxProfileManifests: readonly {
+          userDataDir: string;
+          port: number;
+          ok: boolean;
+        }[];
+      };
+    };
+    expect(data.ok).toBe(false);
+    expect(data.gaps.join(' ')).toContain('lack the native messaging host manifest');
+    expect(data.gaps.join(' ')).toContain(
+      '/h/.pwa-debug/profiles/chrome (port 9222)',
+    );
+    expect(data.recommendations.join(' ')).toContain('pdl_launch_browser');
+    expect(data.detail.sandboxProfileManifests).toEqual([
+      { userDataDir: '/h/.pwa-debug/profiles/chrome', port: 9222, ok: false },
+    ]);
+  });
+
+  it('does not flag a sandbox profile whose per-profile manifest is present', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        manifestExists: async () => true,
+        listManagedPorts: () => [
+          {
+            port: 9222,
+            sandbox: true,
+            userDataDir: '/h/.pwa-debug/profiles/chrome',
+          },
+        ],
+        fetchLoadedExtensionIds: async () => ['abc'],
+      }),
+    );
+    const data = res.data as { ok: boolean; gaps: string[] };
+    expect(data.ok).toBe(true);
+    expect(data.gaps).toEqual([]);
+  });
 });
 
 describe('registerChromeDevtoolsCore', () => {

@@ -12,6 +12,7 @@
  * from native_messaging — one browser vocabulary, never redefined.
  */
 import type { BrowserName } from '../native-messaging/browser_paths.js';
+import type { ExtensionLoadStrategy } from './extension_load.js';
 
 export type { BrowserName };
 
@@ -94,6 +95,13 @@ export type LaunchSandboxInput = {
   readonly userDataDir: string;
   /** Unpacked extension dir passed to --load-extension / --disable-extensions-except. */
   readonly extensionPath: string;
+  /**
+   * How to provision the extension for THIS browser (resolved from its
+   * brand+version): 'load-flag' / 'load-flag-escape-hatch' use --load-extension;
+   * 'manual-guided' (branded Google Chrome >=142) omits it and the launch
+   * returns a degradation steering the user to a manual Load-unpack.
+   */
+  readonly loadStrategy: ExtensionLoadStrategy;
   readonly mode: SandboxMode;
   /** Flatpak app-id when the target is a flatpak browser (see LaunchExistingInput.appId). */
   readonly appId?: string;
@@ -117,14 +125,13 @@ export type LaunchSandboxDeps = Pick<
 > & {
   readonly registerTempProfile: (dir: string) => void;
   /**
-   * Confined-browser only: write the NMH manifest into
-   * `<userDataDir>/NativeMessagingHosts/` before spawn, because a flatpak/snap
-   * Chromium launched with a custom --user-data-dir searches THAT dir (not the
-   * install location). When snapPackage is given the manifest points at the
-   * SNAP relay launcher (and ensures the relay files exist); otherwise (flatpak)
-   * it points at the canonical node launcher. Native finds the manifest at the
-   * default config location, so the launch flow only invokes this for
-   * flatpak (appId) or snap (snapPackage).
+   * Write the NMH manifest into `<userDataDir>/NativeMessagingHosts/` before
+   * spawn. EVERY sandbox launch needs this — any Chromium with a custom
+   * --user-data-dir (native, flatpak, or snap) searches that dir for the host
+   * manifest, not the install location (FINDING #3: a native sandbox does NOT
+   * inherit the default profile's manifest). When snapPackage is given the
+   * manifest points at the SNAP relay launcher (and ensures the relay files
+   * exist); otherwise (native/flatpak) it points at the canonical node launcher.
    */
   readonly writeSandboxManifest: (
     userDataDir: string,

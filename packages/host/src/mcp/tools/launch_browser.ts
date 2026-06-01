@@ -23,7 +23,12 @@ import {
   getLaunchRegistry,
   resolveSandboxProfileDir,
   resolveExtensionPath,
+  readTargetBrowserVersion,
 } from '../../browser_launch/node_deps.js';
+import {
+  extensionLoadStrategy,
+  type BrowserVersion,
+} from '../../browser_launch/extension_load.js';
 import type {
   BrowserName,
   LaunchExistingInput,
@@ -127,6 +132,12 @@ export type LaunchBrowserCoreDeps = {
     env: NodeJS.ProcessEnv,
   ) => string | null;
   readonly resolveExtensionPath: (env: NodeJS.ProcessEnv) => string | null;
+  /** Read the target's brand+version so the extension-load strategy can branch
+   *  (branded Google Chrome >=142 can't preload via --load-extension). null when
+   *  the version can't be read → caller falls back to the optimistic flag path. */
+  readonly readVersion: (
+    target: DiscoveredBrowser,
+  ) => Promise<BrowserVersion | null>;
   readonly launchSandbox: (input: LaunchSandboxInput) => Promise<LaunchResult>;
   /** Record a successful launch (for pdl_browser_status). */
   readonly recordLaunch: (result: LaunchResult, port: number) => void;
@@ -147,8 +158,17 @@ const nextStepsFor = (result: LaunchResult): string[] => {
       `Spawned ${result.browser} (pid ${result.pid ?? 'unknown'}) with the debug port live at ${result.browserUrl}. ${cdpHint(result.browserUrl as string)}`,
     ];
     if (sandbox) {
+      const lifetime =
+        result.profileType === 'sandbox-temp'
+          ? ' This temp profile is removed on host shutdown.'
+          : ' This profile persists across host restarts.';
+      // When the launch degraded (manual-guided: branded Chrome >=142 couldn't
+      // preload the extension), don't claim it's preloaded — the detailed manual
+      // Load-unpack guidance is appended separately by launchOk.
       steps.push(
-        `${result.profileType} profile at ${result.userDataDir} with the pwa-debug extension preloaded — no chrome://extensions reload needed.${result.profileType === 'sandbox-temp' ? ' This temp profile is removed on host shutdown.' : ' This profile persists across host restarts.'}`,
+        result.degradation
+          ? `${result.profileType} profile at ${result.userDataDir}.${lifetime} ${result.degradation}`
+          : `${result.profileType} profile at ${result.userDataDir} with the pwa-debug extension preloaded — no chrome://extensions reload needed.${lifetime}`,
       );
     } else {
       steps.push(
@@ -178,6 +198,21 @@ const nextStepsFor = (result: LaunchResult): string[] => {
 const flatpakLaunchGuidance = (browser: string, appId: string): string =>
   `${browser} is a flatpak app (${appId}). For the pwa-debug extension to load AND connect, the user must: (1) open chrome://extensions and turn ON Developer Mode (top-right) — a flatpak Chromium disables --load-extension unpacked extensions without it; (2) enable the pwa-debug extension's debug toggle — its native connection is user-initiated, so host_status/session_ping show "no connection" until then; (3) ensure \`flatpak override --user --filesystem=host ${appId}\` has been applied so the sandboxed native host can reach the launcher and IPC socket. Relay these three steps to the user.`;
 
+/**
+ * Manual-provisioning guidance for branded Google Chrome 142+, where
+ * --load-extension is permanently removed (no flag/policy loads an UNPACKED
+ * extension). The browser is up with a live debug port, but the pwa-debug
+ * extension must be loaded by hand once. Surfaced as a next_step so the AI walks
+ * the user through it; the dir is the resolved unpacked extension path. The
+ * per-profile NMH manifest is already written, so the extension connects to the
+ * host the instant it loads — no further host step.
+ */
+const manualLoadUnpackGuidance = (
+  browser: string,
+  extensionPath: string,
+): string =>
+  `${browser} is branded Google Chrome 142+ — it permanently ignores --load-extension, and enterprise policy can't force-install an unpacked extension, so the pwa-debug extension was NOT auto-loaded (chrome-devtools-mcp still works via the live debug port). Walk the user through a one-time manual load: (1) open chrome://extensions in the launched window; (2) toggle ON "Developer mode" (top-right); (3) click "Load unpacked" and select \`${extensionPath}\`. It persists in this dedicated profile across restarts, and connects to the host immediately (the native-messaging manifest is already in place). Alternatively, re-run pdl_launch_browser with browser=brave (or chromium), where --load-extension still works and the extension preloads automatically.`;
+
 /** Tell the AI/user the chosen browser is also installed under other packagings,
  *  so they can re-target — e.g. snap was launched but flatpak is available too. */
 const packagingChoiceHint = (
@@ -196,8 +231,14 @@ const launchOk = (
   target: DiscoveredBrowser,
   alternatives: readonly Packaging[],
   packagingRequested: boolean,
+  manualGuided?: { readonly extensionPath: string },
 ): ToolResponse => {
   const steps = nextStepsFor(result);
+  // Manual provisioning takes priority in the guidance order — it's the reason
+  // pwa-debug won't connect yet, so the AI should relay it first.
+  if (manualGuided) {
+    steps.push(manualLoadUnpackGuidance(target.browser, manualGuided.extensionPath));
+  }
   if (target.source === 'flatpak' && target.appId) {
     steps.push(flatpakLaunchGuidance(target.browser, target.appId));
   }
@@ -278,18 +319,29 @@ export const launchBrowserCore = async (
       target.packaging === 'snap'
         ? snapPackageForBrowser(target.browser)
         : null;
+    // Resolve the extension-load strategy from the target's brand+version.
+    // Branded Google Chrome >=142 can't preload via --load-extension, so the
+    // launch comes up without the extension and steers to a manual Load-unpack.
+    const loadStrategy = extensionLoadStrategy(await deps.readVersion(target));
     const result = await deps.launchSandbox({
       browser: target.browser,
       execPath: target.execPath,
       port,
       userDataDir,
       extensionPath,
+      loadStrategy,
       mode,
       ...(target.appId !== undefined ? { appId: target.appId } : {}),
       ...(snapPkg ? { snapPackage: snapPkg } : {}),
     });
     deps.recordLaunch(result, port);
-    return launchOk(result, target, alternatives, args.packaging !== undefined);
+    return launchOk(
+      result,
+      target,
+      alternatives,
+      args.packaging !== undefined,
+      loadStrategy === 'manual-guided' ? { extensionPath } : undefined,
+    );
   }
 
   // mode === 'existing'
@@ -330,6 +382,7 @@ export const launchBrowserHandler = async (
     launch: (input) => launchExisting(input, defaultLaunchDeps()),
     resolveSandboxProfileDir,
     resolveExtensionPath,
+    readVersion: readTargetBrowserVersion,
     launchSandbox: (input) => launchSandbox(input, defaultSandboxDeps()),
     recordLaunch: (result, port) =>
       getLaunchRegistry().record({

@@ -28,8 +28,14 @@ const HOST_NAME = 'com.pwa_debug.host';
 
 type StateView = { readonly extensionIds: readonly string[] };
 
-/** A managed browser launch the live extension-id probe can reach. */
-type ManagedPort = { readonly port: number; readonly sandbox: boolean };
+/** A managed browser launch the live extension-id probe can reach. userDataDir
+ *  is the sandbox profile dir (present on sandbox launches) — used to verify the
+ *  per-profile NMH manifest that a custom --user-data-dir requires (FINDING #3). */
+type ManagedPort = {
+  readonly port: number;
+  readonly sandbox: boolean;
+  readonly userDataDir?: string;
+};
 
 /** Injected probes so the gap analysis is testable without the `claude` CLI / fs / state. */
 export type CheckSetupDeps = {
@@ -106,6 +112,38 @@ export const checkSetupCore = async (
     gaps.push('The native messaging host manifest is not installed for any detected browser.');
     recommendations.push(
       'Run `pwa-debug install` (or call host_register_extension with your extension ID) to write the per-browser manifest, then reload the extension at chrome://extensions.',
+    );
+  }
+
+  // Per-active-sandbox-profile manifest (FINDING #3). A sandbox launch uses a
+  // custom --user-data-dir, and Chromium searches <user-data-dir>/
+  // NativeMessagingHosts/ there — NOT the install location — for the host
+  // manifest. The launcher now auto-writes it, but verify each LIVE sandbox
+  // profile so a pre-fix profile (or a manual custom-dir launch) that lacks it
+  // is surfaced rather than silently failing connectNative.
+  const sandboxProfiles = managedPorts.filter(
+    (m): m is ManagedPort & { userDataDir: string } =>
+      m.sandbox && typeof m.userDataDir === 'string' && m.userDataDir.length > 0,
+  );
+  const sandboxManifestChecks = await Promise.all(
+    sandboxProfiles.map(async (m) => ({
+      userDataDir: m.userDataDir,
+      port: m.port,
+      ok: await deps.manifestExists(
+        join(m.userDataDir, 'NativeMessagingHosts', `${HOST_NAME}.json`),
+      ),
+    })),
+  );
+  const missingProfileManifests = sandboxManifestChecks.filter((c) => !c.ok);
+  if (missingProfileManifests.length > 0) {
+    const where = missingProfileManifests
+      .map((c) => `${c.userDataDir} (port ${c.port})`)
+      .join(', ');
+    gaps.push(
+      `Active sandbox profile(s) lack the native messaging host manifest under <user-data-dir>/NativeMessagingHosts/: ${where}. Chrome cannot find the host there, so the extension loads but its connectNative is rejected.`,
+    );
+    recommendations.push(
+      'Re-launch the sandbox with pdl_launch_browser (it now auto-writes the per-profile manifest before spawn); ensure an extension id is registered first (host_register_extension), since the writer no-ops with no registered id.',
     );
   }
   if (!extensionDist) {
@@ -188,6 +226,7 @@ export const checkSetupCore = async (
       },
       browserInstalls: installs.map((i) => i.browser),
       manifestInstalled: anyManifest,
+      sandboxProfileManifests: sandboxManifestChecks,
       extensionDist,
       registeredExtensionIds: state.extensionIds.length,
       activeConnections: connections.length,
@@ -245,6 +284,7 @@ export const checkSetupHandler = async (
           sandbox:
             l.profileType === 'sandbox-persistent' ||
             l.profileType === 'sandbox-temp',
+          ...(l.userDataDir ? { userDataDir: l.userDataDir } : {}),
         })),
     fetchLoadedExtensionIds,
   });
@@ -252,7 +292,7 @@ export const checkSetupHandler = async (
 export const checkSetupTool: ToolDef<Record<string, never>> = Object.freeze({
   name: 'pdl_check_setup',
   description:
-    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
+    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
   inputSchema,
   handler: checkSetupHandler,
 });

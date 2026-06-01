@@ -36,14 +36,14 @@ export const launchSandbox = async (
     return Object.freeze({ ...base, action: 'attach' as const, pid: null });
   }
 
-  // Confined browsers (flatpak + snap) search <user-data-dir>/NativeMessagingHosts/
-  // for the host manifest, NOT the install location. Drop a copy there before
-  // spawn so the SW's connectNative resolves the host. snapPackage routes the
-  // manifest at the snap relay launcher; flatpak (appId) at the node launcher.
-  // Native finds the manifest at the default config dir, so neither applies.
-  if (input.appId || input.snapPackage) {
-    await deps.writeSandboxManifest(input.userDataDir, input.snapPackage);
-  }
+  // ANY Chromium launched with a custom --user-data-dir (which every sandbox
+  // mode is) searches <user-data-dir>/NativeMessagingHosts/ for the host
+  // manifest — NOT the install-location config dir. This holds for native
+  // browsers too (FINDING #3): a native sandbox never inherits the default
+  // profile's manifest, so its SW connectNative fails silently without this.
+  // Drop a copy into the sandbox profile before spawn. snapPackage routes the
+  // manifest at the snap relay launcher; flatpak/native at the node launcher.
+  await deps.writeSandboxManifest(input.userDataDir, input.snapPackage);
 
   const { cmd, args } = input.appId
     ? buildSandboxFlatpakArgs(
@@ -51,16 +51,32 @@ export const launchSandbox = async (
         input.port,
         input.userDataDir,
         input.extensionPath,
+        input.loadStrategy,
       )
     : buildSandboxSpawnArgs(
         input.execPath,
         input.port,
         input.userDataDir,
         input.extensionPath,
+        input.loadStrategy,
       );
   const { pid } = await deps.spawnBrowser(cmd, args);
   if (input.mode === 'sandbox-temp') {
     deps.registerTempProfile(input.userDataDir);
   }
-  return Object.freeze({ ...base, action: 'spawn-fresh' as const, pid });
+  const spawned = { ...base, action: 'spawn-fresh' as const, pid };
+  // manual-guided (branded Google Chrome >=142): the extension was NOT
+  // preloaded — the CDP port is live but pwa-debug stays disconnected until the
+  // user completes a one-time Load-unpack. Flag it; launch_browser's next_steps
+  // carries the step-by-step. The per-profile manifest is already written above,
+  // so connectNative succeeds the moment the extension is loaded.
+  return Object.freeze(
+    input.loadStrategy === 'manual-guided'
+      ? {
+          ...spawned,
+          degradation:
+            'The pwa-debug extension was NOT auto-loaded (branded Google Chrome >=142 ignores --load-extension). The debug port is live for chrome-devtools-mcp, but pwa-debug tools stay disconnected until the extension is loaded manually.',
+        }
+      : spawned,
+  );
 };

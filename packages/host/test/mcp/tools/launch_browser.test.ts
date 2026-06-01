@@ -9,6 +9,7 @@ import type {
   LaunchResult,
   LaunchSandboxInput,
 } from '../../../src/browser_launch/types.js';
+import type { BrowserVersion } from '../../../src/browser_launch/extension_load.js';
 
 const discovery = (
   browsers: BrowserDiscoveryResult['browsers'],
@@ -24,6 +25,7 @@ const makeDeps = (opts: {
   extensionPath?: string | null;
   result?: Partial<LaunchResult>;
   defaultPort?: number;
+  version?: BrowserVersion | null;
 }): LaunchBrowserCoreDeps & {
   launched: LaunchExistingInput[];
   sandboxed: LaunchSandboxInput[];
@@ -61,6 +63,7 @@ const makeDeps = (opts: {
         : opts.sandboxDir,
     resolveExtensionPath: () =>
       opts.extensionPath === undefined ? '/ext/dist' : opts.extensionPath,
+    readVersion: async () => opts.version ?? null,
     launchSandbox: async (input) => {
       sandboxed.push(input);
       return Object.freeze({
@@ -72,6 +75,11 @@ const makeDeps = (opts: {
         action: 'spawn-fresh',
         pid: 77,
         userDataDir: input.userDataDir,
+        // mirror the real launchSandbox: manual-guided spawns degrade (extension
+        // not preloaded) so nextStepsFor drops the "preloaded" claim.
+        ...(input.loadStrategy === 'manual-guided'
+          ? { degradation: 'extension NOT auto-loaded (manual-guided)' }
+          : {}),
         ...opts.result,
       });
     },
@@ -316,6 +324,8 @@ describe('launchBrowserCore — sandbox modes', () => {
       extensionPath: '/ext/dist',
       mode: 'sandbox-persistent',
     });
+    // version unreadable (fake → null) → optimistic load-flag strategy
+    expect(deps.sandboxed[0]?.loadStrategy).toBe('load-flag');
     expect(res.next_steps.join(' ')).toContain('preloaded');
   });
 
@@ -329,6 +339,59 @@ describe('launchBrowserCore — sandbox modes', () => {
     );
     expect(deps.sandboxed[0]?.mode).toBe('sandbox-temp');
     expect(deps.sandboxed[0]?.browser).toBe('brave');
+  });
+
+  it('non-Google Chromium (Brave) preloads via the flag regardless of version', async () => {
+    const deps = makeDeps({
+      discovery: discovery([brave], 'brave'),
+      version: { brand: 'brave', major: 148 },
+    });
+    const res = await launchBrowserCore(
+      { browser: 'brave', mode: 'sandbox-persistent' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(deps.sandboxed[0]?.loadStrategy).toBe('load-flag');
+    expect(res.next_steps.join(' ')).not.toContain('Load unpacked');
+  });
+
+  it('branded Google Chrome 142+ → manual-guided strategy + Load-unpack guidance', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chrome], 'chrome'),
+      version: { brand: 'google-chrome', major: 148 },
+    });
+    const res = await launchBrowserCore(
+      { mode: 'sandbox-persistent' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(res.ok).toBe(true);
+    expect(deps.sandboxed[0]?.loadStrategy).toBe('manual-guided');
+    const steps = res.next_steps.join(' ');
+    expect(steps).toContain('Load unpacked');
+    expect(steps).toContain('/ext/dist');
+    expect(steps).toContain('Developer mode');
+    // steers to a browser where the flag still works
+    expect(steps).toContain('brave');
+    // must NOT contradict itself with the generic "preloaded" claim
+    expect(steps).not.toContain('extension preloaded');
+  });
+
+  it('branded Google Chrome 137-141 → escape-hatch strategy (still preloads)', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chrome], 'chrome'),
+      version: { brand: 'google-chrome', major: 139 },
+    });
+    const res = await launchBrowserCore(
+      { mode: 'sandbox-persistent' },
+      'linux',
+      {},
+      deps,
+    );
+    expect(deps.sandboxed[0]?.loadStrategy).toBe('load-flag-escape-hatch');
+    expect(res.next_steps.join(' ')).not.toContain('Load unpacked');
   });
 
   it('errors when the sandbox profile dir cannot be resolved', async () => {

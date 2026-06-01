@@ -2,6 +2,7 @@
  * Pure command-line builders for the launch actions, plus the CDP URL helper.
  * No effects — callers feed these into the injected spawnBrowser.
  */
+import type { ExtensionLoadStrategy } from './extension_load.js';
 
 export type SpawnArgs = {
   readonly cmd: string;
@@ -29,22 +30,43 @@ const freshFlags = (port: number, userDataDir: string): readonly string[] =>
  * Chromium flags for a sandbox launch (dedicated profile + preloaded extension).
  * Shared by the exec-by-path and flatpak builders. See buildSandboxSpawnArgs for
  * why the crash-restore-bubble suppressors are sandbox-only.
+ *
+ * The extension-preload flags vary by ExtensionLoadStrategy (see extension_load):
+ *  - 'load-flag': --load-extension + --disable-extensions-except (the norm).
+ *  - 'load-flag-escape-hatch': the same PLUS
+ *    --disable-features=DisableLoadExtensionCommandLineSwitch, which re-enables
+ *    --load-extension on branded Google Chrome 137..141.
+ *  - 'manual-guided': NEITHER flag — branded Google Chrome >=142 ignores
+ *    --load-extension, and --disable-extensions-except would additionally block
+ *    the manual Load-unpack the user is steered to. The profile/port still come
+ *    up; the extension is provisioned by hand afterward.
  */
 const sandboxFlags = (
   port: number,
   userDataDir: string,
   extensionPath: string,
-): readonly string[] =>
-  Object.freeze([
+  strategy: ExtensionLoadStrategy,
+): readonly string[] => {
+  const extensionFlags =
+    strategy === 'manual-guided'
+      ? []
+      : [
+          `--load-extension=${extensionPath}`,
+          `--disable-extensions-except=${extensionPath}`,
+          ...(strategy === 'load-flag-escape-hatch'
+            ? ['--disable-features=DisableLoadExtensionCommandLineSwitch']
+            : []),
+        ];
+  return Object.freeze([
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
-    `--load-extension=${extensionPath}`,
-    `--disable-extensions-except=${extensionPath}`,
+    ...extensionFlags,
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-session-crashed-bubble',
     '--hide-crash-restore-bubble',
   ]);
+};
 
 /**
  * Wrap chromium flags as a `flatpak run <app-id> <flags>` invocation. Used by
@@ -112,10 +134,11 @@ export const buildSandboxSpawnArgs = (
   port: number,
   userDataDir: string,
   extensionPath: string,
+  strategy: ExtensionLoadStrategy,
 ): SpawnArgs =>
   Object.freeze({
     cmd: execPath,
-    args: sandboxFlags(port, userDataDir, extensionPath),
+    args: sandboxFlags(port, userDataDir, extensionPath, strategy),
   });
 
 /**
@@ -130,4 +153,6 @@ export const buildSandboxFlatpakArgs = (
   port: number,
   userDataDir: string,
   extensionPath: string,
-): SpawnArgs => flatpakRun(appId, sandboxFlags(port, userDataDir, extensionPath));
+  strategy: ExtensionLoadStrategy,
+): SpawnArgs =>
+  flatpakRun(appId, sandboxFlags(port, userDataDir, extensionPath, strategy));

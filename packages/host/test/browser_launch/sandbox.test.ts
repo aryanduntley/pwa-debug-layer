@@ -17,12 +17,13 @@ import { launchSandbox } from '../../src/browser_launch/launch_sandbox.js';
 import type { LaunchSandboxDeps } from '../../src/browser_launch/types.js';
 
 describe('buildSandboxSpawnArgs', () => {
-  it('preloads the extension and pins the profile', () => {
+  it('preloads the extension and pins the profile (load-flag)', () => {
     const { cmd, args } = buildSandboxSpawnArgs(
       '/usr/bin/google-chrome',
       9222,
       '/home/u/.pwa-debug/profiles/chrome',
       '/ext/dist',
+      'load-flag',
     );
     expect(cmd).toBe('/usr/bin/google-chrome');
     expect(args).toEqual([
@@ -37,8 +38,47 @@ describe('buildSandboxSpawnArgs', () => {
     ]);
   });
 
+  it('load-flag-escape-hatch adds --disable-features for branded Chrome 137-141', () => {
+    const { args } = buildSandboxSpawnArgs(
+      '/b',
+      9222,
+      '/p',
+      '/ext/dist',
+      'load-flag-escape-hatch',
+    );
+    expect(args).toContain('--load-extension=/ext/dist');
+    expect(args).toContain('--disable-extensions-except=/ext/dist');
+    expect(args).toContain(
+      '--disable-features=DisableLoadExtensionCommandLineSwitch',
+    );
+  });
+
+  it('manual-guided omits BOTH --load-extension and --disable-extensions-except', () => {
+    const { args } = buildSandboxSpawnArgs(
+      '/b',
+      9222,
+      '/home/u/.pwa-debug/profiles/chrome',
+      '/ext/dist',
+      'manual-guided',
+    );
+    expect(args).not.toContain('--load-extension=/ext/dist');
+    expect(args).not.toContain('--disable-extensions-except=/ext/dist');
+    expect(args).not.toContain(
+      '--disable-features=DisableLoadExtensionCommandLineSwitch',
+    );
+    // profile + port + non-interactive flags still present
+    expect(args).toEqual([
+      '--remote-debugging-port=9222',
+      '--user-data-dir=/home/u/.pwa-debug/profiles/chrome',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-session-crashed-bubble',
+      '--hide-crash-restore-bubble',
+    ]);
+  });
+
   it('suppresses the crash/restore bubble so a re-launched sandbox profile never prompts', () => {
-    const { args } = buildSandboxSpawnArgs('/b', 9222, '/p', '/e');
+    const { args } = buildSandboxSpawnArgs('/b', 9222, '/p', '/e', 'load-flag');
     expect(args).toContain('--disable-session-crashed-bubble');
     expect(args).toContain('--hide-crash-restore-bubble');
   });
@@ -51,6 +91,7 @@ describe('buildSandboxFlatpakArgs', () => {
       9222,
       '/home/u/.pwa-debug/profiles/chromium',
       '/ext/dist',
+      'load-flag',
     );
     expect(cmd).toBe('flatpak');
     expect(args).toEqual([
@@ -188,6 +229,7 @@ describe('launchSandbox', () => {
     port: 9222,
     userDataDir: '/h/.pwa-debug/profiles/chrome',
     extensionPath: '/ext/dist',
+    loadStrategy: 'load-flag' as const,
   };
 
   const makeDeps = (opts: {
@@ -253,8 +295,12 @@ describe('launchSandbox', () => {
     });
     expect(deps.spawns[0]?.args).toContain('--load-extension=/ext/dist');
     expect(deps.registered).toHaveLength(0);
-    // native sandbox finds the manifest at the default config dir — no per-profile write.
-    expect(deps.manifestWrites).toHaveLength(0);
+    // FINDING #3: a native sandbox uses a custom --user-data-dir, so Chromium
+    // searches <user-data-dir>/NativeMessagingHosts/ — the launch writes the
+    // per-profile manifest (node launcher; no snapPackage) before spawn.
+    expect(deps.manifestWrites).toEqual([
+      { userDataDir: '/h/.pwa-debug/profiles/chrome' },
+    ]);
   });
 
   it('spawns a temp profile and registers it for cleanup', async () => {
@@ -263,6 +309,10 @@ describe('launchSandbox', () => {
     expect(r.profileType).toBe('sandbox-temp');
     expect(deps.spawns).toHaveLength(1);
     expect(deps.registered).toEqual(['/h/.pwa-debug/profiles/chrome']);
+    // temp profiles are custom-dir too → per-profile manifest written before spawn
+    expect(deps.manifestWrites).toEqual([
+      { userDataDir: '/h/.pwa-debug/profiles/chrome' },
+    ]);
   });
 
   it('spawns a flatpak sandbox via `flatpak run <app-id> --` when appId is set', async () => {
@@ -274,6 +324,7 @@ describe('launchSandbox', () => {
         port: 9222,
         userDataDir: '/h/.pwa-debug/profiles/chromium',
         extensionPath: '/ext/dist',
+        loadStrategy: 'load-flag',
         mode: 'sandbox-persistent',
         appId: 'org.chromium.Chromium',
       },
@@ -301,6 +352,7 @@ describe('launchSandbox', () => {
         port: 9222,
         userDataDir: '/h/snap/chromium/common/pwa-debug-profile',
         extensionPath: '/ext/dist',
+        loadStrategy: 'load-flag',
         mode: 'sandbox-persistent',
         snapPackage: 'chromium',
       },
@@ -327,6 +379,7 @@ describe('launchSandbox', () => {
         port: 9222,
         userDataDir: '/h/.pwa-debug/profiles/chromium',
         extensionPath: '/ext/dist',
+        loadStrategy: 'load-flag',
         mode: 'sandbox-persistent',
         appId: 'org.chromium.Chromium',
       },
@@ -334,5 +387,25 @@ describe('launchSandbox', () => {
     );
     expect(deps.spawns).toHaveLength(0);
     expect(deps.manifestWrites).toHaveLength(0);
+  });
+
+  it('manual-guided: spawns without --load-extension, still writes the manifest, and degrades', async () => {
+    const deps = makeDeps({ portLive: false });
+    const r = await launchSandbox(
+      { ...input, mode: 'sandbox-persistent', loadStrategy: 'manual-guided' },
+      deps,
+    );
+    expect(r.action).toBe('spawn-fresh');
+    // extension NOT preloaded — no --load-extension in the spawn args
+    expect(deps.spawns[0]?.args).not.toContain('--load-extension=/ext/dist');
+    expect(deps.spawns[0]?.args).toContain(
+      '--user-data-dir=/h/.pwa-debug/profiles/chrome',
+    );
+    // manifest STILL written (#67) so connectNative works once loaded manually
+    expect(deps.manifestWrites).toEqual([
+      { userDataDir: '/h/.pwa-debug/profiles/chrome' },
+    ]);
+    // degradation explains the extension is not auto-loaded
+    expect(r.degradation).toContain('NOT auto-loaded');
   });
 });

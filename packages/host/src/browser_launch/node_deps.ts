@@ -46,6 +46,11 @@ import {
   type SandboxEnv,
 } from './sandbox_paths.js';
 import {
+  readBrowserVersion,
+  type BrowserVersion,
+} from './extension_load.js';
+import type { DiscoveredBrowser } from '../browser_discovery/types.js';
+import {
   snapPackageForBrowser,
   snapSandboxProfileDir,
   writeSnapHostFiles,
@@ -204,16 +209,47 @@ export const resolveExtensionPath = (env: SandboxEnv): string | null =>
     isLoadableExtensionDir(dir, (p) => existsSync(p)),
   );
 
+/** execFile wrapped as a never-rejecting {code, stdout} runner (for --version). */
+const runCommandImpl = (
+  cmd: string,
+  args: readonly string[],
+): Promise<{ code: number; stdout: string }> =>
+  new Promise((resolveCmd) => {
+    execFile(cmd, [...args], (err, stdout) => {
+      const code =
+        err && typeof (err as { code?: unknown }).code === 'number'
+          ? (err as { code: number }).code
+          : err
+            ? 1
+            : 0;
+      resolveCmd({ code, stdout: stdout ?? '' });
+    });
+  });
+
 /**
- * Confined-browser sandbox manifest writer. Loads the registered extension IDs,
- * builds the host manifest, and writes it into <userDataDir>/NativeMessagingHosts/
- * so a flatpak/snap Chromium (which searches the user-data-dir, not the install
- * location) finds the host. The launcher the manifest points at depends on the
- * confinement: for SNAP, ensure the snap relay + launcher exist under
- * ~/snap/<pkg>/common (node is exec-denied + glibc-incompatible there) and point
- * at that launcher; otherwise (flatpak) point at the canonical node launcher.
- * No-op when no extension is registered (connectNative would be rejected anyway;
- * host_register_extension is the prerequisite).
+ * Production readVersion: run the target's `--version` (native/snap by execPath;
+ * flatpak via `flatpak run <appId>`) and parse it into a BrowserVersion. null on
+ * any failure → the launch falls back to the optimistic 'load-flag' strategy.
+ */
+export const readTargetBrowserVersion = (
+  target: DiscoveredBrowser,
+): Promise<BrowserVersion | null> =>
+  readBrowserVersion(runCommandImpl, {
+    execPath: target.execPath,
+    ...(target.appId !== undefined ? { appId: target.appId } : {}),
+  });
+
+/**
+ * Sandbox manifest writer (all confinements, native included). Loads the
+ * registered extension IDs, builds the host manifest, and writes it into
+ * <userDataDir>/NativeMessagingHosts/ so the spawned Chromium — which searches
+ * the user-data-dir, not the install location (FINDING #3 applies to native
+ * custom-dir profiles too) — finds the host. The launcher the manifest points
+ * at depends on the confinement: for SNAP, ensure the snap relay + launcher
+ * exist under ~/snap/<pkg>/common (node is exec-denied + glibc-incompatible
+ * there) and point at that launcher; otherwise (native/flatpak) point at the
+ * canonical node launcher. No-op when no extension is registered (connectNative
+ * would be rejected anyway; host_register_extension is the prerequisite).
  */
 const writeSandboxManifestImpl = async (
   userDataDir: string,

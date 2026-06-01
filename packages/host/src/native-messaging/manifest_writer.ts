@@ -59,11 +59,11 @@ const manifestFilename = (manifestName: string): string => `${manifestName}.json
 
 /**
  * Write a single host manifest into `<dir>/<name>.json` atomically and return
- * the written path. The flatpak sandbox launch (3a) uses this: a flatpak
- * Chromium spawned with a custom --user-data-dir searches
+ * the written path. Every sandbox launch (native, flatpak, snap — FINDING #3)
+ * uses this: a Chromium spawned with a custom --user-data-dir searches
  * `<user-data-dir>/NativeMessagingHosts/` for the host manifest (not the
  * install location), so the launch flow drops a copy there pointing at the
- * install-time launcher. Reuses the same atomic temp-then-rename as the
+ * appropriate launcher. Reuses the same atomic temp-then-rename as the
  * per-browser install path.
  */
 export const writeHostManifestToDir = async (
