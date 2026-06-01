@@ -44,6 +44,8 @@ import { swLifecycleTailTool } from './sw_lifecycle_tail.js';
 import { cacheListTool } from './cache_list.js';
 import { cacheInspectTool } from './cache_inspect.js';
 import { cacheMatchTool } from './cache_match.js';
+import { pwaStatusTool } from './pwa_status.js';
+import { pwaInstallabilityTool } from './pwa_installability.js';
 import { settingsListSchemaTool } from './settings_list_schema.js';
 import { settingsGetTool } from './settings_get.js';
 import { settingsSetTool } from './settings_set.js';
@@ -108,6 +110,8 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   cacheListTool,
   cacheInspectTool,
   cacheMatchTool,
+  pwaStatusTool,
+  pwaInstallabilityTool,
   launchBrowserTool,
   browserStatusTool,
   closeBrowserTool,

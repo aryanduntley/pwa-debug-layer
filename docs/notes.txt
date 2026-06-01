@@ -3,3 +3,8 @@
 
   flatpak uninstall --unused   
 ===
+ Captured as note #327 (it changes the coexistence docs — sandbox-preload can't deliver a working
+  extension on Chrome 137+, so the canonical both-tools recipe is existing-mode on a profile that
+  already has the extension).
+
+  note #329

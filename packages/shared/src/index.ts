@@ -124,3 +124,18 @@ export type {
   CacheInspectResult,
   CacheMatchResult,
 } from './types/cache_storage.js';
+
+export type {
+  PwaPermissionState,
+  PwaCapabilities,
+  PwaPermissionsSnapshot,
+  PwaStatusSnapshot,
+} from './types/pwa_status.js';
+
+export type {
+  InstallabilityGapCode,
+  InstallabilityGap,
+  ManifestIconSummary,
+  ManifestSummary,
+  InstallabilityResult,
+} from './types/installability.js';

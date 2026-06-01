@@ -664,6 +664,28 @@ const handleCacheList: RequestHandler = async (env) => {
   return response.payload;
 };
 
+const handlePwaStatus: RequestHandler = async (env) => {
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'pwa_status', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+const handlePwaInstallability: RequestHandler = async (env) => {
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'pwa_installability', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
 const handleCacheInspect: RequestHandler = async (env) => {
   const r =
     env.payload !== null && typeof env.payload === 'object'
@@ -1304,6 +1326,8 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   cache_list: handleCacheList,
   cache_inspect: handleCacheInspect,
   cache_match: handleCacheMatch,
+  pwa_status: handlePwaStatus,
+  pwa_installability: handlePwaInstallability,
 });
 
 const errorResponse = (

@@ -89,6 +89,8 @@ import type {
   CacheListResult,
   CacheInspectResult,
   CacheMatchResult,
+  PwaStatusSnapshot,
+  InstallabilityResult,
 } from '@pwa-debug/shared';
 import { projectServiceWorkerState } from '../sw_app/projection.js';
 import {
@@ -96,6 +98,12 @@ import {
   readCacheInspect,
   readCacheMatch,
 } from '../cache_storage/read.js';
+import {
+  readPwaStatus,
+  type WinLike,
+  type NavLike,
+} from '../pwa_status/read.js';
+import { readInstallability } from '../pwa_installability/read.js';
 
 // Singleton injected by page-world.ts bootstrap so resolveStore can consult the
 // Zustand devtools shim's connect-time captures as a detection path (mirrors
@@ -1465,6 +1473,43 @@ export const cacheMatchHandler = (
   return readCacheMatch(getCacheStorage(), url, Date.now());
 };
 
+// pwa_status (PWA Runtime Diagnostics): runtime status + capability matrix of
+// the debugged PWA, read from the live window + navigator.
+export const pwaStatusHandler = (): Promise<PwaStatusSnapshot> =>
+  readPwaStatus(window as unknown as WinLike, navigator as unknown as NavLike);
+
+// pwa_installability: discover + fetch + parse the manifest from the live page
+// and run the installability rules.
+export const pwaInstallabilityHandler = async (): Promise<InstallabilityResult> => {
+  const link = document.querySelector('link[rel="manifest"]');
+  const manifestHref = link?.getAttribute('href') ?? null;
+  const swContainer = (navigator as Navigator).serviceWorker as
+    | ServiceWorkerContainer
+    | undefined;
+  let hasServiceWorker = false;
+  if (swContainer !== undefined) {
+    if (swContainer.controller !== null) {
+      hasServiceWorker = true;
+    } else if (typeof swContainer.getRegistration === 'function') {
+      try {
+        hasServiceWorker = (await swContainer.getRegistration()) !== undefined;
+      } catch {
+        hasServiceWorker = false;
+      }
+    }
+  }
+  return readInstallability({
+    manifestHref,
+    baseUrl: document.baseURI,
+    secureContext: window.isSecureContext === true,
+    hasServiceWorker,
+    fetchText: async (url) => {
+      const res = await fetch(url);
+      return { ok: res.ok, status: res.status, text: await res.text() };
+    },
+  });
+};
+
 // Path 7 interaction action tools (pdl_*): one handler per ACTION_TOOL_SPECS
 // entry, each bound to its action kind — resolve the locator, apply the action.
 const actionPageHandlers: Readonly<Record<string, PageWorldHandler>> = Object.freeze(
@@ -1515,6 +1560,8 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   cache_list: () => cacheListHandler(),
   cache_inspect: (env) => cacheInspectHandler(env),
   cache_match: (env) => cacheMatchHandler(env),
+  pwa_status: () => pwaStatusHandler(),
+  pwa_installability: () => pwaInstallabilityHandler(),
 });
 
 export const dispatchPageRequest = async (

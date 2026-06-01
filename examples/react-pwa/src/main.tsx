@@ -41,3 +41,15 @@ root.render(
     </JotaiProvider>
   </Provider>,
 );
+
+// Register the fixture service worker so pwa-debug's PWA Runtime Diagnostics
+// tools (sw_status, sw_lifecycle_tail, cache_*, pwa_status, pwa_installability)
+// have a real service worker + CacheStorage to read. Vite serves public/sw.js
+// at /sw.js in both dev and build.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js').catch((err: unknown) => {
+      console.error('[fixture] service worker registration failed', err);
+    });
+  });
+}
