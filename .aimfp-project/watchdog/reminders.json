@@ -1,26 +1,4 @@
 {
-  "generated_at": "2026-06-01T00:22:38Z",
-  "reminders": [
-    {
-      "type": "new_file_detected",
-      "severity": "info",
-      "file": "packages/extension/vitest.config.ts.timestamp-1780272046002-47307f8e70f0c8.mjs",
-      "message": "New file detected but not registered in database. Consider registering via project_file_create.",
-      "timestamp": "2026-06-01T00:00:46Z"
-    },
-    {
-      "type": "new_file_detected",
-      "severity": "info",
-      "file": "packages/shared/vitest.config.ts.timestamp-1780272506934-945b6be9737688.mjs",
-      "message": "New file detected but not registered in database. Consider registering via project_file_create.",
-      "timestamp": "2026-06-01T00:08:26Z"
-    },
-    {
-      "type": "new_file_detected",
-      "severity": "info",
-      "file": "packages/extension/vitest.config.ts.timestamp-1780273358972-35bbbae2e0586.mjs",
-      "message": "New file detected but not registered in database. Consider registering via project_file_create.",
-      "timestamp": "2026-06-01T00:22:38Z"
-    }
-  ]
+  "generated_at": "2026-06-01T01:46:52Z",
+  "reminders": []
 }
