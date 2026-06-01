@@ -1,3 +1,5 @@
+import type { SwWorkerState } from './sw_status.js';
+
 export type CaptureMeta = {
   readonly ts: number;
   readonly frameUrl: string;
@@ -355,6 +357,35 @@ export type PageErrorCapturedEvent = CaptureMeta & {
   readonly source?: string;
 };
 
+/** Which service-worker lifecycle transition of the DEBUGGED PWA fired. */
+export type SwStateSubkind = 'updatefound' | 'statechange' | 'controllerchange';
+
+/**
+ * A captured service-worker lifecycle transition of the debugged PWA, read from
+ * the page's navigator.serviceWorker and flowing through the capture pipeline as
+ * kind 'sw_state'. Distinct from the SW-side 'lifecycle' kind (which is page
+ * navigation / tab events emitted by the extension's own service worker).
+ *
+ * - updatefound: a registration started installing a NEW worker (the
+ *   'an update is downloading' moment).
+ * - statechange: a worker advanced lifecycle state
+ *   (installing→installed→activating→activated→redundant).
+ * - controllerchange: the worker controlling the page changed (a new SW took
+ *   control, typically after skipWaiting + clients.claim).
+ */
+export type SwStateCapturedEvent = CaptureMeta & {
+  readonly kind: 'sw_state';
+  readonly subkind: SwStateSubkind;
+  /** The registration scope the event came from, when known. */
+  readonly scope?: string;
+  /** Script URL of the worker the event concerns (the new/changed worker or new controller). */
+  readonly scriptURL?: string;
+  /** The worker's lifecycle state at emit time (always present for statechange). */
+  readonly state?: SwWorkerState;
+  /** Which registration slot the worker occupies at emit time, when known. */
+  readonly slot?: 'installing' | 'waiting' | 'active';
+};
+
 export type CapturedEvent =
   | ConsoleCapturedEvent
   | FetchCapturedEvent
@@ -365,4 +396,5 @@ export type CapturedEvent =
   | StoreChangeCapturedEvent
   | ReplayCapturedEvent
   | PopupCapturedEvent
-  | PageErrorCapturedEvent;
+  | PageErrorCapturedEvent
+  | SwStateCapturedEvent;

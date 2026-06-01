@@ -84,6 +84,18 @@ import type {
 import { encodeEvent } from './protocol.js';
 import { computeFrameMeta } from '../frame_meta/frame_meta.js';
 import type { Disposer } from '../captures/capture_console.js';
+import type {
+  SwStatusSnapshot,
+  CacheListResult,
+  CacheInspectResult,
+  CacheMatchResult,
+} from '@pwa-debug/shared';
+import { projectServiceWorkerState } from '../sw_app/projection.js';
+import {
+  readCacheList,
+  readCacheInspect,
+  readCacheMatch,
+} from '../cache_storage/read.js';
 
 // Singleton injected by page-world.ts bootstrap so resolveStore can consult the
 // Zustand devtools shim's connect-time captures as a detection path (mirrors
@@ -1385,6 +1397,74 @@ export const sessionRecordHandler = (
   return Object.freeze(out);
 };
 
+// sw_status (PWA Runtime Diagnostics): read the DEBUGGED PWA's service-worker
+// registrations + controller and project them to a wire SwStatusSnapshot. This
+// is the app's navigator.serviceWorker — distinct from the extension's own
+// sw_lifecycle module. Feature-detected so insecure/unsupported contexts return
+// a { supported: false } snapshot rather than throwing.
+export const swStatusHandler = async (): Promise<SwStatusSnapshot> => {
+  const container = (navigator as Navigator).serviceWorker as
+    | ServiceWorkerContainer
+    | undefined;
+  if (
+    container === undefined ||
+    typeof container.getRegistrations !== 'function'
+  ) {
+    return projectServiceWorkerState([], null, false);
+  }
+  const registrations = await container.getRegistrations();
+  return projectServiceWorkerState(registrations, container.controller, true);
+};
+
+// cache_* (PWA Runtime Diagnostics): read the debugged PWA's CacheStorage. The
+// readers take an injected CacheStorage; here we pass the live `caches` global
+// (feature-detected → readers return supported:false when absent).
+const getCacheStorage = (): CacheStorage | null =>
+  typeof caches !== 'undefined' ? caches : null;
+
+const DEFAULT_CACHE_INSPECT_LIMIT = 200;
+
+export const cacheListHandler = (): Promise<CacheListResult> =>
+  readCacheList(getCacheStorage());
+
+export const cacheInspectHandler = (
+  env: PageBridgeRequestEnvelope,
+): Promise<CacheInspectResult | { readonly error: { readonly message: string } }> => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const name = r['cache_name'];
+  if (typeof name !== 'string' || name.length === 0) {
+    return Promise.resolve({
+      error: { message: 'cache_inspect: payload must include { cache_name: non-empty string }' },
+    });
+  }
+  const limit =
+    typeof r['limit'] === 'number' &&
+    Number.isInteger(r['limit']) &&
+    (r['limit'] as number) > 0
+      ? (r['limit'] as number)
+      : DEFAULT_CACHE_INSPECT_LIMIT;
+  return readCacheInspect(getCacheStorage(), name, limit, Date.now());
+};
+
+export const cacheMatchHandler = (
+  env: PageBridgeRequestEnvelope,
+): Promise<CacheMatchResult | { readonly error: { readonly message: string } }> => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const url = r['url'];
+  if (typeof url !== 'string' || url.length === 0) {
+    return Promise.resolve({
+      error: { message: 'cache_match: payload must include { url: non-empty string }' },
+    });
+  }
+  return readCacheMatch(getCacheStorage(), url, Date.now());
+};
+
 // Path 7 interaction action tools (pdl_*): one handler per ACTION_TOOL_SPECS
 // entry, each bound to its action kind — resolve the locator, apply the action.
 const actionPageHandlers: Readonly<Record<string, PageWorldHandler>> = Object.freeze(
@@ -1431,6 +1511,10 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   store_dispatch: (env) => reduxDispatchHandler(env),
   source_map_resolve: (env) => sourceMapResolveHandler(env),
   session_record: (env) => sessionRecordHandler(env),
+  sw_status: () => swStatusHandler(),
+  cache_list: () => cacheListHandler(),
+  cache_inspect: (env) => cacheInspectHandler(env),
+  cache_match: (env) => cacheMatchHandler(env),
 });
 
 export const dispatchPageRequest = async (

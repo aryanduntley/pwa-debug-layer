@@ -27,7 +27,8 @@ export type CaptureKind =
   | 'store_change'
   | 'replay'
   | 'library_popup'
-  | 'page_error';
+  | 'page_error'
+  | 'sw_state';
 
 /** Runtime tuple of every {@link CaptureKind}, for validation and introspection. */
 export const CAPTURE_KINDS: readonly CaptureKind[] = [
@@ -39,6 +40,7 @@ export const CAPTURE_KINDS: readonly CaptureKind[] = [
   'replay',
   'library_popup',
   'page_error',
+  'sw_state',
 ] as const;
 
 /**
@@ -313,6 +315,7 @@ export const SETTINGS_SCHEMA: SettingsSchema = Object.freeze({
       'store_change',
       'replay',
       'library_popup',
+      'sw_state',
     ],
     scope: 'both',
     description:

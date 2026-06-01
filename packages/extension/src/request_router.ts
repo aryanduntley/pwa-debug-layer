@@ -621,6 +621,91 @@ const handleSvelteComponents: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// sw_status (PWA Runtime Diagnostics): forward to the active (or given) tab's
+// page-world, which reads navigator.serviceWorker. No params beyond tab_id —
+// same shape as svelte_components.
+const handleSwStatus: RequestHandler = async (env) => {
+  const raw = env.payload;
+  const tabId =
+    raw !== null &&
+    typeof raw === 'object' &&
+    typeof (raw as Record<string, unknown>)['tab_id'] === 'number' &&
+    Number.isFinite((raw as Record<string, unknown>)['tab_id'])
+      ? ((raw as Record<string, unknown>)['tab_id'] as number)
+      : undefined;
+  const csReq = { tool: 'sw_status', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) {
+    throw new Error(response.error.message);
+  }
+  return response.payload;
+};
+
+// cache_* (PWA Runtime Diagnostics): forward to the active/given tab's page-world.
+const readTabId = (raw: unknown): number | undefined =>
+  raw !== null &&
+  typeof raw === 'object' &&
+  typeof (raw as Record<string, unknown>)['tab_id'] === 'number' &&
+  Number.isFinite((raw as Record<string, unknown>)['tab_id'])
+    ? ((raw as Record<string, unknown>)['tab_id'] as number)
+    : undefined;
+
+const handleCacheList: RequestHandler = async (env) => {
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'cache_list', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+const handleCacheInspect: RequestHandler = async (env) => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const name = r['cache_name'];
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('cache_inspect: payload must include { cache_name: non-empty string }');
+  }
+  const payload: Record<string, unknown> = { cache_name: name };
+  if (typeof r['limit'] === 'number' && Number.isInteger(r['limit']) && (r['limit'] as number) > 0) {
+    payload['limit'] = r['limit'];
+  }
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'cache_inspect', payload };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+const handleCacheMatch: RequestHandler = async (env) => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const url = r['url'];
+  if (typeof url !== 'string' || url.length === 0) {
+    throw new Error('cache_match: payload must include { url: non-empty string }');
+  }
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'cache_match', payload: { url } };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
 type SvelteFindRouted = {
   readonly tabId: number | undefined;
   readonly payload: Record<string, unknown>;
@@ -1215,6 +1300,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   store_dispatch: handleStoreDispatch,
   source_map_resolve: handleSourceMapResolve,
   session_record: handleSessionRecord,
+  sw_status: handleSwStatus,
+  cache_list: handleCacheList,
+  cache_inspect: handleCacheInspect,
+  cache_match: handleCacheMatch,
 });
 
 const errorResponse = (

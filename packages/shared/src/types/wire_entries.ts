@@ -7,6 +7,7 @@ import type {
   ReplayCapturedEvent,
   PopupCapturedEvent,
   PageErrorCapturedEvent,
+  SwStateCapturedEvent,
 } from './captured_event.js';
 import type { Cursor } from './filter_spec.js';
 
@@ -31,6 +32,8 @@ export type ReplayEntry = ReplayCapturedEvent & EntryEnvelope;
 export type PopupEntry = PopupCapturedEvent & EntryEnvelope;
 
 export type PageErrorEntry = PageErrorCapturedEvent & EntryEnvelope;
+
+export type SwStateEntry = SwStateCapturedEvent & EntryEnvelope;
 
 /** An uncaught page error correlated to an open popup window by popup_failures. */
 export type PopupPageError = {

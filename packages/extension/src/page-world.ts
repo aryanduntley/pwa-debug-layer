@@ -16,6 +16,7 @@ import { installLifecycleCapture } from './captures/capture_lifecycle.js';
 import { installPopupCapture } from './captures/capture_popup.js';
 import { installErrorCapture } from './captures/capture_errors.js';
 import { installWalletCapture } from './captures/capture_wallet.js';
+import { installSwStateCapture } from './captures/capture_sw_state.js';
 import type { CapturedEvent } from './captures/types.js';
 import { computeFrameMeta } from './frame_meta/frame_meta.js';
 import {
@@ -119,6 +120,7 @@ type CaptureKinds = {
   readonly lifecycle: boolean;
   readonly library_popup: boolean;
   readonly page_error: boolean;
+  readonly sw_state: boolean;
 };
 
 const installCaptures = (
@@ -146,6 +148,9 @@ const installCaptures = (
     page_error:
       typeof window !== 'undefined' &&
       typeof window.addEventListener === 'function',
+    sw_state:
+      typeof navigator !== 'undefined' &&
+      navigator.serviceWorker !== undefined,
   };
   const disposers: Disposer[] = [
     installConsoleCapture(emit, frame),
@@ -157,6 +162,7 @@ const installCaptures = (
     installPopupCapture(emit, frame),
     installErrorCapture(emit, frame),
     installWalletCapture(emit, frame),
+    installSwStateCapture(emit, frame),
   ];
   const dispose: Disposer = () => {
     for (const d of disposers) d();

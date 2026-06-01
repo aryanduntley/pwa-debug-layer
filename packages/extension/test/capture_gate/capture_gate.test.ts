@@ -58,6 +58,7 @@ describe('eventKindToCaptureKind', () => {
     expect(eventKindToCaptureKind('websocket')).toBe('network');
     expect(eventKindToCaptureKind('dom_mutation')).toBe('dom_mutations');
     expect(eventKindToCaptureKind('lifecycle')).toBe('lifecycle');
+    expect(eventKindToCaptureKind('sw_state')).toBe('sw_state');
   });
 
   it('returns null for unknown kinds (forward-compat sentinel)', () => {

@@ -3,10 +3,3 @@
 
   flatpak uninstall --unused   
 ===
-Two findings recorded
-
-
-  2. Vue live-verify deferred — React (the exit criterion) is green; the locator/action core is
-  framework-agnostic so vue/svelte/solid role/text/selector behave identically (only stableId
-  differs), and the vue finders are unit-tested. A headed vue round-trip should still be run to
-  fully close the all-framework claim.

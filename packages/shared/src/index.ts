@@ -37,6 +37,8 @@ export type {
   PopupState,
   PopupCapturedEvent,
   PageErrorCapturedEvent,
+  SwStateSubkind,
+  SwStateCapturedEvent,
   CapturedEvent,
 } from './types/captured_event.js';
 
@@ -66,6 +68,7 @@ export type {
   ReplayEntry,
   PopupEntry,
   PageErrorEntry,
+  SwStateEntry,
   PopupConsoleError,
   PopupNetworkError,
   PopupPageError,
@@ -105,3 +108,19 @@ export type {
 } from './types/interaction_actions.js';
 
 export { ACTION_TOOL_SPECS } from './types/interaction_actions.js';
+
+export type {
+  SwWorkerState,
+  SwUpdateViaCache,
+  SwWorkerRecord,
+  SwRegistrationRecord,
+  SwStatusSnapshot,
+} from './types/sw_status.js';
+
+export type {
+  CacheEntryRecord,
+  CacheListItem,
+  CacheListResult,
+  CacheInspectResult,
+  CacheMatchResult,
+} from './types/cache_storage.js';

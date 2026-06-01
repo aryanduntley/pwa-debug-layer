@@ -42,6 +42,8 @@ const KIND_MAP: Readonly<Record<string, CaptureKind>> = Object.freeze({
   websocket: 'network',
   dom_mutation: 'dom_mutations',
   lifecycle: 'lifecycle',
+  // App service-worker lifecycle: its own capture category + host buffer.
+  sw_state: 'sw_state',
   store_change: 'store_change',
   replay: 'replay',
   library_popup: 'library_popup',

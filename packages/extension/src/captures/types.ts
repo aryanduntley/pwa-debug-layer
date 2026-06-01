@@ -27,5 +27,7 @@ export type {
   PopupState,
   PopupCapturedEvent,
   PageErrorCapturedEvent,
+  SwStateSubkind,
+  SwStateCapturedEvent,
   CapturedEvent,
 } from '@pwa-debug/shared';
