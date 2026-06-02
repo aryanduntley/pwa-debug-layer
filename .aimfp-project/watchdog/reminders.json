@@ -1,12 +1,4 @@
 {
-  "generated_at": "2026-06-01T23:45:57Z",
-  "reminders": [
-    {
-      "type": "new_file_detected",
-      "severity": "info",
-      "file": "packages/host/vitest.config.ts.timestamp-1780357557259-03b0190ab928e8.mjs",
-      "message": "New file detected but not registered in database. Consider registering via project_file_create.",
-      "timestamp": "2026-06-01T23:45:57Z"
-    }
-  ]
+  "generated_at": "2026-06-02T00:37:07Z",
+  "reminders": []
 }

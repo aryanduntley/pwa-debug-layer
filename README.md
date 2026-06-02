@@ -179,19 +179,33 @@ claude mcp add pwa-debug --scope user -- node /absolute/path/to/pwa-debug-layer/
 claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
 ```
 
-> **Port must match.** `chrome-devtools-mcp`'s `--browserUrl` has to point at the exact port `pwa-debug` opens — the `launch.defaultPort` setting (default `9222`), or the active port from a current `pdl_launch_browser`. Rather than hand-write this, let Claude call **`pdl_register_chrome_devtools`**, which runs the `claude mcp add` above for you pinned to the right port (and **`pdl_check_setup`** flags a registration that points at the wrong port).
+> **Port must match.** `chrome-devtools-mcp`'s `--browserUrl` has to point at the exact port `pwa-debug` opens — the `launch.defaultPort` setting (default `9222`), or the active port from a current `pdl_launch_browser`. Rather than hand-write this, let Claude call **`pdl_register_chrome_devtools`**, which runs the `claude mcp add` above for you pinned to the right port (and **`pdl_check_setup`** flags a registration that is *unpinned* — no `--browserUrl`, so it spawns its own isolated browser — or pointed at the wrong port).
 
-> **Mind the restart.** A registration added via `claude mcp add` is a **direct MCP** install: Claude Code must be **fully restarted** for `chrome-devtools-mcp`'s tools to load (a mid-session add does not load, and `/mcp` cannot load a newly-added server — it only shows status). If instead you install `chrome-devtools-mcp` as a **plugin**, run **`/reload-plugins`** to hot-load it with **no restart**. The bundled **`chrome-devtools-coexistence`** skill walks Claude through both paths and, for the restart case, hands you a context note to paste back afterward.
+> **Mind the (re)connect.** A registration added or changed via `claude mcp add` only takes effect when the server (re)connects. Fastest path: open **`/mcp`** and **reconnect** `chrome-devtools` — this reloads it from the current registration (verified to pick up a changed `--browserUrl`) with **no full restart and no context loss**. If the client won't load it that way, **fully restart** Claude Code as a fallback. If instead you install `chrome-devtools-mcp` as a **plugin**, run **`/reload-plugins`**. The bundled **`chrome-devtools-coexistence`** skill walks Claude through all paths and, for the full-restart fallback, hands you a context note to paste back afterward.
 
 > The host has no `install`/`serve` subcommand — `dist/main.js` auto-detects its mode: launched by Chrome (argv starts with `chrome-extension://`) it runs as the native-messaging host; launched by your MCP client it runs as the MCP server.
 
 Then let Claude drive setup and launch:
 
-1. **`pdl_check_setup`** — reports `{ ok, gaps[], recommendations[] }`: whether `chrome-devtools-mcp` is **registered** (read from the `claude` CLI) and pointed at the right debug port, the host manifest is installed, the extension dist is present, and an extension ID is registered. Follow its `next_steps` to close any gap.
-2. **`pdl_register_chrome_devtools`** — writes the `chrome-devtools-mcp` registration for you, pinned to the active/`launch.defaultPort` port (idempotent; re-points it if it's on the wrong port). *(Mutates your user-scope MCP config — Claude will ask first; a restart follows, see above.)*
-3. **`pdl_install_extension`** — copies the extension to `~/Downloads/pwa-debug-extension` (or a `target` you pass) with `chrome://extensions` "Load unpacked" instructions. *(Skip this if you use a sandbox mode below — it preloads the extension.)*
-4. **`pdl_launch_browser`** — launches/attaches a browser with the debug port live and returns the `browserUrl` to hand to `chrome-devtools-mcp`. **Always launch first:** call this *before* any `chrome-devtools-mcp` tool, so the browser + debug port exist for it to attach to.
+1. **`pdl_check_setup`** — reports `{ ok, gaps[], recommendations[] }`: whether `chrome-devtools-mcp` is **registered** (read from the `claude` CLI) **and pinned with a `--browserUrl`** at the right debug port — it flags both an *unpinned* registration (which would spawn its own isolated browser instead of attaching to yours) and one pointed at the wrong port; the host manifest is installed (including **per active sandbox profile**); the extension dist is present; and an extension ID is registered. Follow its `next_steps` to close any gap.
+2. **`pdl_register_chrome_devtools`** — writes the `chrome-devtools-mcp` registration for you, pinned to the active/`launch.defaultPort` port (idempotent; re-points it if it's unpinned or on the wrong port). *(Mutates your MCP config — Claude will ask first; a restart/reconnect follows, see above.)*
+3. **`pdl_install_extension`** — copies the extension to `~/Downloads/pwa-debug-extension` (or a `target` you pass) with `chrome://extensions` "Load unpacked" instructions. *(On most browsers a sandbox mode preloads the extension so you can skip this; on **branded Google Chrome 142+** preload is impossible — this is the manual install the sandbox launch will point you to.)*
+4. **`pdl_launch_browser`** — launches/attaches a browser with the debug port live and returns the `browserUrl` to hand to `chrome-devtools-mcp`. **Always launch first:** call this *before* any `chrome-devtools-mcp` tool, so the browser + debug port exist for it to attach to. Follow its `next_steps` — they carry the brand/version-specific guidance (preloaded vs. manual *Load unpacked*, or the modern-Chromium port caveat).
 5. **`pdl_browser_status`** — shows what's been launched (browser, profile mode, port, pid), re-probes each debug port for liveness, and reports the extension service-worker heartbeat.
+
+**The validated one-profile recipe** (what these tools converge on, verified live on Brave 148):
+
+```
+pdl_launch_browser({ browser: "brave", mode: "sandbox-persistent" })
+  → dedicated profile at ~/.pwa-debug/profiles/brave with:
+      • the native-messaging manifest auto-written into the profile (so the extension connects), and
+      • the pwa-debug extension preloaded via --load-extension (Brave honors it), and
+      • --remote-debugging-port live (custom profile dir, so Chromium 136+ opens it).
+pdl_register_chrome_devtools()  → pins chrome-devtools-mcp at that port
+restart / reconnect chrome-devtools-mcp  → it attaches to the SAME browser
+```
+
+Now `chrome-devtools-mcp` (CDP) and pwa-debug (extension → page-world) drive the same tab simultaneously — independent, non-contending channels (the extension uses page-world injection, **not** `chrome.debugger`, so there's no CDP-attacher contention).
 
 ## Profile modes
 
@@ -199,11 +213,20 @@ Then let Claude drive setup and launch:
 
 | Mode | Profile | When to use |
 |---|---|---|
-| **`existing`** *(default)* | Your normal browser profile | Debugging your real browsing session. Degrades gracefully: **(a)** debug port already live → attaches; **(b)** browser running *without* a debug port → opens a new window in the existing session (your extension tools work, but `chrome-devtools-mcp` is unavailable until you fully quit + relaunch — Chrome only opens the debug port at process start); **(c)** browser not running → spawns fresh with the port + your profile (both tool surfaces work). |
-| **`sandbox-persistent`** | `~/.pwa-debug/profiles/<browser>/` (persists across restarts) | Long-running dev work you don't want polluting your normal profile. Runs as a separate process beside your main browser, with the pwa-debug extension **preloaded** (no manual unpacked install, no content-script reload race). |
-| **`sandbox-temp`** | a fresh `mktemp` dir (removed on host shutdown) | One-off / CI / clean-state runs. Same preloaded-extension benefit; the profile is discarded when the host stops. |
+| **`existing`** *(default)* | Your normal browser profile | Debugging your real browsing session **with pwa-debug** (your real cookies, extensions, SW/cache state). Degrades gracefully: **(a)** debug port already live → attaches; **(b)** browser running *without* a debug port → opens a new window in the existing session (your extension tools work, `chrome-devtools-mcp` does not); **(c)** browser not running → spawns fresh with your profile. **Modern-Chromium caveat (136+):** Chromium refuses `--remote-debugging-port` on the **default** profile, so on a current browser `existing` mode gives you pwa-debug but **not** a CDP port — the launch reports this (`attached:false`, no false `browserUrl`) and steers you to `sandbox-persistent` for `chrome-devtools-mcp`. |
+| **`sandbox-persistent`** | `~/.pwa-debug/profiles/<browser>/` (persists across restarts) | The **canonical both-tools profile** — a dedicated profile beside your main browser, with its own `--user-data-dir` (so the debug port works on Chromium 136+). The launcher auto-writes the native-messaging manifest into the profile and, on most browsers, **preloads** the pwa-debug extension via `--load-extension`. **Branded-Google-Chrome 142+ caveat:** Chrome removed `--load-extension`, so there the launch brings up the **debug port** (for `chrome-devtools-mcp`) but **not** the extension — it returns a one-time manual *Load unpacked* walkthrough (persists in this profile), or steers you to a non-Google Chromium where preload just works. |
+| **`sandbox-temp`** | a fresh `mktemp` dir (removed on host shutdown) | One-off / CI / clean-state runs. Same as `sandbox-persistent`, but throwaway — so the Chrome-142+ manual-load step won't persist usefully here; prefer a non-Google Chromium for temp runs that need the extension. |
 
-Sandbox modes always give you both tool surfaces because they own their own `--user-data-dir` (no profile-lock collision with your main browser) and load the extension before any tab opens.
+**Extension preload depends on the browser brand + version** (the launcher detects it from `--version` and adapts):
+
+| Browser | `--load-extension` (sandbox preload) |
+|---|---|
+| Brave, Chromium, Edge, Opera, Vivaldi, Chrome for Testing | ✅ works on current versions |
+| Google Chrome ≤ 136 | ✅ works |
+| Google Chrome 137–141 | ✅ works — launcher adds `--disable-features=DisableLoadExtensionCommandLineSwitch` |
+| **Google Chrome ≥ 142** | ❌ removed — launcher omits the dead flag and guides a one-time manual *Load unpacked* (or use Brave/Chromium) |
+
+**Recommended coexistence setup:** `sandbox-persistent` on a **non-Google Chromium** (e.g. Brave or Chromium). That single profile gets the extension preloaded **and** a live debug port, so pwa-debug and `chrome-devtools-mcp` drive the same browser with zero manual steps.
 
 ## Browser support matrix
 
@@ -258,9 +281,11 @@ When something isn't working, walk this ladder — each step localizes the failu
 
 ### Common launcher gotchas
 
-- **"I launched in `existing` mode but `chrome-devtools-mcp` can't attach."** Chrome enables `--remote-debugging-port` only at process start. If the browser was already running without it, `pdl_launch_browser` opens a new window (sub-state **b**) but cannot add the port to the live process — `attached:false`. Fully quit the browser and re-run, or use `mode: sandbox-persistent` for a guaranteed debug port.
+- **"I launched in `existing` mode but `chrome-devtools-mcp` can't attach."** Two causes. **(1)** Chrome opens `--remote-debugging-port` only at process start — if the browser was already running without it, `pdl_launch_browser` opens a new window (sub-state **b**) but can't add the port to the live process (`attached:false`). **(2)** On **Chromium 136+**, the port is refused on the *default* profile entirely, even on a fresh start. Either way: use `mode: sandbox-persistent` (a dedicated profile where the port works) for `chrome-devtools-mcp`.
 - **Brave/Chrome says "Opening in existing browser session."** That's sub-state **b** — the binary handed your request to the already-running process instead of starting a fresh one with the port. Same fix as above.
-- **Added the MCP server but the tools don't appear.** `.mcp.json` / client MCP config is read at startup — restart your MCP client after adding `pwa-debug` or `chrome-devtools`.
+- **Sandbox launch came up but pwa-debug never connects (Google Chrome 142+).** Branded Google Chrome 142+ permanently ignores `--load-extension`, so the sandbox can't auto-preload the extension — the launch says so and gives you a one-time `chrome://extensions` → Developer mode → *Load unpacked* walkthrough (it persists in that dedicated profile). Or relaunch with `browser: "brave"` / `"chromium"`, where preload works automatically. (`chrome-devtools-mcp` still works either way — the debug port is live.)
+- **`chrome-devtools-mcp` opened its own blank browser instead of using yours.** Its registration is **unpinned** (no `--browserUrl`). Run `pdl_register_chrome_devtools` (or re-add with `--browserUrl http://127.0.0.1:<port>`) and restart/reconnect it; `pdl_check_setup` flags this.
+- **Added the MCP server but the tools don't appear.** `.mcp.json` / client MCP config is read at startup — restart your MCP client (or `/mcp`-reconnect that server) after adding `pwa-debug` or `chrome-devtools`.
 - **Tools worked, then stopped after I reloaded the extension.** Reloading the extension at `chrome://extensions` detaches content scripts from already-open tabs. Hard-refresh the page tab (Ctrl+Shift+R); the SW also auto-reinjects on the next `session_ping` (look for `pageWorldSelfHealed: true`). Sandbox modes avoid this entirely (extension preloaded before tabs open).
 
 
