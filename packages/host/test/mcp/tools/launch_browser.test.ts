@@ -130,6 +130,27 @@ describe('launchBrowserCore', () => {
     expect(deps.recorded).toEqual([{ port: 9222, browser: 'chrome' }]);
   });
 
+  it('existing mode: flags debugPortBlockedOnDefaultProfile for Chromium >= 136', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chrome], 'chrome'),
+      version: { brand: 'google-chrome', major: 148 },
+    });
+    await launchBrowserCore({}, 'linux', {}, deps);
+    expect(deps.launched[0]?.debugPortBlockedOnDefaultProfile).toBe(true);
+  });
+
+  it('existing mode: does not flag the port block below 136 (or when version unknown)', async () => {
+    const deps = makeDeps({
+      discovery: discovery([chrome], 'chrome'),
+      version: { brand: 'google-chrome', major: 135 },
+    });
+    await launchBrowserCore({}, 'linux', {}, deps);
+    expect(deps.launched[0]?.debugPortBlockedOnDefaultProfile).toBe(false);
+    const deps2 = makeDeps({ discovery: discovery([chrome], 'chrome') }); // version null
+    await launchBrowserCore({}, 'linux', {}, deps2);
+    expect(deps2.launched[0]?.debugPortBlockedOnDefaultProfile).toBe(false);
+  });
+
   it('honours an explicit browser request', async () => {
     const deps = makeDeps({ discovery: discovery([chrome, brave], 'chrome') });
     await launchBrowserCore({ browser: 'brave' }, 'linux', {}, deps);

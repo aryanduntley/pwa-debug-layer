@@ -95,6 +95,16 @@ export const checkSetupCore = async (
     recommendations.push(
       `Register chrome-devtools-mcp (separate, optional MCP — runs via npx, no global install): \`${cdpSnippet}\`. A full Claude Code restart is required afterward for its tools to load.`,
     );
+  } else if (cdpReg.browserUrl === null) {
+    // Registered but UNPINNED (no --browserUrl): chrome-devtools-mcp spawns its
+    // OWN isolated browser instead of attaching to pwa-debug's debug port, so
+    // the two tools never share a browser (FINDING #4).
+    gaps.push(
+      'chrome-devtools-mcp is registered WITHOUT a --browserUrl, so it launches its own isolated browser instead of attaching to the pwa-debug debug port; the two tools never share a browser.',
+    );
+    recommendations.push(
+      `Pin chrome-devtools-mcp to the active debug port: \`claude mcp remove chrome-devtools\` then \`${cdpSnippet}\`, and restart Claude Code (or reconnect it) so it attaches to the pwa-debug browser.`,
+    );
   } else if (cdpReg.browserUrl !== null && cdpRegPort !== expectedPort) {
     gaps.push(
       `chrome-devtools-mcp is registered but its --browserUrl (${cdpReg.browserUrl}) does not match the active debug port (${expectedBrowserUrl}); it will attach to the wrong browser or none.`,

@@ -190,6 +190,7 @@ describe('launchExisting — triad', () => {
     execPath: '/usr/bin/google-chrome',
     port: 9222,
     userDataDir: '/h/.config/google-chrome',
+    debugPortBlockedOnDefaultProfile: false,
   };
 
   it('(a) attaches when the debug port is live — no spawn', async () => {
@@ -242,6 +243,24 @@ describe('launchExisting — triad', () => {
         ],
       },
     ]);
+  });
+
+  it('(c, Chromium 136+) spawns fresh but degrades — no usable debug port on the default profile', async () => {
+    const deps = makeDeps({ portLive: false, processRunning: false });
+    const r = await launchExisting(
+      { ...input, debugPortBlockedOnDefaultProfile: true },
+      deps,
+    );
+    expect(r).toMatchObject({
+      action: 'spawn-fresh',
+      attached: false,
+      browserUrl: null,
+      pid: 4242,
+    });
+    expect(r.degradation).toContain('DEFAULT profile');
+    expect(r.degradation).toContain('sandbox-persistent');
+    // the browser is still spawned (pwa-debug extension usable) — only the port is unavailable
+    expect(deps.spawns).toHaveLength(1);
   });
 
   it('does not consult isProcessRunning when the port is already live', async () => {

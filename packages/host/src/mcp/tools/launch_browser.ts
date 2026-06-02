@@ -27,6 +27,7 @@ import {
 } from '../../browser_launch/node_deps.js';
 import {
   extensionLoadStrategy,
+  debugPortBlockedOnDefaultProfile,
   type BrowserVersion,
 } from '../../browser_launch/extension_load.js';
 import type {
@@ -154,6 +155,15 @@ const nextStepsFor = (result: LaunchResult): string[] => {
     ];
   }
   if (result.action === 'spawn-fresh') {
+    // Degraded spawn-fresh: existing-mode on Chromium 136+ couldn't open a debug
+    // port on the default profile (browserUrl null). Don't claim a live port.
+    if (!result.browserUrl) {
+      return [
+        result.degradation ??
+          `Spawned ${result.browser}, but no remote-debugging port is available this run.`,
+        "For chrome-devtools-mcp (CDP), use pdl_launch_browser mode='sandbox-persistent' — a dedicated profile where the debug port works.",
+      ];
+    }
     const steps = [
       `Spawned ${result.browser} (pid ${result.pid ?? 'unknown'}) with the debug port live at ${result.browserUrl}. ${cdpHint(result.browserUrl as string)}`,
     ];
@@ -359,11 +369,18 @@ export const launchBrowserCore = async (
       ],
     );
   }
+  // Chromium 136+ won't open a debug port on the default profile (existing mode
+  // uses it), so a spawn-fresh would report a port that never listens. Resolve
+  // the version and let launch_existing degrade honestly when so.
+  const portBlocked = debugPortBlockedOnDefaultProfile(
+    await deps.readVersion(target),
+  );
   const result = await deps.launch({
     browser: target.browser,
     execPath: target.execPath,
     port,
     userDataDir,
+    debugPortBlockedOnDefaultProfile: portBlocked,
     ...(target.appId !== undefined ? { appId: target.appId } : {}),
   });
   deps.recordLaunch(result, port);

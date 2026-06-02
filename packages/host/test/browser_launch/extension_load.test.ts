@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  debugPortBlockedOnDefaultProfile,
   extensionLoadStrategy,
   parseBrowserVersion,
   readBrowserVersion,
@@ -94,6 +95,19 @@ describe('extensionLoadStrategy', () => {
     expect(extensionLoadStrategy({ brand: 'google-chrome', major: 141 })).toBe('load-flag-escape-hatch');
     expect(extensionLoadStrategy({ brand: 'google-chrome', major: 142 })).toBe('manual-guided');
     expect(extensionLoadStrategy({ brand: 'google-chrome', major: 148 })).toBe('manual-guided');
+  });
+});
+
+describe('debugPortBlockedOnDefaultProfile', () => {
+  it('is true for Chromium >= 136 regardless of brand', () => {
+    expect(debugPortBlockedOnDefaultProfile({ brand: 'google-chrome', major: 136 })).toBe(true);
+    expect(debugPortBlockedOnDefaultProfile({ brand: 'brave', major: 148 })).toBe(true);
+    expect(debugPortBlockedOnDefaultProfile({ brand: 'chromium', major: 136 })).toBe(true);
+  });
+  it('is false below 136 and for an unknown (null) version', () => {
+    expect(debugPortBlockedOnDefaultProfile({ brand: 'google-chrome', major: 135 })).toBe(false);
+    expect(debugPortBlockedOnDefaultProfile({ brand: 'brave', major: 120 })).toBe(false);
+    expect(debugPortBlockedOnDefaultProfile(null)).toBe(false);
   });
 });
 

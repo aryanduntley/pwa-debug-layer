@@ -85,6 +85,15 @@ export type LaunchExistingInput = {
    * (execPath is the app-id, not a host binary, for flatpak targets).
    */
   readonly appId?: string;
+  /**
+   * True when this browser refuses --remote-debugging-port on the default
+   * profile (Chromium >=136). A spawn-fresh existing-mode launch then comes up
+   * WITHOUT a usable debug port, so the result degrades (browserUrl null,
+   * attached false) and steers to sandbox-persistent rather than reporting a
+   * port that never listens. Resolved by the orchestrator from the target's
+   * version via debugPortBlockedOnDefaultProfile.
+   */
+  readonly debugPortBlockedOnDefaultProfile: boolean;
 };
 
 /** Inputs for a sandbox-mode launch (dedicated profile + preloaded extension). */

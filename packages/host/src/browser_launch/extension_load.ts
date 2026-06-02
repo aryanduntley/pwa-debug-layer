@@ -1,5 +1,7 @@
 /**
- * Pure browser brand+version → unpacked-extension-load capability.
+ * Pure browser brand+version → launch capabilities (unpacked-extension load +
+ * debug-port-on-default-profile). One place for "what can this browser version
+ * do at launch", all keyed off the BrowserVersion parsed from `--version`.
  *
  * Branded Google Chrome removed the --load-extension CLI flag: at 137 (with a
  * temporary escape hatch, --disable-features=DisableLoadExtensionCommandLineSwitch)
@@ -97,6 +99,21 @@ export const extensionLoadStrategy = (
   if (version.major >= CHROME_GATED_FROM) return 'load-flag-escape-hatch';
   return 'load-flag';
 };
+
+/** Chromium major from which --remote-debugging-port is refused on the DEFAULT
+ *  profile (must use a custom --user-data-dir). Brand-agnostic Chromium change. */
+const DEBUG_PORT_CUSTOM_DIR_FROM = 136;
+
+/**
+ * True when this browser refuses --remote-debugging-port on the default profile
+ * (Chromium >=136 — brand-agnostic). existing-mode uses the user's default
+ * profile, so when this holds the spawned browser will NOT expose a debug port;
+ * the launch degrades (no false browserUrl) and steers to a sandbox profile
+ * (custom dir), where the port works. null version => false (attempt the port).
+ */
+export const debugPortBlockedOnDefaultProfile = (
+  version: BrowserVersion | null,
+): boolean => version !== null && version.major >= DEBUG_PORT_CUSTOM_DIR_FROM;
 
 /** Effect signature: run a command, capturing stdout + exit code, never reject.
  *  Structurally matches browser_discovery's CommandResult-returning runCommand,

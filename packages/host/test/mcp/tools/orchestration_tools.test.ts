@@ -206,6 +206,19 @@ describe('checkSetupCore', () => {
     expect(data.recommendations.join(' ')).toContain('--browserUrl http://127.0.0.1:9222');
   });
 
+  it('flags a chrome-devtools-mcp registered WITHOUT a --browserUrl (unpinned)', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        readCdpRegistration: async () => ({ registered: true, browserUrl: null }),
+      }),
+    );
+    const data = res.data as { ok: boolean; gaps: string[]; recommendations: string[] };
+    expect(data.ok).toBe(false);
+    expect(data.gaps.join(' ')).toContain('WITHOUT a --browserUrl');
+    expect(data.recommendations.join(' ')).toContain('claude mcp add chrome-devtools');
+    expect(data.recommendations.join(' ')).toContain('--browserUrl http://127.0.0.1:9222');
+  });
+
   it('flags a chrome-devtools-mcp registered at the wrong debug port', async () => {
     const res = await checkSetupCore(
       allGood({
