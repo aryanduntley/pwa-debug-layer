@@ -14,6 +14,11 @@ import {
   filterTempProfileNames,
 } from '../../src/browser_launch/cleanup.js';
 import { launchSandbox } from '../../src/browser_launch/launch_sandbox.js';
+import {
+  mergeDeveloperModePref,
+  profilePreferencesPath,
+} from '../../src/browser_launch/profile_seed.js';
+import { extensionSwWsUrl } from '../../src/browser_launch/extension_refresh.js';
 import type { LaunchSandboxDeps } from '../../src/browser_launch/types.js';
 
 describe('buildSandboxSpawnArgs', () => {
@@ -239,26 +244,46 @@ describe('launchSandbox', () => {
     spawns: Array<{ cmd: string; args: readonly string[] }>;
     registered: string[];
     manifestWrites: Array<{ userDataDir: string; snapPackage?: string }>;
+    seeds: string[];
+    refreshes: number[];
+    /** Append-order tag log: 'seed' / 'manifest' / 'spawn' — proves ordering. */
+    order: string[];
   } => {
     const spawns: Array<{ cmd: string; args: readonly string[] }> = [];
     const registered: string[] = [];
     const manifestWrites: Array<{ userDataDir: string; snapPackage?: string }> = [];
+    const seeds: string[] = [];
+    const refreshes: number[] = [];
+    const order: string[] = [];
     return {
       spawns,
       registered,
       manifestWrites,
+      seeds,
+      refreshes,
+      order,
       probeDebugPort: async () => opts.portLive ?? false,
       spawnBrowser: async (cmd, args) => {
+        order.push('spawn');
         spawns.push({ cmd, args });
         return { pid: opts.pid ?? 555 };
       },
       registerTempProfile: (dir) => registered.push(dir),
       writeSandboxManifest: async (userDataDir, snapPackage) => {
+        order.push('manifest');
         manifestWrites.push(
           snapPackage === undefined
             ? { userDataDir }
             : { userDataDir, snapPackage },
         );
+      },
+      seedDeveloperMode: async (userDataDir) => {
+        order.push('seed');
+        seeds.push(userDataDir);
+      },
+      refreshExtension: async (port) => {
+        refreshes.push(port);
+        return true;
       },
     };
   };
@@ -301,6 +326,39 @@ describe('launchSandbox', () => {
     expect(deps.manifestWrites).toEqual([
       { userDataDir: '/h/.pwa-debug/profiles/chrome' },
     ]);
+    // #318: Developer Mode is seeded into the profile BEFORE spawn (after the
+    // manifest), so a flatpak Chromium honors --load-extension on first run.
+    expect(deps.seeds).toEqual(['/h/.pwa-debug/profiles/chrome']);
+    expect(deps.order).toEqual(['manifest', 'seed', 'spawn']);
+    // refresh is opt-in: not requested here, so the extension isn't reloaded.
+    expect(deps.refreshes).toEqual([]);
+  });
+
+  it('refreshes the extension after spawn when refreshExtension is set (#318)', async () => {
+    const deps = makeDeps({ portLive: false });
+    await launchSandbox(
+      { ...input, mode: 'sandbox-persistent', refreshExtension: true },
+      deps,
+    );
+    expect(deps.refreshes).toEqual([9222]);
+  });
+
+  it('refreshes the extension on the attach path too — no spawn, no seed', async () => {
+    const deps = makeDeps({ portLive: true });
+    const r = await launchSandbox(
+      { ...input, mode: 'sandbox-persistent', refreshExtension: true },
+      deps,
+    );
+    expect(r.action).toBe('attach');
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.seeds).toEqual([]); // attach never seeds (no spawn)
+    expect(deps.refreshes).toEqual([9222]);
+  });
+
+  it('does NOT refresh on attach when refreshExtension is unset', async () => {
+    const deps = makeDeps({ portLive: true });
+    await launchSandbox({ ...input, mode: 'sandbox-persistent' }, deps);
+    expect(deps.refreshes).toEqual([]);
   });
 
   it('spawns a temp profile and registers it for cleanup', async () => {
@@ -309,6 +367,8 @@ describe('launchSandbox', () => {
     expect(r.profileType).toBe('sandbox-temp');
     expect(deps.spawns).toHaveLength(1);
     expect(deps.registered).toEqual(['/h/.pwa-debug/profiles/chrome']);
+    // a throwaway temp profile is also seeded with Developer Mode before spawn
+    expect(deps.seeds).toEqual(['/h/.pwa-debug/profiles/chrome']);
     // temp profiles are custom-dir too → per-profile manifest written before spawn
     expect(deps.manifestWrites).toEqual([
       { userDataDir: '/h/.pwa-debug/profiles/chrome' },
@@ -407,5 +467,90 @@ describe('launchSandbox', () => {
     ]);
     // degradation explains the extension is not auto-loaded
     expect(r.degradation).toContain('NOT auto-loaded');
+  });
+});
+
+describe('profilePreferencesPath', () => {
+  it('points at <user-data-dir>/Default/Preferences', () => {
+    expect(profilePreferencesPath('/h/.pwa-debug/profiles/brave')).toBe(
+      '/h/.pwa-debug/profiles/brave/Default/Preferences',
+    );
+  });
+});
+
+describe('mergeDeveloperModePref', () => {
+  it('forces extensions.ui.developer_mode=true on a fresh (null) prefs object', () => {
+    expect(mergeDeveloperModePref(null)).toEqual({
+      extensions: { ui: { developer_mode: true } },
+    });
+  });
+
+  it('preserves unrelated top-level + extensions + ui keys (non-destructive)', () => {
+    const existing = {
+      session: { restore_on_startup: 5 },
+      extensions: {
+        settings: { abc: 1 },
+        ui: { developer_mode: false, other_flag: 7 },
+      },
+    };
+    expect(mergeDeveloperModePref(existing)).toEqual({
+      session: { restore_on_startup: 5 },
+      extensions: {
+        settings: { abc: 1 },
+        ui: { developer_mode: true, other_flag: 7 },
+      },
+    });
+  });
+
+  it('does not mutate the input', () => {
+    const existing = { extensions: { ui: { developer_mode: false } } };
+    mergeDeveloperModePref(existing);
+    expect(existing.extensions.ui.developer_mode).toBe(false);
+  });
+
+  it('tolerates a non-object extensions value by replacing it', () => {
+    expect(mergeDeveloperModePref({ extensions: 'bogus' })).toEqual({
+      extensions: { ui: { developer_mode: true } },
+    });
+  });
+});
+
+describe('extensionSwWsUrl', () => {
+  const sw = {
+    type: 'service_worker',
+    url: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/sw.js',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/SW1',
+  };
+
+  it('returns the service-worker target webSocketDebuggerUrl', () => {
+    expect(extensionSwWsUrl([sw])).toBe(
+      'ws://127.0.0.1:9222/devtools/page/SW1',
+    );
+  });
+
+  it('ignores page targets and picks the extension SW', () => {
+    const page = {
+      type: 'page',
+      url: 'https://example.com/',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/P1',
+    };
+    expect(extensionSwWsUrl([page, sw])).toBe(
+      'ws://127.0.0.1:9222/devtools/page/SW1',
+    );
+  });
+
+  it('skips a service_worker whose url is not a chrome-extension:// url', () => {
+    const otherSw = { ...sw, url: 'https://example.com/sw.js' };
+    expect(extensionSwWsUrl([otherSw])).toBeNull();
+  });
+
+  it('returns null for an empty list, nulls, or non-objects', () => {
+    expect(extensionSwWsUrl([])).toBeNull();
+    expect(extensionSwWsUrl([null, 42, 'x'])).toBeNull();
+  });
+
+  it('returns null when the SW target lacks a string webSocketDebuggerUrl', () => {
+    const noWs = { type: 'service_worker', url: sw.url };
+    expect(extensionSwWsUrl([noWs])).toBeNull();
   });
 });

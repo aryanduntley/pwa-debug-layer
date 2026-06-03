@@ -61,6 +61,22 @@ const inputSchema = {
 const isSandboxMode = (mode: string): mode is SandboxMode =>
   mode === 'sandbox-persistent' || mode === 'sandbox-temp';
 
+/**
+ * Opt-in: after a sandbox-persistent launch, force the extension to reload so a
+ * rebuild's new code is served instead of the profile's cached copy (#318). OFF
+ * by default — end-user launches are unchanged; set PWA_DEBUG_REFRESH_EXTENSION=1
+ * for AI-driven re-verification. Only meaningful for the persistent profile (a
+ * temp profile is always fresh).
+ */
+const refreshExtensionEnabled = (
+  mode: SandboxMode,
+  env: NodeJS.ProcessEnv,
+): boolean => {
+  if (mode !== 'sandbox-persistent') return false;
+  const v = env.PWA_DEBUG_REFRESH_EXTENSION;
+  return v !== undefined && v !== '' && v !== '0' && v.toLowerCase() !== 'false';
+};
+
 /** Tiebreak order when several packagings of the requested browser exist and the
  *  caller did not pin one: prefer a normal system install, then snap, then flatpak. */
 const PACKAGING_PREFERENCE: Record<Packaging, number> = {
@@ -341,6 +357,7 @@ export const launchBrowserCore = async (
       extensionPath,
       loadStrategy,
       mode,
+      refreshExtension: refreshExtensionEnabled(mode, env),
       ...(target.appId !== undefined ? { appId: target.appId } : {}),
       ...(snapPkg ? { snapPackage: snapPkg } : {}),
     });

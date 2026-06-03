@@ -33,6 +33,9 @@ export const launchSandbox = async (
   };
 
   if (await deps.probeDebugPort(input.port)) {
+    // Attaching to an already-live sandbox-persistent profile: it may be serving
+    // stale extension code from before a rebuild, so refresh on request (#318).
+    if (input.refreshExtension) await deps.refreshExtension(input.port);
     return Object.freeze({ ...base, action: 'attach' as const, pid: null });
   }
 
@@ -44,6 +47,11 @@ export const launchSandbox = async (
   // Drop a copy into the sandbox profile before spawn. snapPackage routes the
   // manifest at the snap relay launcher; flatpak/native at the node launcher.
   await deps.writeSandboxManifest(input.userDataDir, input.snapPackage);
+
+  // A fresh sandbox profile has Developer Mode OFF, which makes a flatpak Chromium
+  // refuse the unpacked --load-extension (#318). Seed developer_mode=true into the
+  // profile's Preferences before spawn so the extension loads with no manual step.
+  await deps.seedDeveloperMode(input.userDataDir);
 
   const { cmd, args } = input.appId
     ? buildSandboxFlatpakArgs(
@@ -64,6 +72,10 @@ export const launchSandbox = async (
   if (input.mode === 'sandbox-temp') {
     deps.registerTempProfile(input.userDataDir);
   }
+  // On a sandbox-persistent relaunch the profile can serve cached extension code,
+  // so a refresh re-reads the rebuilt source once the port + SW come up. The
+  // effect polls the port itself, tolerating the not-yet-bound spawn (#318).
+  if (input.refreshExtension) await deps.refreshExtension(input.port);
   const spawned = { ...base, action: 'spawn-fresh' as const, pid };
   // manual-guided (branded Google Chrome >=142): the extension was NOT
   // preloaded — the CDP port is live but pwa-debug stays disconnected until the

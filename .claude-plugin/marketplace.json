@@ -1,0 +1,17 @@
+{
+  "name": "pwa-debug",
+  "version": "0.1.0",
+  "description": "Browser-side debug layer exposing live PWA state to AI agents via MCP.",
+  "repository": "https://github.com/aryanduntley/pwa-debug-layer",
+  "owner": {
+    "name": "aryanduntley",
+    "email": "aryanduntley@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "pwa-debug",
+      "source": "./",
+      "description": "Browser-side debug layer that exposes live PWA state (DOM, framework state, stores, events, library popups) to AI agents via MCP. Pairs with the optional chrome-devtools-mcp (registered separately); the bundled chrome-devtools-coexistence skill walks Claude through adding it."
+    }
+  ]
+}

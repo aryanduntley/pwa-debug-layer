@@ -49,6 +49,12 @@ import {
   readBrowserVersion,
   type BrowserVersion,
 } from './extension_load.js';
+import {
+  mergeDeveloperModePref,
+  profilePreferencesPath,
+  type ProfilePreferences,
+} from './profile_seed.js';
+import { extensionSwWsUrl } from './extension_refresh.js';
 import type { DiscoveredBrowser } from '../browser_discovery/types.js';
 import {
   snapPackageForBrowser,
@@ -274,6 +280,130 @@ const writeSandboxManifestImpl = async (
   await writeHostManifestToDir(manifest, join(userDataDir, 'NativeMessagingHosts'));
 };
 
+/**
+ * Seed extensions.ui.developer_mode=true into the sandbox profile's
+ * Default/Preferences before spawn (#318), so a flatpak Chromium honors the
+ * unpacked --load-extension without a manual Developer-Mode toggle. Reads any
+ * existing Preferences and merges non-destructively; creates Default/ as needed;
+ * writes atomically (temp+rename). Best-effort: a read/parse/write failure must
+ * never break the launch — the manual Developer-Mode path still works.
+ */
+const seedDeveloperModeImpl = async (userDataDir: string): Promise<void> => {
+  try {
+    const prefsPath = profilePreferencesPath(userDataDir);
+    let existing: ProfilePreferences | null = null;
+    if (existsSync(prefsPath)) {
+      try {
+        existing = JSON.parse(
+          readFileSync(prefsPath, 'utf-8'),
+        ) as ProfilePreferences;
+      } catch {
+        existing = null; // corrupt Preferences → reseed from scratch
+      }
+    }
+    const merged = mergeDeveloperModePref(existing);
+    mkdirSync(dirname(prefsPath), { recursive: true });
+    const tmp = `${prefsPath}.tmp.${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(merged));
+    renameSync(tmp, prefsPath);
+  } catch {
+    // best-effort; never break the launch on a seeding failure.
+  }
+};
+
+const REFRESH_POLL_ATTEMPTS = 20;
+const REFRESH_POLL_INTERVAL_MS = 300;
+
+/** GET /json/list and return its target array (any error / non-array → []). */
+const fetchCdpTargets = async (port: number): Promise<readonly unknown[]> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const body = (await res.json().catch(() => null)) as unknown;
+    return Array.isArray(body) ? body : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Open the extension SW's CDP websocket and evaluate chrome.runtime.reload(),
+ * forcing it to re-read the unpacked source. reload() tears the SW down, so the
+ * evaluate response OR the socket closing both count as success; resolves false
+ * on error/timeout. Uses Node's global WebSocket (Node >= 22).
+ */
+const cdpReloadExtension = (wsUrl: string): Promise<boolean> =>
+  new Promise((resolveP) => {
+    let settled = false;
+    const finish = (v: boolean): void => {
+      if (!settled) {
+        settled = true;
+        resolveP(v);
+      }
+    };
+    try {
+      const ws = new WebSocket(wsUrl);
+      const timer = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+        finish(false);
+      }, 2000);
+      ws.addEventListener('open', () => {
+        ws.send(
+          JSON.stringify({
+            id: 1,
+            method: 'Runtime.evaluate',
+            params: { expression: 'chrome.runtime.reload()' },
+          }),
+        );
+      });
+      ws.addEventListener('message', () => {
+        clearTimeout(timer);
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+        finish(true);
+      });
+      ws.addEventListener('close', () => {
+        clearTimeout(timer);
+        finish(true);
+      });
+      ws.addEventListener('error', () => {
+        clearTimeout(timer);
+        finish(false);
+      });
+    } catch {
+      finish(false);
+    }
+  });
+
+/**
+ * Poll the debug port for the loaded pwa-debug extension's service worker (it
+ * appears once the port binds and the SW starts), then force it to reload so a
+ * sandbox-persistent relaunch serves the rebuilt code instead of cached code
+ * (#318). Tolerates a not-yet-bound spawn by polling. Returns true when a reload
+ * was issued, false when no extension SW surfaced in time. Never throws.
+ */
+const refreshExtensionImpl = async (port: number): Promise<boolean> => {
+  for (let i = 0; i < REFRESH_POLL_ATTEMPTS; i += 1) {
+    const wsUrl = extensionSwWsUrl(await fetchCdpTargets(port));
+    if (wsUrl) return cdpReloadExtension(wsUrl);
+    await sleep(REFRESH_POLL_INTERVAL_MS);
+  }
+  return false;
+};
+
 /** Production LaunchSandboxDeps: probe + spawn reused, temp dirs auto-tracked. */
 export const defaultSandboxDeps = (): LaunchSandboxDeps =>
   Object.freeze({
@@ -281,6 +411,8 @@ export const defaultSandboxDeps = (): LaunchSandboxDeps =>
     spawnBrowser: spawnBrowserImpl,
     registerTempProfile: (dir: string) => getTempRegistry().register(dir),
     writeSandboxManifest: writeSandboxManifestImpl,
+    seedDeveloperMode: seedDeveloperModeImpl,
+    refreshExtension: refreshExtensionImpl,
   });
 
 // Lazy module-singleton launch registry, persisted to launches.json beside the

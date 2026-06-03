@@ -121,6 +121,13 @@ export type LaunchSandboxInput = {
    * custom --user-data-dir searches there. Mutually exclusive with appId.
    */
   readonly snapPackage?: string;
+  /**
+   * When true (sandbox-persistent only), force an extension reload once the
+   * debug port is live so a rebuild's new code is served (note 318). Set by the
+   * pdl_launch_browser handler from PWA_DEBUG_REFRESH_EXTENSION — OFF by default,
+   * so end-user launches are unchanged; this is dev/AI re-verification ergonomics.
+   */
+  readonly refreshExtension?: boolean;
 };
 
 /**
@@ -146,4 +153,20 @@ export type LaunchSandboxDeps = Pick<
     userDataDir: string,
     snapPackage?: string,
   ) => Promise<void>;
+  /**
+   * Seed `<userDataDir>/Default/Preferences` with
+   * extensions.ui.developer_mode=true BEFORE spawn, so a fresh sandbox profile
+   * honors --load-extension without a manual Developer-Mode toggle (note 318: a
+   * flatpak Chromium disables unpacked --load-extension when dev mode is off).
+   * Non-destructive (merges into existing prefs); best-effort (never throws).
+   */
+  readonly seedDeveloperMode: (userDataDir: string) => Promise<void>;
+  /**
+   * Force the loaded pwa-debug extension to reload (chrome.runtime.reload() over
+   * the SW's CDP websocket) so a rebuild's new page-world/SW code is served on a
+   * sandbox-persistent relaunch (note 318: the profile otherwise caches stale
+   * extension code). Polls the debug port for the extension SW first. Resolves
+   * true when a reload was issued, false otherwise; never throws.
+   */
+  readonly refreshExtension: (port: number) => Promise<boolean>;
 };

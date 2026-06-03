@@ -179,6 +179,23 @@ claude mcp add pwa-debug --scope user -- node /absolute/path/to/pwa-debug-layer/
 claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
 ```
 
+### Or install `pwa-debug` as a Claude Code plugin
+
+The repo ships a `.claude-plugin/` manifest, so instead of the manual `claude mcp add pwa-debug` above you can install the host as a plugin and pick up updates with **`/reload-plugins`** — no full restart:
+
+```sh
+# Add this repo as a plugin marketplace (use the local checkout path, or the GitHub URL)
+/plugin marketplace add /absolute/path/to/pwa-debug-layer
+# Install + enable the pwa-debug plugin from it
+/plugin install pwa-debug@pwa-debug
+# After enabling (or after a `git pull` + rebuild), bring the MCP server up with no restart:
+/reload-plugins
+```
+
+> **Build the host first.** The plugin's MCP entry runs `node ${CLAUDE_PLUGIN_ROOT}/packages/host/dist/main.js`, so `dist/` must exist — run `pnpm --filter @pwa-debug/host build` in the checkout before enabling.
+>
+> **`chrome-devtools-mcp` is still separate.** The plugin declares **only** the `pwa-debug` host — `chrome-devtools-mcp` stays the optional `claude mcp add chrome-devtools …` above (no version coupling, no owning its launch). The bundled **`chrome-devtools-coexistence`** skill walks you through registering it; with a plugin install, its "make the tools appear" step is `/reload-plugins`.
+
 > **Port must match.** `chrome-devtools-mcp`'s `--browserUrl` has to point at the exact port `pwa-debug` opens — the `launch.defaultPort` setting (default `9222`), or the active port from a current `pdl_launch_browser`. Rather than hand-write this, let Claude call **`pdl_register_chrome_devtools`**, which runs the `claude mcp add` above for you pinned to the right port (and **`pdl_check_setup`** flags a registration that is *unpinned* — no `--browserUrl`, so it spawns its own isolated browser — or pointed at the wrong port).
 
 > **Mind the (re)connect.** A registration added or changed via `claude mcp add` only takes effect when the server (re)connects. Fastest path: open **`/mcp`** and **reconnect** `chrome-devtools` — this reloads it from the current registration (verified to pick up a changed `--browserUrl`) with **no full restart and no context loss**. If the client won't load it that way, **fully restart** Claude Code as a fallback. If instead you install `chrome-devtools-mcp` as a **plugin**, run **`/reload-plugins`**. The bundled **`chrome-devtools-coexistence`** skill walks Claude through all paths and, for the full-restart fallback, hands you a context note to paste back afterward.

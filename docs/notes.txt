@@ -3,21 +3,3 @@
 
   flatpak uninstall --unused   
 ===
- Captured as note #327 (it changes the coexistence docs — sandbox-preload can't deliver a working
-  extension on Chrome 137+, so the canonical both-tools recipe is existing-mode on a profile that
-  already has the extension).
-
-  note #329
-
-  The README's setup/coexistence section currently documents a flow that's broken on modern Chrome
-  (sandbox "preloaded, no reload"; existing-mode giving a port). If I rewrite it now, I'd be
-  documenting the manual workaround we just did by hand — which the launcher fixes will then
-  obsolete, forcing a second rewrite. So the substantive rewrite belongs after #67–#70 land,
-  describing the real one-click flow.
-
-  But — the current text actively misleads users into the exact wall we hit tonight. So the one
-  thing worth doing before the fixes is a short "Known limitation (Chrome 136+/137+)" caveat on
-  the affected sections. I parked both in milestone #71 (rewrite = after; interim caveat =
-  optional now).
-
-  My recommendation: leave the README until the launcher work
