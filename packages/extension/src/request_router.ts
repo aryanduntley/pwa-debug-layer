@@ -686,6 +686,31 @@ const handlePwaInstallability: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// storage_get (PWA Runtime Diagnostics T2): forward area + limit to the page-world.
+const handleStorageGet: RequestHandler = async (env) => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const payload: Record<string, unknown> = {};
+  if (r['area'] === 'session' || r['area'] === 'local') payload['area'] = r['area'];
+  if (
+    typeof r['limit'] === 'number' &&
+    Number.isInteger(r['limit']) &&
+    (r['limit'] as number) > 0
+  ) {
+    payload['limit'] = r['limit'];
+  }
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'storage_get', payload };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
 const handleCacheInspect: RequestHandler = async (env) => {
   const r =
     env.payload !== null && typeof env.payload === 'object'
@@ -1328,6 +1353,7 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   cache_match: handleCacheMatch,
   pwa_status: handlePwaStatus,
   pwa_installability: handlePwaInstallability,
+  storage_get: handleStorageGet,
 });
 
 const errorResponse = (

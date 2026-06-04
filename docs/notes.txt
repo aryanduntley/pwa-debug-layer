@@ -3,3 +3,4 @@
 
   flatpak uninstall --unused   
 ===
+M64 → M65 → M66 → M59.

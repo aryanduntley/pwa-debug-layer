@@ -104,6 +104,8 @@ import {
   type NavLike,
 } from '../pwa_status/read.js';
 import { readInstallability } from '../pwa_installability/read.js';
+import { readWebStorage, type StorageLike } from '../storage/web_storage.js';
+import type { StorageArea, StorageGetResult } from '@pwa-debug/shared';
 
 // Singleton injected by page-world.ts bootstrap so resolveStore can consult the
 // Zustand devtools shim's connect-time captures as a detection path (mirrors
@@ -1510,6 +1512,39 @@ export const pwaInstallabilityHandler = async (): Promise<InstallabilityResult> 
   });
 };
 
+// storage_get (PWA Runtime Diagnostics T2): snapshot the debugged PWA's
+// localStorage / sessionStorage. Feature-detected — a blocked/absent area yields
+// supported:false rather than throwing.
+const DEFAULT_STORAGE_LIMIT = 500;
+
+const getWebStorage = (area: StorageArea): StorageLike | null => {
+  try {
+    const s = area === 'session' ? window.sessionStorage : window.localStorage;
+    return (s as StorageLike | undefined) ?? null;
+  } catch {
+    // Access can throw when storage is disabled (e.g. third-party / blocked).
+    return null;
+  }
+};
+
+export const storageGetHandler = (
+  env: PageBridgeRequestEnvelope,
+): StorageGetResult | { readonly error: { readonly message: string } } => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const rawArea = r['area'];
+  const area: StorageArea = rawArea === 'session' ? 'session' : 'local';
+  const limit =
+    typeof r['limit'] === 'number' &&
+    Number.isInteger(r['limit']) &&
+    (r['limit'] as number) > 0
+      ? (r['limit'] as number)
+      : DEFAULT_STORAGE_LIMIT;
+  return readWebStorage(getWebStorage(area), area, limit);
+};
+
 // Path 7 interaction action tools (pdl_*): one handler per ACTION_TOOL_SPECS
 // entry, each bound to its action kind — resolve the locator, apply the action.
 const actionPageHandlers: Readonly<Record<string, PageWorldHandler>> = Object.freeze(
@@ -1562,6 +1597,7 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   cache_match: (env) => cacheMatchHandler(env),
   pwa_status: () => pwaStatusHandler(),
   pwa_installability: () => pwaInstallabilityHandler(),
+  storage_get: (env) => storageGetHandler(env),
 });
 
 export const dispatchPageRequest = async (

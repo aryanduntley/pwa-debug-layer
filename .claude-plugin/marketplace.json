@@ -4,8 +4,8 @@
   "description": "Browser-side debug layer exposing live PWA state to AI agents via MCP.",
   "repository": "https://github.com/aryanduntley/pwa-debug-layer",
   "owner": {
-    "name": "aryanduntley",
-    "email": "aryanduntley@gmail.com"
+    "name": "Aryan Duntley",
+    "url": "https://github.com/aryanduntley"
   },
   "plugins": [
     {

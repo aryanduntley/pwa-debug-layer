@@ -126,6 +126,18 @@ export type {
 } from './types/cache_storage.js';
 
 export type {
+  StorageEntry,
+  StorageArea,
+  StorageGetResult,
+  IdbIndexInfo,
+  IdbStoreInfo,
+  IdbDatabaseInfo,
+  IdbListResult,
+  IdbRecord,
+  IdbQueryResult,
+} from './types/storage.js';
+
+export type {
   PwaPermissionState,
   PwaCapabilities,
   PwaPermissionsSnapshot,
