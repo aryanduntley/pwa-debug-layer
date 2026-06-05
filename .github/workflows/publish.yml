@@ -85,4 +85,6 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish dist/*.tgz --access public --provenance
+        # The leading ./ is required — without it npm parses "dist/<file>.tgz"
+        # as a GitHub repo shorthand and tries to git-clone it.
+        run: npm publish ./dist/*.tgz --access public --provenance
