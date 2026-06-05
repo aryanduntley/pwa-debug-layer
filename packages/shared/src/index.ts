@@ -145,6 +145,22 @@ export type {
 } from './types/pwa_status.js';
 
 export type {
+  AssetKind,
+  CachedAssetAge,
+  NetworkFailure,
+  UpdateFindingCode,
+  UpdateFinding,
+  UpdateAnalysisResult,
+  UpdateGatherResult,
+} from './types/update_analysis.js';
+
+export type {
+  RuntimeStoreState,
+  RuntimeWebStorage,
+  RuntimeSnapshot,
+} from './types/runtime_snapshot.js';
+
+export type {
   InstallabilityGapCode,
   InstallabilityGap,
   ManifestIconSummary,

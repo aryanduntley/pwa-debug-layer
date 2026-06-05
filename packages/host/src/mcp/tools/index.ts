@@ -46,7 +46,11 @@ import { cacheInspectTool } from './cache_inspect.js';
 import { cacheMatchTool } from './cache_match.js';
 import { pwaStatusTool } from './pwa_status.js';
 import { pwaInstallabilityTool } from './pwa_installability.js';
+import { pwaUpdateAnalyzeTool } from './pwa_update_analyze.js';
+import { pwaSnapshotTool } from './pwa_snapshot.js';
 import { storageGetTool } from './storage_get.js';
+import { idbListTool } from './idb_list.js';
+import { idbQueryTool } from './idb_query.js';
 import { settingsListSchemaTool } from './settings_list_schema.js';
 import { settingsGetTool } from './settings_get.js';
 import { settingsSetTool } from './settings_set.js';
@@ -113,7 +117,11 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   cacheMatchTool,
   pwaStatusTool,
   pwaInstallabilityTool,
+  pwaUpdateAnalyzeTool,
+  pwaSnapshotTool,
   storageGetTool,
+  idbListTool,
+  idbQueryTool,
   launchBrowserTool,
   browserStatusTool,
   closeBrowserTool,

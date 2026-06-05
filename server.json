@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.aryanduntley/pwa-debug-layer",
+  "title": "PWA Debug Layer",
+  "description": "AI-native MCP debug layer for PWAs: inspect live service workers, CacheStorage, IndexedDB, installability, and React/Vue/Svelte/Solid + Redux/Zustand/Pinia/Jotai state in your real logged-in browser profile. Answers why a service worker won't update, why a cache is stale, why a PWA won't install, and why chunks 404 after a deploy. Complements chrome-devtools-mcp.",
+  "repository": {
+    "url": "https://github.com/aryanduntley/pwa-debug-layer",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@pwa-debug/host",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": []
+    }
+  ]
+}

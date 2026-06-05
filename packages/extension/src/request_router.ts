@@ -711,6 +711,91 @@ const handleStorageGet: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// idb_list (PWA Runtime Diagnostics T2): forward to the active/given tab's
+// page-world, which reads indexedDB. No params beyond tab_id.
+const handleIdbList: RequestHandler = async (env) => {
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'idb_list', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+// idb_query (PWA Runtime Diagnostics T2): forward db + store + limit to the
+// page-world over a read-only IndexedDB transaction.
+const handleIdbQuery: RequestHandler = async (env) => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const db = r['db'];
+  if (typeof db !== 'string' || db.length === 0) {
+    throw new Error('idb_query: payload must include { db: non-empty string }');
+  }
+  const store = r['store'];
+  if (typeof store !== 'string' || store.length === 0) {
+    throw new Error('idb_query: payload must include { store: non-empty string }');
+  }
+  const payload: Record<string, unknown> = { db, store };
+  if (
+    typeof r['limit'] === 'number' &&
+    Number.isInteger(r['limit']) &&
+    (r['limit'] as number) > 0
+  ) {
+    payload['limit'] = r['limit'];
+  }
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'idb_query', payload };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+// pwa_update_gather (PWA Runtime Diagnostics T3): forward to the active/given
+// tab's page-world, which gathers the SW snapshot + cache entries. Optional
+// per_cache_limit beyond tab_id.
+const handlePwaUpdateGather: RequestHandler = async (env) => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const payload: Record<string, unknown> = {};
+  if (
+    typeof r['per_cache_limit'] === 'number' &&
+    Number.isInteger(r['per_cache_limit']) &&
+    (r['per_cache_limit'] as number) > 0
+  ) {
+    payload['per_cache_limit'] = r['per_cache_limit'];
+  }
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'pwa_update_gather', payload };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
+// pwa_snapshot (PWA Runtime Diagnostics T3): forward to the active/given tab's
+// page-world, which composes the runtime-state blob. No params beyond tab_id.
+const handlePwaSnapshotGather: RequestHandler = async (env) => {
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'pwa_snapshot_gather', payload: {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
 const handleCacheInspect: RequestHandler = async (env) => {
   const r =
     env.payload !== null && typeof env.payload === 'object'
@@ -1354,6 +1439,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   pwa_status: handlePwaStatus,
   pwa_installability: handlePwaInstallability,
   storage_get: handleStorageGet,
+  idb_list: handleIdbList,
+  idb_query: handleIdbQuery,
+  pwa_update_gather: handlePwaUpdateGather,
+  pwa_snapshot_gather: handlePwaSnapshotGather,
 });
 
 const errorResponse = (

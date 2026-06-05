@@ -105,7 +105,18 @@ import {
 } from '../pwa_status/read.js';
 import { readInstallability } from '../pwa_installability/read.js';
 import { readWebStorage, type StorageLike } from '../storage/web_storage.js';
-import type { StorageArea, StorageGetResult } from '@pwa-debug/shared';
+import { readIdbList, readIdbQuery, type IdbFactoryLike } from '../storage/idb_read.js';
+import { gatherUpdateInputs } from '../update_analysis/gather.js';
+import { gatherRuntimeSnapshot } from '../runtime_snapshot/gather.js';
+import type {
+  StorageArea,
+  StorageGetResult,
+  IdbListResult,
+  IdbQueryResult,
+  UpdateGatherResult,
+  RuntimeSnapshot,
+  RuntimeStoreState,
+} from '@pwa-debug/shared';
 
 // Singleton injected by page-world.ts bootstrap so resolveStore can consult the
 // Zustand devtools shim's connect-time captures as a detection path (mirrors
@@ -1545,6 +1556,114 @@ export const storageGetHandler = (
   return readWebStorage(getWebStorage(area), area, limit);
 };
 
+// idb_list / idb_query (PWA Runtime Diagnostics T2): read the debugged PWA's
+// IndexedDB. The readers take an injected IDBFactory-like; here we pass the live
+// `indexedDB` global (feature-detected → readers return supported:false when
+// absent). The real IDBFactory satisfies the structural IdbFactoryLike subset.
+const DEFAULT_IDB_QUERY_LIMIT = 100;
+
+const getIdbFactory = (): IdbFactoryLike | null => {
+  try {
+    return typeof indexedDB !== 'undefined'
+      ? (indexedDB as unknown as IdbFactoryLike)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+export const idbListHandler = (): Promise<IdbListResult> =>
+  readIdbList(getIdbFactory());
+
+export const idbQueryHandler = (
+  env: PageBridgeRequestEnvelope,
+): Promise<IdbQueryResult | { readonly error: { readonly message: string } }> => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const db = r['db'];
+  if (typeof db !== 'string' || db.length === 0) {
+    return Promise.resolve({
+      error: { message: 'idb_query: payload must include { db: non-empty string }' },
+    });
+  }
+  const store = r['store'];
+  if (typeof store !== 'string' || store.length === 0) {
+    return Promise.resolve({
+      error: { message: 'idb_query: payload must include { store: non-empty string }' },
+    });
+  }
+  const limit =
+    typeof r['limit'] === 'number' &&
+    Number.isInteger(r['limit']) &&
+    (r['limit'] as number) > 0
+      ? (r['limit'] as number)
+      : DEFAULT_IDB_QUERY_LIMIT;
+  return readIdbQuery(getIdbFactory(), db, store, limit);
+};
+
+// pwa_update_gather (PWA Runtime Diagnostics T3): collect the page-side inputs
+// (SW snapshot + every cache's entries) the host pwa_update_analyze tool needs
+// in one IPC round-trip. Composition over swStatusHandler + the cache readers.
+const DEFAULT_GATHER_PER_CACHE_LIMIT = 100;
+
+export const pwaUpdateGatherHandler = (
+  env: PageBridgeRequestEnvelope,
+): Promise<UpdateGatherResult> => {
+  const r =
+    env.payload !== null && typeof env.payload === 'object'
+      ? (env.payload as Record<string, unknown>)
+      : {};
+  const perCacheLimit =
+    typeof r['per_cache_limit'] === 'number' &&
+    Number.isInteger(r['per_cache_limit']) &&
+    (r['per_cache_limit'] as number) > 0
+      ? (r['per_cache_limit'] as number)
+      : DEFAULT_GATHER_PER_CACHE_LIMIT;
+  return gatherUpdateInputs(
+    {
+      readSw: () => swStatusHandler(),
+      readCacheList: () => readCacheList(getCacheStorage()),
+      readCacheInspect: (name, limit) =>
+        readCacheInspect(getCacheStorage(), name, limit, Date.now()),
+    },
+    perCacheLimit,
+  );
+};
+
+// pwa_snapshot (PWA Runtime Diagnostics T3): capture ONE runtime-state blob by
+// composing the existing page-world readers. Pure composition over swStatusHandler
+// + the store/storage/idb/cache readers; no new capture surface.
+const STORAGE_SNAPSHOT_LIMIT = 500;
+
+// The detected store's full state (no path), framework-tagged + value-capped via
+// the shared serializer; null when no store is discovered. Composes resolveStore
+// + serializeStoreValue (the same passive discovery the store_* tools use).
+const readSnapshotStore = (): RuntimeStoreState => {
+  const detected = resolveStore();
+  if (detected === null) return null;
+  const serialized = serializeStoreValue(detected.handle.getState());
+  return serialized.truncated
+    ? { framework: detected.framework, state: serialized.value, truncated: true }
+    : { framework: detected.framework, state: serialized.value };
+};
+
+export const pwaSnapshotGatherHandler = (): Promise<RuntimeSnapshot> =>
+  gatherRuntimeSnapshot({
+    readMeta: () => ({
+      url: window.location.href,
+      title: document.title,
+      capturedAt: Date.now(),
+    }),
+    readSw: () => swStatusHandler(),
+    readStore: () => readSnapshotStore(),
+    readWebStorage: (area) =>
+      readWebStorage(getWebStorage(area), area, STORAGE_SNAPSHOT_LIMIT),
+    readIdbList: () => readIdbList(getIdbFactory()),
+    readCacheList: () => readCacheList(getCacheStorage()),
+  });
+
 // Path 7 interaction action tools (pdl_*): one handler per ACTION_TOOL_SPECS
 // entry, each bound to its action kind — resolve the locator, apply the action.
 const actionPageHandlers: Readonly<Record<string, PageWorldHandler>> = Object.freeze(
@@ -1598,6 +1717,10 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   pwa_status: () => pwaStatusHandler(),
   pwa_installability: () => pwaInstallabilityHandler(),
   storage_get: (env) => storageGetHandler(env),
+  idb_list: () => idbListHandler(),
+  idb_query: (env) => idbQueryHandler(env),
+  pwa_update_gather: (env) => pwaUpdateGatherHandler(env),
+  pwa_snapshot_gather: () => pwaSnapshotGatherHandler(),
 });
 
 export const dispatchPageRequest = async (
