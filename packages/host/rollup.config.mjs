@@ -8,10 +8,12 @@ const nodeBuiltins = new Set([
   ...builtinModules.map((m) => `node:${m}`),
 ]);
 
-const externalPackages = new Set([
-  '@modelcontextprotocol/sdk',
-  'better-sqlite3',
-]);
+// @modelcontextprotocol/sdk stays external — it pulls optional SSE/transport
+// deps that don't bundle cleanly, and we only use its stdio transport. zod +
+// winreg bundle fine. better-sqlite3 was a DEAD dependency (no SQLite anywhere;
+// the host persists to plain files) and is removed entirely — so the only
+// runtime require left is the pure-JS MCP SDK (no native addons).
+const externalPackages = new Set(['@modelcontextprotocol/sdk']);
 
 export default {
   input: 'src/main.ts',

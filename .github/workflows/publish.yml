@@ -1,0 +1,88 @@
+# Publish @pwa-debug/host to npm when a vX.Y.Z tag is pushed.
+#
+# Pattern mirrors py-trkpac's python-publish.yml: tag-triggered, a build job that
+# uploads the packed artifact, and a separate publish job gated behind a GitHub
+# `release` environment with OIDC. Adapted PyPI -> npm (this is a Node project;
+# there is no Python here, so npm is the registry — see docs/discoverability.md).
+#
+# Cut a release with:  node scripts/release.mjs <version>   (bumps + tags + pushes)
+#
+# Prerequisites:
+#   1. packages/host/package.json "private": false (currently true as a guard).
+#   2. Repo secret NPM_TOKEN = npm automation token for the @pwa-debug scope.
+#   3. A GitHub Environment named "release" (optionally with required reviewers).
+
+name: Publish to npm
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (shared → extension → host bundle)
+        run: pnpm -r build
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: Guard — refuse to publish a private package
+        run: |
+          if [ "$(node -p "require('./packages/host/package.json').private === true")" = "true" ]; then
+            echo "::error::packages/host is still \"private\": true — set it to false to publish."
+            exit 1
+          fi
+
+      - name: Pack the @pwa-debug/host tarball
+        run: pnpm --filter @pwa-debug/host pack --pack-destination "${{ runner.temp }}/dist"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: ${{ runner.temp }}/dist/*.tgz
+
+  npm-publish:
+    runs-on: ubuntu-latest
+    needs: release-build
+    permissions:
+      contents: read
+      id-token: write # npm provenance / supply-chain attestation
+    environment:
+      name: release
+      url: https://www.npmjs.com/package/@pwa-debug/host
+    steps:
+      - name: Retrieve release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish dist/*.tgz --access public --provenance

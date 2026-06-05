@@ -8,6 +8,19 @@ packages/*/dist/
 packages/host/extension/
 *.tsbuildinfo
 
+# EXCEPTION — the Claude Code plugin (.claude-plugin/plugin.json) runs
+# packages/host/dist/main.js and loads the bundled extension from
+# packages/host/extension/, so both are committed to work from a fresh clone.
+# (Source maps stay ignored to keep the committed bundle lean.)
+!packages/host/dist/
+!packages/host/dist/**
+!packages/host/extension/
+!packages/host/extension/**
+# ...but keep build-noise out of the committed bundle:
+packages/host/dist/*.map
+packages/host/dist/*.tsbuildinfo
+packages/host/extension/*.map
+
 # Test / coverage
 coverage/
 vitest.config.*.timestamp-*
