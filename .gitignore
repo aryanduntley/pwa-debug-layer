@@ -74,5 +74,4 @@ temp/
 reference/
 
 # Local scratch / working notes — never committed
-docs/notes.txt
-docs/chatgptsuggestions.txt
+docs/
