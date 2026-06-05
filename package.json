@@ -30,7 +30,7 @@
   "bugs": {
     "url": "https://github.com/aryanduntley/pwa-debug-layer/issues"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": ">=20.19"
   },

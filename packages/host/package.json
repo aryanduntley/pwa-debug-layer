@@ -1,7 +1,8 @@
 {
-  "name": "@pwa-debug/host",
+  "name": "@aryanduntley/pwa-debug",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "license": "MIT",
   "type": "module",
   "description": "AI-native MCP debug layer for PWAs: inspect live service workers, CacheStorage, IndexedDB, web storage, installability, and React/Vue/Svelte/Solid + Redux/Zustand/Pinia/Jotai state in your REAL logged-in browser profile. Answers 'why won't my service worker update', 'why is my cache stale', 'why won't my PWA install', 'why are chunks 404ing after deploy'. Complements chrome-devtools-mcp.",
   "keywords": [
@@ -43,7 +44,10 @@
     "pwa-debug-host": "./dist/main.js"
   },
   "main": "./dist/main.js",
-  "files": ["dist", "extension"],
+  "files": [
+    "dist",
+    "extension"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "rollup -c && chmod +x dist/main.js && node ./scripts/bundle-extension.mjs",

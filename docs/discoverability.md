@@ -52,7 +52,7 @@ The packages are currently `private: true` / scope `@pwa-debug`. Before publishi
 
    ```sh
    pnpm -r build
-   npm publish --workspace @pwa-debug/host --access public
+   npm publish --workspace @aryanduntley/pwa-debug --access public
    ```
 
    `mcpName` in the package.json must equal the `server.json` `name` for the

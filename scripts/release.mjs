@@ -34,7 +34,9 @@ if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) die(`not a semver versio
 const tag = `v${version}`;
 
 // ── Guards ───────────────────────────────────────────────────────────────────
-if (git('status', '--porcelain')) die('working tree is not clean — commit or stash first.');
+// Only tracked, uncommitted changes block a release — stray untracked scratch
+// files (notes, scratchpads) are ignored so they don't get in the way.
+if (git('status', '--porcelain', '--untracked-files=no')) die('tracked changes are uncommitted — commit or stash first.');
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
 if (branch !== 'main') console.warn(`! on branch "${branch}", not main — continuing.`);
 const tags = git('tag', '--list', tag);

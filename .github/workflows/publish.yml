@@ -1,4 +1,4 @@
-# Publish @pwa-debug/host to npm when a vX.Y.Z tag is pushed.
+# Publish @aryanduntley/pwa-debug to npm when a vX.Y.Z tag is pushed.
 #
 # Pattern mirrors py-trkpac's python-publish.yml: tag-triggered, a build job that
 # uploads the packed artifact, and a separate publish job gated behind a GitHub
@@ -52,8 +52,8 @@ jobs:
             exit 1
           fi
 
-      - name: Pack the @pwa-debug/host tarball
-        run: pnpm --filter @pwa-debug/host pack --pack-destination "${{ runner.temp }}/dist"
+      - name: Pack the @aryanduntley/pwa-debug tarball
+        run: pnpm --filter @aryanduntley/pwa-debug pack --pack-destination "${{ runner.temp }}/dist"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
@@ -69,7 +69,7 @@ jobs:
       id-token: write # npm provenance / supply-chain attestation
     environment:
       name: release
-      url: https://www.npmjs.com/package/@pwa-debug/host
+      url: https://www.npmjs.com/package/@aryanduntley/pwa-debug
     steps:
       - name: Retrieve release artifact
         uses: actions/download-artifact@v4

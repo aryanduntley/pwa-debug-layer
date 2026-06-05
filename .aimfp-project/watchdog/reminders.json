@@ -1,4 +1,26 @@
 {
-  "generated_at": "2026-06-04T00:08:27Z",
-  "reminders": []
+  "generated_at": "2026-06-05T23:25:48Z",
+  "reminders": [
+    {
+      "type": "timestamp_synced",
+      "severity": "info",
+      "file": "packages/host/package.json",
+      "message": "File modified, DB updated_at was stale \u2014 automatically corrected.",
+      "timestamp": "2026-06-05T23:25:48Z"
+    },
+    {
+      "type": "timestamp_synced",
+      "severity": "info",
+      "file": "packages/shared/package.json",
+      "message": "File modified, DB updated_at was stale \u2014 automatically corrected.",
+      "timestamp": "2026-06-05T23:25:48Z"
+    },
+    {
+      "type": "timestamp_synced",
+      "severity": "info",
+      "file": "packages/extension/package.json",
+      "message": "File modified, DB updated_at was stale \u2014 automatically corrected.",
+      "timestamp": "2026-06-05T23:25:48Z"
+    }
+  ]
 }

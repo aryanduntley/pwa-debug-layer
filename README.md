@@ -192,7 +192,7 @@ The repo ships a `.claude-plugin/` manifest, so instead of the manual `claude mc
 /reload-plugins
 ```
 
-> **Build the host first.** The plugin's MCP entry runs `node ${CLAUDE_PLUGIN_ROOT}/packages/host/dist/main.js`, so `dist/` must exist — run `pnpm --filter @pwa-debug/host build` in the checkout before enabling.
+> **Build the host first.** The plugin's MCP entry runs `node ${CLAUDE_PLUGIN_ROOT}/packages/host/dist/main.js`, so `dist/` must exist — run `pnpm --filter @aryanduntley/pwa-debug build` in the checkout before enabling.
 >
 > **`chrome-devtools-mcp` is still separate.** The plugin declares **only** the `pwa-debug` host — `chrome-devtools-mcp` stays the optional `claude mcp add chrome-devtools …` above (no version coupling, no owning its launch). The bundled **`chrome-devtools-coexistence`** skill walks you through registering it; with a plugin install, its "make the tools appear" step is `/reload-plugins`.
 

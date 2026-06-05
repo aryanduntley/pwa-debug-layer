@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-describe('@pwa-debug/host smoke', () => {
+describe('@aryanduntley/pwa-debug smoke', () => {
   it('main entry imports and exports main + detectMode', async () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const mod = await import('../src/main.js');

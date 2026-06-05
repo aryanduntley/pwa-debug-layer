@@ -1,7 +1,0 @@
-  flatpak uninstall org.chromium.Chromium
-  flatpak uninstall --delete-data org.chromium.Chromium
-
-  flatpak uninstall --unused   
-===
-
-scripts/release.mjs 

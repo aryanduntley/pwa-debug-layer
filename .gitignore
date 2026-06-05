@@ -72,3 +72,7 @@ temp/
 
 # Closed-source extensions kept locally for architectural reference (not for code copying)
 reference/
+
+# Local scratch / working notes — never committed
+docs/notes.txt
+docs/chatgptsuggestions.txt

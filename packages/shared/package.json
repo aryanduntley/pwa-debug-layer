@@ -1,6 +1,6 @@
 {
   "name": "@pwa-debug/shared",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -15,7 +15,9 @@
       "default": "./dist/protocol.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",

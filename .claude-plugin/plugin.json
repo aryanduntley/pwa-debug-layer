@@ -5,7 +5,9 @@
   "mcpServers": {
     "pwa-debug": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/packages/host/dist/main.js"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/packages/host/dist/main.js"
+      ]
     }
   }
 }
