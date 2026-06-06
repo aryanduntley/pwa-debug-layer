@@ -15027,6 +15027,21 @@ const snapshotConn = (c) => Object.freeze({
     connectedAt: c.connectedAt,
     lastSeenAt: c.lastSeenAt,
 });
+// Probe whether a unix socket path has a live listener. Resolves 'live' if a
+// connection is accepted, 'stale' if the path refuses connection (ECONNREFUSED)
+// or is gone (ENOENT) — i.e. an orphaned socket file left behind by a host that
+// was hard-killed (SIGKILL / terminal close / crash) before close() could
+// unlink it. Used to decide whether an EADDRINUSE bind failure is a genuine
+// conflict (another host is up) or a reclaimable stale file.
+const probeSocketLiveness = (path) => new Promise((resolve) => {
+    const probe = createConnection(path);
+    const settle = (result) => {
+        probe.destroy();
+        resolve(result);
+    };
+    probe.once('connect', () => settle('live'));
+    probe.once('error', () => settle('stale'));
+});
 const createIpcServer = async (opts) => {
     const connections = new Map();
     const pending = new Map();
@@ -15117,12 +15132,39 @@ const createIpcServer = async (opts) => {
     const socketPaths = [opts.socketPath, ...(opts.extraSocketPaths ?? [])];
     const servers = socketPaths.map(() => createServer(handleSocket));
     const listenOne = (server, path) => new Promise((resolve, reject) => {
-        const onError = (err) => reject(err);
-        server.once('error', onError);
-        server.listen(path, () => {
-            server.off('error', onError);
-            resolve();
-        });
+        const attempt = (recovered) => {
+            const onError = (err) => {
+                const recoverable = err.code === 'EADDRINUSE' &&
+                    !recovered &&
+                    process.platform !== 'win32';
+                if (!recoverable) {
+                    reject(err);
+                    return;
+                }
+                // A prior host may have been hard-killed without unlinking its socket.
+                // Probe before clobbering: only reclaim a path nothing is listening on
+                // — never unlink out from under a host that is genuinely up.
+                void probeSocketLiveness(path).then(async (liveness) => {
+                    if (liveness === 'live') {
+                        reject(new Error(`ipc server: another pwa-debug host is already listening on ${path}`));
+                        return;
+                    }
+                    try {
+                        await unlink(path);
+                    }
+                    catch {
+                        // already gone — fine, just retry the bind
+                    }
+                    attempt(true);
+                });
+            };
+            server.once('error', onError);
+            server.listen(path, () => {
+                server.off('error', onError);
+                resolve();
+            });
+        };
+        attempt(false);
     });
     await Promise.all(servers.map((s, i) => listenOne(s, socketPaths[i])));
     const sendTo = (extensionId, env) => {

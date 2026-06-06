@@ -1,33 +1,4 @@
 {
-  "generated_at": "2026-06-06T00:09:25Z",
-  "reminders": [
-    {
-      "type": "timestamp_synced",
-      "severity": "info",
-      "file": "packages/host/package.json",
-      "message": "File modified, DB updated_at was stale \u2014 automatically corrected.",
-      "timestamp": "2026-06-05T23:25:48Z"
-    },
-    {
-      "type": "timestamp_synced",
-      "severity": "info",
-      "file": "packages/shared/package.json",
-      "message": "File modified, DB updated_at was stale \u2014 automatically corrected.",
-      "timestamp": "2026-06-05T23:25:48Z"
-    },
-    {
-      "type": "timestamp_synced",
-      "severity": "info",
-      "file": "packages/extension/package.json",
-      "message": "File modified, DB updated_at was stale \u2014 automatically corrected.",
-      "timestamp": "2026-06-05T23:25:48Z"
-    },
-    {
-      "type": "new_file_detected",
-      "severity": "info",
-      "file": "packages/host/README.md",
-      "message": "New file detected but not registered in database. Consider registering via project_file_create.",
-      "timestamp": "2026-06-06T00:09:25Z"
-    }
-  ]
+  "generated_at": "2026-06-06T03:14:48Z",
+  "reminders": []
 }

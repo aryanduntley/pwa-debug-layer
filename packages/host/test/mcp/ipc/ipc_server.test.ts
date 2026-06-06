@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -288,6 +288,31 @@ describe('createIpcServer', () => {
       () => (server!.listConnections()[0]?.lastSeenAt as number) > initial,
     );
     client.socket.destroy();
+  });
+
+  it('recovers from a stale socket left by a hard-killed host', async () => {
+    // Simulate an orphaned socket: a leftover file at the path with no listener.
+    // bind() then fails with EADDRINUSE and the recovery path must probe (no
+    // listener => stale), unlink, and rebind — instead of crashing.
+    await writeFile(socketPath, '');
+    server = await createIpcServer({ socketPath });
+    expect((await stat(socketPath)).isSocket()).toBe(true);
+    // and the recovered server actually serves connections
+    const client = await connectAndRegister(socketPath, 'ext-a');
+    await waitFor(() => server!.listConnections().length === 1);
+    client.socket.destroy();
+  });
+
+  it('rejects when another live host already holds the socket', async () => {
+    const live = await createIpcServer({ socketPath });
+    try {
+      // a live listener answers the probe => genuine conflict, never clobbered
+      await expect(createIpcServer({ socketPath })).rejects.toThrow(
+        /another pwa-debug host is already listening/,
+      );
+    } finally {
+      await live.close();
+    }
   });
 
   it('close() unlinks the socket file on POSIX', async () => {

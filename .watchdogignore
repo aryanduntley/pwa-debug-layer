@@ -20,3 +20,9 @@ packages/host/extension/
 test/
 *.test.ts
 *.test.js
+
+# npm-publish artifacts for the host package (the published @aryanduntley/pwa-debug
+# tarball): the build-script dir and the README copied from the repo-root README by
+# scripts/copy-readme.mjs during prepack. Tooling + generated copy, not source.
+packages/host/scripts/
+packages/host/README.md
