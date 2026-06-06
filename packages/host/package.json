@@ -1,6 +1,6 @@
 {
   "name": "@aryanduntley/pwa-debug",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -45,12 +45,14 @@
   },
   "main": "./dist/main.js",
   "files": [
-    "dist",
-    "extension"
+    "dist/main.js",
+    "extension/*.js",
+    "extension/manifest.json"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "rollup -c && chmod +x dist/main.js && node ./scripts/bundle-extension.mjs",
+    "prepack": "node ./scripts/copy-readme.mjs",
     "test": "vitest run"
   },
   "dependencies": {

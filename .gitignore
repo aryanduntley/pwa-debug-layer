@@ -21,6 +21,10 @@ packages/host/dist/*.map
 packages/host/dist/*.tsbuildinfo
 packages/host/extension/*.map
 
+# Generated at `prepack` from the repo-root README so the published npm tarball
+# carries it (single source of truth stays at the repo root).
+packages/host/README.md
+
 # Test / coverage
 coverage/
 vitest.config.*.timestamp-*
