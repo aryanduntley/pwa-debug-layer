@@ -5,7 +5,7 @@
 # `release` environment with OIDC. Adapted PyPI -> npm (this is a Node project;
 # there is no Python here, so npm is the registry — see docs/discoverability.md).
 #
-# Cut a release with:  node scripts/release.mjs <version>   (bumps + tags + pushes)
+# Cut a release:  node scripts/bump-version.mjs  (sync versions)  then  gitpush.sh  (commit + tag + push)
 #
 # Prerequisites:
 #   1. packages/host/package.json "private": false (currently true as a guard).

@@ -4,6 +4,18 @@ An **AI-native debugging layer for PWAs and modern web apps**. It lets an AI age
 
 It's built for the questions developers actually search for and that Chrome DevTools makes you assemble by hand: *why won't my service worker update? why is my cache stale? why won't my PWA install? why does this component have the wrong state?* — answered by an agent reading the runtime directly, against **your real browser profile** (extensions, auth, and all), not a sterile automated tab.
 
+### What it answers
+
+The PWA failures developers actually search for, read straight from your live runtime:
+
+- **Why won't my service worker update? Why are some users on old code?** — SW lifecycle with waiting-vs-active versions, plus an update-propagation / version-skew analyzer.
+- **Why is my cache stale? Why are chunks 404ing after a deploy?** — CacheStorage contents with age, and a cached-HTML-vs-JS skew check.
+- **Why won't my PWA install?** — structured installability diagnostics with per-gap remediation, not just "manifest invalid."
+- **What's actually in IndexedDB / localStorage right now?** — live storage inspection (*inspect IndexedDB live*).
+- **What can this browser actually do?** — a live capability matrix (Push / Background Sync / Periodic Sync / Badging / File System Access / Window Controls Overlay).
+
+All read from your real, logged-in profile — service-worker, cache, and extension state included — which `chrome-devtools-mcp`'s sterile automated Chrome can't see.
+
 The goal is to eliminate the "user is the AI's eyes and hands" loop. Today, debugging a PWA with AI usually means the human copy/pastes DOM snippets, describes console errors, screenshots UI state, and hand-executes clicks. This project replaces that with direct, structured access.
 
 > **Status: working on Linux.** The full MCP→IPC→native-host→service-worker→page-world round-trip is live, and a broad debugging surface is shipped:
@@ -14,8 +26,9 @@ The goal is to eliminate the "user is the AI's eyes and hands" loop. Today, debu
 > - **Library-popup capture/replay** — WalletConnect / SDK modals: record, replay, tail, failure correlation.
 > - **Replay & source maps** — rrweb `session_record`/`session_replay`, `source_map_resolve`.
 > - **Browser launcher** — one-call `pdl_launch_browser` with `chrome-devtools-mcp` coexistence.
+> - **PWA Runtime Diagnostics** — service-worker lifecycle + versions, CacheStorage contents + age, installability gaps, a live capability matrix, IndexedDB/web-storage inspection, update-propagation / version-skew analysis, and a one-shot runtime-state snapshot.
 >
-> **In progress:** a **PWA Runtime Diagnostics** suite — service-worker lifecycle, CacheStorage, installability, IndexedDB/web storage (see [Roadmap](#roadmap)). macOS/Windows paths are implemented with unit coverage; manual round-trip retest currently runs on Linux. Firefox is not supported (it doesn't speak CDP).
+> **Verified on Linux** (the full suite live-tested against a real PWA). macOS/Windows code paths are implemented with unit coverage but still need real-machine retest ([help wanted](#help-wanted-macos--windows-verification)). Firefox is not supported (it doesn't speak CDP).
 
 ## How it differs from `chrome-devtools-mcp`
 
@@ -26,7 +39,7 @@ Google's [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtoo
 - **Your real, logged-in browser.** `chrome-devtools-mcp` spawns a fresh automated Chrome — which shows "controlled by automated test software," blocks extension loading, and has none of your auth/session state, so authenticated apps are hard to debug ([the extensions/auth gap](https://medium.com/@vsanse24/no-extensions-allowed-the-chrome-devtools-mcp-dilemma-d58204aaab1f), [#265](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/265)). pwa-debug-layer's default `existing` mode attaches to **your normal profile**, with its real cookies, extensions, and service-worker state — exactly the real-profile SW/extension visibility people keep asking Google for ([#1173](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/1173), [#96](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/96)).
 - **Framework state.** React fiber trees, Vue reactive state, Svelte component graphs, Solid signals — read via the framework's own devtools hooks (`__REACT_DEVTOOLS_GLOBAL_HOOK__`, `__vue_app__`, `_vnode`, etc.). CDP can't see these.
 - **Store state.** Redux / Zustand / Pinia / Jotai — read, subscribe, and dispatch.
-- **Service-worker, cache & installability state.** *(in progress — see [Roadmap](#roadmap))* SW lifecycle + versions, CacheStorage contents + age, manifest installability gaps, IndexedDB/web storage — the highest-volume PWA pain (stale cache, "SW won't update," install failures) that DevTools makes you piece together by hand.
+- **Service-worker, cache & installability state.** SW lifecycle + versions, CacheStorage contents + age, manifest installability gaps, IndexedDB/web storage, and an update-propagation / version-skew analyzer — the highest-volume PWA pain (stale cache, "SW won't update," install failures, "why are some users on old code") that DevTools makes you piece together by hand.
 - **Shadow DOM, iframes, dynamically-injected library widgets.** WalletConnect modals, third-party SDK popups, and other widgets that escape standard DOM tooling.
 - **Page-world reach in general.** A MAIN-world script we inject reaches things isolated-world content scripts can't, and reaches them earlier than `initScript`-on-next-nav.
 - **Persistent ring buffers + rrweb-style replay** across navigations and reloads.
@@ -355,6 +368,22 @@ Every tool returns a structured response of the form `{ ok, data, error?, next_s
 | `source_map_resolve` | Resolve generated stack frames to original `src/…:line:col`. |
 | `settings_list_schema` / `settings_get` / `settings_set` | Read the typed settings schema; get/set values (allowlist, capture filters, disk-spill, etc.). |
 
+### PWA runtime diagnostics
+
+The namesake suite — read the debugged PWA's service-worker, cache, installability, storage, and update state. All page-world reads against your **real profile**; CDP / `chrome-devtools-mcp` can't surface these.
+
+| Tool | Purpose |
+|---|---|
+| `sw_status` | Service-worker registrations: installing/waiting/active versions, `updateViaCache`, controller, and whether an update is stuck **waiting** (the #1 "why isn't my update showing"). |
+| `sw_lifecycle_tail` | Cursor-paginated stream of SW lifecycle events (updatefound / statechange / controllerchange). |
+| `cache_list` / `cache_inspect` / `cache_match` | CacheStorage caches + per-entry `{ url, status, content-type, size, ageSeconds, cache-control }`, and which cache serves a given URL — the core of stale-cache debugging. |
+| `pwa_status` | Display mode / standalone, controller, permissions, and a live capability matrix (Push / Background Sync / Periodic Sync / Badging / File System Access / Window Controls Overlay). |
+| `pwa_installability` | Discover + parse the manifest and run installability checks → structured `{ supported, gaps[], fixes[] }` with per-gap remediation. |
+| `storage_get` | localStorage / sessionStorage snapshot (capped). |
+| `idb_list` / `idb_query` | IndexedDB databases + object-store schema, then a read-only capped slice of records — *inspect IndexedDB live*. |
+| `pwa_update_analyze` | Correlates SW status + cache ages + recent 404s into a verdict: waiting-update-on-active-client, cached-HTML-older-than-JS version skew, chunk 404s — *why are some users on old code?* |
+| `pwa_snapshot` | One capped runtime-state blob (SW + store + web storage + IndexedDB + cache names) for deterministic bug-repro / hand-off. |
+
 ### Framework introspection
 
 Read via each framework's own model — things CDP can't see. Tree/state where the framework persists it; element-level find everywhere.
@@ -403,8 +432,8 @@ Framework-agnostic native-event sequences dispatched so React/Vue/etc. delegated
 - **Replay & source maps** ✅ — rrweb `session_record` / `session_replay`; `source_map_resolve` for stack frames.
 - **Settings** ✅ — typed schema store (allowlist/blocklist, per-kind capture filters, per-site read controls, disk-spill).
 - **Browser launcher** ✅ — `pdl_launch_browser` (existing + sandbox-persistent + sandbox-temp), `pdl_check_setup`, `pdl_browser_status`, `pdl_close_browser`, `pdl_install_extension`, `pdl_register_chrome_devtools`, and `chrome-devtools-mcp` coexistence.
-- **Next — PWA Runtime Diagnostics** 🚧 — the namesake gap. Service-worker introspection (`sw_status` + lifecycle tail: installing/waiting/active versions, `updateViaCache`, skipWaiting/claim/controllerchange); CacheStorage inspection (`cache_list` / `cache_inspect` / `cache_match` with size/age + match-by-URL); `pwa_status` (display mode, controller, permissions, live capability matrix — Push/Background Sync/Periodic Sync/Badging/File System Access/Window Controls Overlay); installability diagnostics (`pwa_installability` → structured `{gaps[], fixes[]}`); and IndexedDB/web-storage inspection. Closes the stale-cache / "SW won't update" / install-failure pain cluster against your real profile.
-- **Later** — DevTools panel for human observation of an AI session; multi-tab routing model; update-propagation/version-skew analyzer; runtime state snapshot for deterministic repro.
+- **PWA Runtime Diagnostics** ✅ — the namesake suite, live-verified against a real PWA. Service-worker introspection (`sw_status` + `sw_lifecycle_tail`: installing/waiting/active versions, `updateViaCache`, skipWaiting/claim/controllerchange); CacheStorage inspection (`cache_list` / `cache_inspect` / `cache_match` with size/age + match-by-URL); `pwa_status` (display mode, controller, permissions, live capability matrix — Push/Background Sync/Periodic Sync/Badging/File System Access/Window Controls Overlay); installability diagnostics (`pwa_installability` → structured `{gaps[], fixes[]}`); IndexedDB/web-storage inspection (`idb_list` / `idb_query` / `storage_get`); update-propagation / version-skew analysis (`pwa_update_analyze`); and a one-shot runtime-state snapshot (`pwa_snapshot`). Closes the stale-cache / "SW won't update" / install-failure / version-skew pain cluster against your real profile.
+- **Later** — DevTools panel for human observation of an AI session; multi-tab routing model; event-causality graph (click → action → request → SW → cache → re-render); production-safe diagnostic mode for real-user failure capture.
 - **Deferred** — Firefox port (needs WebDriver BiDi, not CDP); macOS/Windows live verification ([help wanted](#help-wanted-macos--windows-verification)); mobile; hosted/team mode.
 - **Intentionally not pursued** — **Chrome Web Store distribution.** The extension grants broad page access (DOM, framework state, stores, network) and is only meaningful alongside its MCP host. It ships **bundled with the MCP only** and is installed via a manual, dev-mode "Load unpacked" (`pdl_install_extension` hands you the path + steps) — so every user knows exactly what they're running and why. Disabling Chrome Developer mode auto-disables it.
 
@@ -435,4 +464,4 @@ This is a personal project under active redesign. PRs welcome but please open an
 
 ## License
 
-TBD.
+MIT — see [`LICENSE`](LICENSE).

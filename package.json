@@ -1,6 +1,6 @@
 {
   "name": "pwa-debug-layer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "AI-native debugging layer for PWAs and modern web apps — lets an AI agent (e.g. Claude Code via MCP) see and act on your live, logged-in browser: service workers, CacheStorage, IndexedDB, installability, DOM, console, network, and React/Vue/Svelte/Solid + Redux/Zustand/Pinia/Jotai state, as structured data. Complements chrome-devtools-mcp.",
