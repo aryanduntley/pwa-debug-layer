@@ -194,18 +194,18 @@ claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest
 
 ### Or install `pwa-debug` as a Claude Code plugin
 
-The repo ships a `.claude-plugin/` manifest, so instead of the manual `claude mcp add pwa-debug` above you can install the host as a plugin and pick up updates with **`/reload-plugins`** — no full restart:
+The repo ships a `.claude-plugin/` manifest whose MCP server runs the **published npm package** (`npx -y @aryanduntley/pwa-debug@latest`), so the plugin installs with **no clone and no build** — and picks up updates with **`/reload-plugins`**, no full restart:
 
 ```sh
-# Add this repo as a plugin marketplace (use the local checkout path, or the GitHub URL)
-/plugin marketplace add /absolute/path/to/pwa-debug-layer
-# Install + enable the pwa-debug plugin from it
+# Add the marketplace straight from GitHub (no checkout needed)
+/plugin marketplace add aryanduntley/pwa-debug-layer
+# Install + enable the pwa-debug plugin
 /plugin install pwa-debug@pwa-debug
-# After enabling (or after a `git pull` + rebuild), bring the MCP server up with no restart:
+# Bring the MCP server up with no restart:
 /reload-plugins
 ```
 
-> **Build the host first.** The plugin's MCP entry runs `node ${CLAUDE_PLUGIN_ROOT}/packages/host/dist/main.js`, so `dist/` must exist — run `pnpm --filter @aryanduntley/pwa-debug build` in the checkout before enabling.
+> **No build needed.** The plugin's MCP entry is `npx -y @aryanduntley/pwa-debug@latest`, which fetches the prebuilt host (and its bundled extension) from npm. *Working on a local clone instead?* Skip the plugin and register your own build directly: `claude mcp add pwa-debug --scope user -- node /absolute/path/to/pwa-debug-layer/packages/host/dist/main.js`.
 >
 > **`chrome-devtools-mcp` is still separate.** The plugin declares **only** the `pwa-debug` host — `chrome-devtools-mcp` stays the optional `claude mcp add chrome-devtools …` above (no version coupling, no owning its launch). The bundled **`chrome-devtools-coexistence`** skill walks you through registering it; with a plugin install, its "make the tools appear" step is `/reload-plugins`.
 

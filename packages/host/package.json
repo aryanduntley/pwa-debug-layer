@@ -1,6 +1,6 @@
 {
   "name": "@aryanduntley/pwa-debug",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -41,6 +41,7 @@
   },
   "author": "aryanduntley",
   "bin": {
+    "pwa-debug": "./dist/main.js",
     "pwa-debug-host": "./dist/main.js"
   },
   "main": "./dist/main.js",

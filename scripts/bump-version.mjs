@@ -72,4 +72,15 @@ try {
   console.warn('! pnpm install --lockfile-only failed — sync the lockfile manually if needed.');
 }
 
-console.log(`\n✓ All manifests set to ${answer}. Next: run gitpush.sh and enter ${answer} as the version.`);
+console.log(`
+✓ All manifests set to ${answer}.
+
+Next steps:
+  1. Release to npm:
+       gitpush.sh   → pick this repo, enter ${answer} as the version
+       (tags v${answer} → the publish workflow builds + publishes to npm)
+
+  2. Update the MCP registry — AFTER ${answer} is live on npm:
+       mcp-publisher login github
+       mcp-publisher publish        # reads ./server.json (now at ${answer})
+`);
