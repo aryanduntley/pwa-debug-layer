@@ -40,19 +40,27 @@ const freshFlags = (port: number, userDataDir: string): readonly string[] =>
  *    --load-extension, and --disable-extensions-except would additionally block
  *    the manual Load-unpack the user is steered to. The profile/port still come
  *    up; the extension is provisioned by hand afterward.
+ *
+ * `isolate` (default true) controls --disable-extensions-except, which pins the
+ * profile to ONLY pwa-debug — Chromium disables every other extension, including
+ * ones already in the persistent profile or Load-unpacked/installed after launch.
+ * Pass false to drop it so other extensions coexist: --load-extension still
+ * preloads pwa-debug, while the profile's other extensions stay enabled. No-op
+ * under 'manual-guided' (the flag is already omitted there).
  */
 const sandboxFlags = (
   port: number,
   userDataDir: string,
   extensionPath: string,
   strategy: ExtensionLoadStrategy,
+  isolate: boolean,
 ): readonly string[] => {
   const extensionFlags =
     strategy === 'manual-guided'
       ? []
       : [
           `--load-extension=${extensionPath}`,
-          `--disable-extensions-except=${extensionPath}`,
+          ...(isolate ? [`--disable-extensions-except=${extensionPath}`] : []),
           ...(strategy === 'load-flag-escape-hatch'
             ? ['--disable-features=DisableLoadExtensionCommandLineSwitch']
             : []),
@@ -118,7 +126,8 @@ export const buildNewWindowFlatpakArgs = (appId: string): SpawnArgs =>
 /**
  * Sandbox launch: dedicated profile + the pwa-debug extension preloaded BEFORE
  * any tab opens (so the content-script injection race cannot occur).
- * --disable-extensions-except pins the profile to only our extension.
+ * --disable-extensions-except pins the profile to only our extension when
+ * `isolate` is true (the default); pass false to let other extensions coexist.
  *
  * --disable-session-crashed-bubble + --hide-crash-restore-bubble suppress the
  * "Brave/Chrome didn't shut down correctly — restore tabs?" prompt on the NEXT
@@ -135,10 +144,11 @@ export const buildSandboxSpawnArgs = (
   userDataDir: string,
   extensionPath: string,
   strategy: ExtensionLoadStrategy,
+  isolate = true,
 ): SpawnArgs =>
   Object.freeze({
     cmd: execPath,
-    args: sandboxFlags(port, userDataDir, extensionPath, strategy),
+    args: sandboxFlags(port, userDataDir, extensionPath, strategy, isolate),
   });
 
 /**
@@ -154,5 +164,9 @@ export const buildSandboxFlatpakArgs = (
   userDataDir: string,
   extensionPath: string,
   strategy: ExtensionLoadStrategy,
+  isolate = true,
 ): SpawnArgs =>
-  flatpakRun(appId, sandboxFlags(port, userDataDir, extensionPath, strategy));
+  flatpakRun(
+    appId,
+    sandboxFlags(port, userDataDir, extensionPath, strategy, isolate),
+  );

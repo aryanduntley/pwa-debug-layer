@@ -12818,13 +12818,20 @@ const freshFlags = (port, userDataDir) => Object.freeze([
  *    --load-extension, and --disable-extensions-except would additionally block
  *    the manual Load-unpack the user is steered to. The profile/port still come
  *    up; the extension is provisioned by hand afterward.
+ *
+ * `isolate` (default true) controls --disable-extensions-except, which pins the
+ * profile to ONLY pwa-debug — Chromium disables every other extension, including
+ * ones already in the persistent profile or Load-unpacked/installed after launch.
+ * Pass false to drop it so other extensions coexist: --load-extension still
+ * preloads pwa-debug, while the profile's other extensions stay enabled. No-op
+ * under 'manual-guided' (the flag is already omitted there).
  */
-const sandboxFlags = (port, userDataDir, extensionPath, strategy) => {
+const sandboxFlags = (port, userDataDir, extensionPath, strategy, isolate) => {
     const extensionFlags = strategy === 'manual-guided'
         ? []
         : [
             `--load-extension=${extensionPath}`,
-            `--disable-extensions-except=${extensionPath}`,
+            ...(isolate ? [`--disable-extensions-except=${extensionPath}`] : []),
             ...(strategy === 'load-flag-escape-hatch'
                 ? ['--disable-features=DisableLoadExtensionCommandLineSwitch']
                 : []),
@@ -12872,7 +12879,8 @@ const buildNewWindowFlatpakArgs = (appId) => flatpakRun(appId, Object.freeze(['-
 /**
  * Sandbox launch: dedicated profile + the pwa-debug extension preloaded BEFORE
  * any tab opens (so the content-script injection race cannot occur).
- * --disable-extensions-except pins the profile to only our extension.
+ * --disable-extensions-except pins the profile to only our extension when
+ * `isolate` is true (the default); pass false to let other extensions coexist.
  *
  * --disable-session-crashed-bubble + --hide-crash-restore-bubble suppress the
  * "Brave/Chrome didn't shut down correctly — restore tabs?" prompt on the NEXT
@@ -12883,9 +12891,9 @@ const buildNewWindowFlatpakArgs = (appId) => flatpakRun(appId, Object.freeze(['-
  * Applied to sandbox modes only — an 'existing'-mode launch is the user's real
  * profile, where a genuine restore prompt should be left intact.
  */
-const buildSandboxSpawnArgs = (execPath, port, userDataDir, extensionPath, strategy) => Object.freeze({
+const buildSandboxSpawnArgs = (execPath, port, userDataDir, extensionPath, strategy, isolate = true) => Object.freeze({
     cmd: execPath,
-    args: sandboxFlags(port, userDataDir, extensionPath, strategy),
+    args: sandboxFlags(port, userDataDir, extensionPath, strategy, isolate),
 });
 /**
  * Sandbox launch for a flatpak browser: `flatpak run <app-id> <sandbox flags>`.
@@ -12894,7 +12902,7 @@ const buildSandboxSpawnArgs = (execPath, port, userDataDir, extensionPath, strat
  * (`flatpak override --user --filesystem=host <app-id>`) for these to resolve
  * inside the sandbox — the same prerequisite the NMH path documents.
  */
-const buildSandboxFlatpakArgs = (appId, port, userDataDir, extensionPath, strategy) => flatpakRun(appId, sandboxFlags(port, userDataDir, extensionPath, strategy));
+const buildSandboxFlatpakArgs = (appId, port, userDataDir, extensionPath, strategy, isolate = true) => flatpakRun(appId, sandboxFlags(port, userDataDir, extensionPath, strategy, isolate));
 
 /**
  * 'existing'-mode launch: the graceful-degradation triad orchestrated over the
@@ -13002,9 +13010,11 @@ const launchSandbox = async (input, deps) => {
     // refuse the unpacked --load-extension (#318). Seed developer_mode=true into the
     // profile's Preferences before spawn so the extension loads with no manual step.
     await deps.seedDeveloperMode(input.userDataDir);
+    // Default to isolation (clean-room) when unset; false lets other extensions coexist.
+    const isolate = input.isolateExtensions ?? true;
     const { cmd, args } = input.appId
-        ? buildSandboxFlatpakArgs(input.appId, input.port, input.userDataDir, input.extensionPath, input.loadStrategy)
-        : buildSandboxSpawnArgs(input.execPath, input.port, input.userDataDir, input.extensionPath, input.loadStrategy);
+        ? buildSandboxFlatpakArgs(input.appId, input.port, input.userDataDir, input.extensionPath, input.loadStrategy, isolate)
+        : buildSandboxSpawnArgs(input.execPath, input.port, input.userDataDir, input.extensionPath, input.loadStrategy, isolate);
     const { pid } = await deps.spawnBrowser(cmd, args);
     if (input.mode === 'sandbox-temp') {
         deps.registerTempProfile(input.userDataDir);
@@ -14009,6 +14019,7 @@ const inputSchema$5 = {
     port: numberType().int().min(1).max(65535).optional(),
     mode: enumType(MODES).optional(),
     packaging: enumType(PACKAGINGS).optional(),
+    isolateExtensions: booleanType().optional(),
 };
 const isSandboxMode = (mode) => mode === 'sandbox-persistent' || mode === 'sandbox-temp';
 /**
@@ -14200,6 +14211,9 @@ const launchBrowserCore = async (args, platform, env, deps) => {
             loadStrategy,
             mode,
             refreshExtension: refreshExtensionEnabled(mode, env),
+            ...(args.isolateExtensions !== undefined
+                ? { isolateExtensions: args.isolateExtensions }
+                : {}),
             ...(target.appId !== undefined ? { appId: target.appId } : {}),
             ...(snapPkg ? { snapPackage: snapPkg } : {}),
         });
@@ -14250,7 +14264,7 @@ const launchBrowserHandler = async (args, ctx) => launchBrowserCore(args, proces
 });
 const launchBrowserTool = Object.freeze({
     name: 'pdl_launch_browser',
-    description: "Launch or attach to a Chromium-family browser with a live remote-debugging port, for use alongside chrome-devtools-mcp. Modes: mode='existing' (default) targets the user's normal profile and degrades gracefully — (a) port already live → attach; (b) running without a debug port → opens a NEW WINDOW in the existing session (never kills it), attached:false + degradation message; (c) not running → spawns fresh with --remote-debugging-port + --user-data-dir=<your profile>. mode='sandbox-persistent' spawns a dedicated, persistent dev profile at ~/.pwa-debug/profiles/<browser>/ beside your normal browser, with the pwa-debug extension PRELOADED (no reload needed); mode='sandbox-temp' is the same but in a throwaway mkdtemp profile cleaned up on host shutdown. Sandbox modes always work standalone (separate profile → no lock collision) and both pwa-debug + CDP tools are available. Args: browser? (chrome|chromium|edge|brave|vivaldi|opera; defaults to system-default), port? (default 9222), mode?, packaging? (native|snap|flatpak). When the same browser is installed under multiple packagings (e.g. snap AND flatpak chromium), pass packaging to pick one; without it the default preference is native > snap > flatpak and next_steps lists the alternatives so you can re-target. Linux is first-class; macOS/Windows deferred. Follow next_steps[] — it carries the chrome-devtools-mcp registration snippet, the profile location, the flatpak onboarding steps, or the degradation guidance.",
+    description: "Launch or attach to a Chromium-family browser with a live remote-debugging port, for use alongside chrome-devtools-mcp. Modes: mode='existing' (default) targets the user's normal profile and degrades gracefully — (a) port already live → attach; (b) running without a debug port → opens a NEW WINDOW in the existing session (never kills it), attached:false + degradation message; (c) not running → spawns fresh with --remote-debugging-port + --user-data-dir=<your profile>. mode='sandbox-persistent' spawns a dedicated, persistent dev profile at ~/.pwa-debug/profiles/<browser>/ beside your normal browser, with the pwa-debug extension PRELOADED (no reload needed); mode='sandbox-temp' is the same but in a throwaway mkdtemp profile cleaned up on host shutdown. Sandbox modes always work standalone (separate profile → no lock collision) and both pwa-debug + CDP tools are available. Args: browser? (chrome|chromium|edge|brave|vivaldi|opera; defaults to system-default), port? (default 9222), mode?, packaging? (native|snap|flatpak). When the same browser is installed under multiple packagings (e.g. snap AND flatpak chromium), pass packaging to pick one; without it the default preference is native > snap > flatpak and next_steps lists the alternatives so you can re-target. isolateExtensions? (sandbox modes only, default true): true pins the dedicated profile to ONLY the pwa-debug extension (clean room — every other extension is disabled); pass false to let other extensions coexist (pwa-debug still preloads, while extensions already in the persistent profile or Load-unpacked/installed after launch stay enabled) — use this to debug a PWA alongside other extensions or to test your own extension with pwa-debug. existing mode already keeps all your normal-profile extensions. Linux is first-class; macOS/Windows deferred. Follow next_steps[] — it carries the chrome-devtools-mcp registration snippet, the profile location, the flatpak onboarding steps, or the degradation guidance.",
     inputSchema: inputSchema$5,
     handler: launchBrowserHandler,
 });

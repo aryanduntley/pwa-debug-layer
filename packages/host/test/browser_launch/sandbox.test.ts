@@ -87,6 +87,40 @@ describe('buildSandboxSpawnArgs', () => {
     expect(args).toContain('--disable-session-crashed-bubble');
     expect(args).toContain('--hide-crash-restore-bubble');
   });
+
+  it('isolate=false drops --disable-extensions-except so other extensions coexist (still preloads pwa-debug)', () => {
+    const { args } = buildSandboxSpawnArgs(
+      '/b',
+      9222,
+      '/p',
+      '/ext/dist',
+      'load-flag',
+      false,
+    );
+    expect(args).toContain('--load-extension=/ext/dist');
+    expect(args).not.toContain('--disable-extensions-except=/ext/dist');
+  });
+
+  it('isolate defaults to true (pins the profile to only pwa-debug)', () => {
+    const { args } = buildSandboxSpawnArgs('/b', 9222, '/p', '/ext/dist', 'load-flag');
+    expect(args).toContain('--disable-extensions-except=/ext/dist');
+  });
+
+  it('isolate=false still keeps the escape-hatch feature flag on branded Chrome 137-141', () => {
+    const { args } = buildSandboxSpawnArgs(
+      '/b',
+      9222,
+      '/p',
+      '/ext/dist',
+      'load-flag-escape-hatch',
+      false,
+    );
+    expect(args).toContain('--load-extension=/ext/dist');
+    expect(args).not.toContain('--disable-extensions-except=/ext/dist');
+    expect(args).toContain(
+      '--disable-features=DisableLoadExtensionCommandLineSwitch',
+    );
+  });
 });
 
 describe('buildSandboxFlatpakArgs', () => {

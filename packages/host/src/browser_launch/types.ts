@@ -128,6 +128,15 @@ export type LaunchSandboxInput = {
    * so end-user launches are unchanged; this is dev/AI re-verification ergonomics.
    */
   readonly refreshExtension?: boolean;
+  /**
+   * Pin the sandbox profile to ONLY pwa-debug via --disable-extensions-except.
+   * Defaults to true (clean-room debugging: no other extension can interfere).
+   * Set false to let other extensions coexist — pwa-debug still preloads via
+   * --load-extension, while extensions already in the profile (sandbox-persistent)
+   * or Load-unpacked/installed after launch stay enabled. No effect under the
+   * manual-guided strategy, which omits the flag regardless.
+   */
+  readonly isolateExtensions?: boolean;
 };
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "pwa-debug",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Browser-side debug layer exposing live PWA state to AI agents via MCP.",
   "repository": "https://github.com/aryanduntley/pwa-debug-layer",
   "owner": {
