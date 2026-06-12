@@ -29,6 +29,8 @@ The goal is to eliminate the "user is the AI's eyes and hands" loop. Today, debu
 > - **PWA Runtime Diagnostics** — service-worker lifecycle + versions, CacheStorage contents + age, installability gaps, a live capability matrix, IndexedDB/web-storage inspection, update-propagation / version-skew analysis, and a one-shot runtime-state snapshot.
 >
 > **Verified on Linux** (the full suite live-tested against a real PWA). macOS/Windows code paths are implemented with unit coverage but still need real-machine retest ([help wanted](#help-wanted-macos--windows-verification)). Firefox is not supported (it doesn't speak CDP).
+>
+> ⚠️ **macOS / Windows users, beware:** these platforms have **never been run on real hardware** — only unit-tested with injected fakes. Expect rough edges (browser detection, profile paths, native-messaging registration, system-default resolution). Please [open an issue](../../issues) with the failing command and its output — bug reports from real macOS/Windows machines are the single most useful contribution right now. See [Help wanted](#help-wanted-macos--windows-verification) for the specific things to try.
 
 ## How it differs from `chrome-devtools-mcp`
 

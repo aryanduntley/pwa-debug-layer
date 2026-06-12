@@ -74,6 +74,21 @@ describe('spawn_args builders', () => {
       '--no-default-browser-check',
     ]);
   });
+  it('buildFreshSpawnArgs appends caller extraArgs after the managed flags', () => {
+    const { args } = buildFreshSpawnArgs(
+      '/usr/bin/google-chrome',
+      9222,
+      '/home/u/.config/google-chrome',
+      ['--enable-speech-dispatcher'],
+    );
+    expect(args).toEqual([
+      '--remote-debugging-port=9222',
+      '--user-data-dir=/home/u/.config/google-chrome',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--enable-speech-dispatcher',
+    ]);
+  });
   it('buildNewWindowArgs only opens a new window (no debug port)', () => {
     const { cmd, args } = buildNewWindowArgs('/usr/bin/brave-browser');
     expect(cmd).toBe('/usr/bin/brave-browser');
@@ -95,6 +110,16 @@ describe('spawn_args builders', () => {
       '--no-default-browser-check',
     ]);
     // A literal '--' would become chrome's end-of-switches marker and drop the port.
+    expect(args).not.toContain('--');
+  });
+  it('buildFreshFlatpakArgs appends extraArgs to the forwarded flags', () => {
+    const { args } = buildFreshFlatpakArgs(
+      'org.chromium.Chromium',
+      9222,
+      '/h/.var/app/org.chromium.Chromium/config/chromium',
+      ['--enable-speech-dispatcher'],
+    );
+    expect(args[args.length - 1]).toBe('--enable-speech-dispatcher');
     expect(args).not.toContain('--');
   });
   it('buildNewWindowFlatpakArgs is `flatpak run <app-id> --new-window` (no `--`)', () => {

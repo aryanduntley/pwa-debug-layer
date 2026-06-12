@@ -17,13 +17,23 @@ export const browserUrlFor = (port: number): string =>
  * Chromium flags for a fresh launch — shared by the exec-by-path and flatpak
  * builders so the two command forms differ ONLY in the command prefix, never in
  * the flag set. --no-first-run / --no-default-browser-check keep it non-interactive.
+ *
+ * `extraArgs` are caller-supplied Chromium startup flags (e.g.
+ * --enable-speech-dispatcher) appended AFTER the managed flags so the caller can
+ * override a non-essential default; they only matter on a cold spawn (this path),
+ * never on an attach.
  */
-const freshFlags = (port: number, userDataDir: string): readonly string[] =>
+const freshFlags = (
+  port: number,
+  userDataDir: string,
+  extraArgs: readonly string[] = [],
+): readonly string[] =>
   Object.freeze([
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
+    ...extraArgs,
   ]);
 
 /**
@@ -54,6 +64,7 @@ const sandboxFlags = (
   extensionPath: string,
   strategy: ExtensionLoadStrategy,
   isolate: boolean,
+  extraArgs: readonly string[] = [],
 ): readonly string[] => {
   const extensionFlags =
     strategy === 'manual-guided'
@@ -73,6 +84,7 @@ const sandboxFlags = (
     '--no-default-browser-check',
     '--disable-session-crashed-bubble',
     '--hide-crash-restore-bubble',
+    ...extraArgs,
   ]);
 };
 
@@ -101,15 +113,20 @@ export const buildFreshSpawnArgs = (
   execPath: string,
   port: number,
   userDataDir: string,
+  extraArgs: readonly string[] = [],
 ): SpawnArgs =>
-  Object.freeze({ cmd: execPath, args: freshFlags(port, userDataDir) });
+  Object.freeze({
+    cmd: execPath,
+    args: freshFlags(port, userDataDir, extraArgs),
+  });
 
 /** Fresh launch for a flatpak browser: `flatpak run <app-id> <fresh flags>`. */
 export const buildFreshFlatpakArgs = (
   appId: string,
   port: number,
   userDataDir: string,
-): SpawnArgs => flatpakRun(appId, freshFlags(port, userDataDir));
+  extraArgs: readonly string[] = [],
+): SpawnArgs => flatpakRun(appId, freshFlags(port, userDataDir, extraArgs));
 
 /**
  * New-window launch (sub-state b): re-invoke the binary so it opens a window
@@ -145,10 +162,18 @@ export const buildSandboxSpawnArgs = (
   extensionPath: string,
   strategy: ExtensionLoadStrategy,
   isolate = true,
+  extraArgs: readonly string[] = [],
 ): SpawnArgs =>
   Object.freeze({
     cmd: execPath,
-    args: sandboxFlags(port, userDataDir, extensionPath, strategy, isolate),
+    args: sandboxFlags(
+      port,
+      userDataDir,
+      extensionPath,
+      strategy,
+      isolate,
+      extraArgs,
+    ),
   });
 
 /**
@@ -165,8 +190,9 @@ export const buildSandboxFlatpakArgs = (
   extensionPath: string,
   strategy: ExtensionLoadStrategy,
   isolate = true,
+  extraArgs: readonly string[] = [],
 ): SpawnArgs =>
   flatpakRun(
     appId,
-    sandboxFlags(port, userDataDir, extensionPath, strategy, isolate),
+    sandboxFlags(port, userDataDir, extensionPath, strategy, isolate, extraArgs),
   );

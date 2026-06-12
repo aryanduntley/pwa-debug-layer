@@ -94,6 +94,13 @@ export type LaunchExistingInput = {
    * version via debugPortBlockedOnDefaultProfile.
    */
   readonly debugPortBlockedOnDefaultProfile: boolean;
+  /**
+   * Caller-supplied Chromium startup flags (e.g. ['--enable-speech-dispatcher'])
+   * appended after the managed flags on a cold spawn-fresh launch. Ignored for
+   * attach (no spawn) and new-window (re-invoking a running process doesn't apply
+   * startup flags). Optional; omitted => no extra flags.
+   */
+  readonly extraArgs?: readonly string[];
 };
 
 /** Inputs for a sandbox-mode launch (dedicated profile + preloaded extension). */
@@ -137,6 +144,11 @@ export type LaunchSandboxInput = {
    * manual-guided strategy, which omits the flag regardless.
    */
   readonly isolateExtensions?: boolean;
+  /**
+   * Caller-supplied Chromium startup flags (e.g. ['--enable-speech-dispatcher'])
+   * appended after the managed sandbox flags on spawn. Optional; omitted => none.
+   */
+  readonly extraArgs?: readonly string[];
 };
 
 /**

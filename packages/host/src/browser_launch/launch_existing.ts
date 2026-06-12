@@ -67,9 +67,15 @@ export const launchExisting = async (
   }
 
   // spawn-fresh
+  const extraArgs = input.extraArgs ?? [];
   const { cmd, args } = input.appId
-    ? buildFreshFlatpakArgs(input.appId, input.port, input.userDataDir)
-    : buildFreshSpawnArgs(input.execPath, input.port, input.userDataDir);
+    ? buildFreshFlatpakArgs(input.appId, input.port, input.userDataDir, extraArgs)
+    : buildFreshSpawnArgs(
+        input.execPath,
+        input.port,
+        input.userDataDir,
+        extraArgs,
+      );
   const { pid } = await deps.spawnBrowser(cmd, args);
   // Chromium 136+ ignores --remote-debugging-port on the default profile: the
   // browser comes up (pwa-debug extension still usable) but the port never

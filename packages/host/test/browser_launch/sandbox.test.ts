@@ -106,6 +106,22 @@ describe('buildSandboxSpawnArgs', () => {
     expect(args).toContain('--disable-extensions-except=/ext/dist');
   });
 
+  it('appends caller extraArgs after the managed sandbox flags', () => {
+    const { args } = buildSandboxSpawnArgs(
+      '/b',
+      9222,
+      '/p',
+      '/ext/dist',
+      'load-flag',
+      true,
+      ['--enable-speech-dispatcher'],
+    );
+    expect(args[args.length - 1]).toBe('--enable-speech-dispatcher');
+    // managed flags still present and unmodified
+    expect(args).toContain('--load-extension=/ext/dist');
+    expect(args).toContain('--hide-crash-restore-bubble');
+  });
+
   it('isolate=false still keeps the escape-hatch feature flag on branded Chrome 137-141', () => {
     const { args } = buildSandboxSpawnArgs(
       '/b',
@@ -145,6 +161,20 @@ describe('buildSandboxFlatpakArgs', () => {
       '--disable-session-crashed-bubble',
       '--hide-crash-restore-bubble',
     ]);
+    expect(args).not.toContain('--');
+  });
+
+  it('appends extraArgs after the forwarded sandbox flags', () => {
+    const { args } = buildSandboxFlatpakArgs(
+      'org.chromium.Chromium',
+      9222,
+      '/home/u/.pwa-debug/profiles/chromium',
+      '/ext/dist',
+      'load-flag',
+      true,
+      ['--enable-speech-dispatcher'],
+    );
+    expect(args[args.length - 1]).toBe('--enable-speech-dispatcher');
     expect(args).not.toContain('--');
   });
 });

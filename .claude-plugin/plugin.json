@@ -1,6 +1,6 @@
 {
   "name": "pwa-debug",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Browser-side debug layer that exposes live PWA state (DOM, framework state, stores, events, library popups) to AI agents via MCP — eliminating the human copy/paste loop when debugging web apps with AI.",
   "mcpServers": {
     "pwa-debug": {

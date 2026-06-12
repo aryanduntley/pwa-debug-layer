@@ -55,6 +55,7 @@ export const launchSandbox = async (
 
   // Default to isolation (clean-room) when unset; false lets other extensions coexist.
   const isolate = input.isolateExtensions ?? true;
+  const extraArgs = input.extraArgs ?? [];
   const { cmd, args } = input.appId
     ? buildSandboxFlatpakArgs(
         input.appId,
@@ -63,6 +64,7 @@ export const launchSandbox = async (
         input.extensionPath,
         input.loadStrategy,
         isolate,
+        extraArgs,
       )
     : buildSandboxSpawnArgs(
         input.execPath,
@@ -71,6 +73,7 @@ export const launchSandbox = async (
         input.extensionPath,
         input.loadStrategy,
         isolate,
+        extraArgs,
       );
   const { pid } = await deps.spawnBrowser(cmd, args);
   if (input.mode === 'sandbox-temp') {

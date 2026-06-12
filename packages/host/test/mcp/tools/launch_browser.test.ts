@@ -288,6 +288,23 @@ describe('launchBrowserCore', () => {
     expect(res.next_steps.join(' ')).toContain('Developer Mode'); // flatpak guidance still present
   });
 
+  it('threads extraArgs into the existing-mode launch input', async () => {
+    const deps = makeDeps({ discovery: discovery([chrome], 'chrome') });
+    await launchBrowserCore(
+      { extraArgs: ['--enable-speech-dispatcher'] },
+      'linux',
+      {},
+      deps,
+    );
+    expect(deps.launched[0]?.extraArgs).toEqual(['--enable-speech-dispatcher']);
+  });
+
+  it('omits extraArgs from the launch input when not supplied', async () => {
+    const deps = makeDeps({ discovery: discovery([chrome], 'chrome') });
+    await launchBrowserCore({}, 'linux', {}, deps);
+    expect(deps.launched[0]?.extraArgs).toBeUndefined();
+  });
+
   it('errors when the requested packaging is not installed', async () => {
     const deps = makeDeps({
       discovery: discovery([chromiumSnap], 'chromium'),
@@ -348,6 +365,17 @@ describe('launchBrowserCore — sandbox modes', () => {
     // version unreadable (fake → null) → optimistic load-flag strategy
     expect(deps.sandboxed[0]?.loadStrategy).toBe('load-flag');
     expect(res.next_steps.join(' ')).toContain('preloaded');
+  });
+
+  it('threads extraArgs into the sandbox launch input', async () => {
+    const deps = makeDeps({ discovery: discovery([chrome], 'chrome') });
+    await launchBrowserCore(
+      { mode: 'sandbox-persistent', extraArgs: ['--enable-speech-dispatcher'] },
+      'linux',
+      {},
+      deps,
+    );
+    expect(deps.sandboxed[0]?.extraArgs).toEqual(['--enable-speech-dispatcher']);
   });
 
   it('routes sandbox-temp through launchSandbox', async () => {
