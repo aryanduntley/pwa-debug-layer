@@ -60,6 +60,7 @@ import { closeBrowserTool } from './close_browser.js';
 import { checkSetupTool } from './check_setup.js';
 import { installExtensionTool } from './install_extension.js';
 import { registerChromeDevtoolsTool } from './register_chrome_devtools.js';
+import { navigateTool, newTabTool } from './navigation.js';
 import { interactionActionTools } from './interaction_actions.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
@@ -122,6 +123,8 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   storageGetTool,
   idbListTool,
   idbQueryTool,
+  navigateTool,
+  newTabTool,
   launchBrowserTool,
   browserStatusTool,
   closeBrowserTool,

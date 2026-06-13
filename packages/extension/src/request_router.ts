@@ -10,6 +10,7 @@ import type {
   GetRecentResult,
 } from './sw_event_sink/sw_event_sink.js';
 import type { PageWorldErrorCode } from './sw_health_probe/sw_health_probe.js';
+import { navigateTab, openNewTab } from './sw_navigation/sw_navigation.js';
 import { ACTION_TOOL_SPECS } from '@pwa-debug/shared';
 
 export type SwRequestEnvelope = {
@@ -1367,6 +1368,55 @@ const handleSessionRecord: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// --- Navigation tools (pdl_navigate / pdl_new_tab) ---------------------------
+// SW-handled, NOT page-world: chrome.tabs drives the browser to a URL. Forwarded
+// to the sw_navigation module, which validates the URL and waits for load.
+
+const readTimeoutMs = (r: Record<string, unknown>): number | undefined =>
+  typeof r['timeout_ms'] === 'number' &&
+  Number.isInteger(r['timeout_ms']) &&
+  (r['timeout_ms'] as number) > 0
+    ? (r['timeout_ms'] as number)
+    : undefined;
+
+const handleNavigate: RequestHandler = async (env) => {
+  const raw = env.payload;
+  if (raw === null || typeof raw !== 'object') {
+    throw new Error('pdl_navigate: payload must be { url: non-empty string, tab_id?, timeout_ms? }');
+  }
+  const r = raw as Record<string, unknown>;
+  const url = r['url'];
+  if (typeof url !== 'string' || url.length === 0) {
+    throw new Error('pdl_navigate: payload must include { url: non-empty string }');
+  }
+  const tabId = readTabId(raw);
+  const timeoutMs = readTimeoutMs(r);
+  return navigateTab({
+    url,
+    ...(tabId !== undefined ? { tabId } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  });
+};
+
+const handleNewTab: RequestHandler = async (env) => {
+  const raw = env.payload;
+  if (raw === null || typeof raw !== 'object') {
+    throw new Error('pdl_new_tab: payload must be { url: non-empty string, active?, timeout_ms? }');
+  }
+  const r = raw as Record<string, unknown>;
+  const url = r['url'];
+  if (typeof url !== 'string' || url.length === 0) {
+    throw new Error('pdl_new_tab: payload must include { url: non-empty string }');
+  }
+  const active = typeof r['active'] === 'boolean' ? (r['active'] as boolean) : undefined;
+  const timeoutMs = readTimeoutMs(r);
+  return openNewTab({
+    url,
+    ...(active !== undefined ? { active } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  });
+};
+
 // --- Path 7 interaction action tools (pdl_*) ---------------------------------
 // One generic handler per ACTION_TOOL_SPECS entry: extract tab_id for routing,
 // forward the locator + params payload to the page-world unchanged.
@@ -1407,6 +1457,8 @@ const actionRequestHandlers: Readonly<Record<string, RequestHandler>> = Object.f
 
 const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   ...actionRequestHandlers,
+  pdl_navigate: handleNavigate,
+  pdl_new_tab: handleNewTab,
   session_ping: handleSessionPing,
   recent_events: handleRecentEvents,
   evaluate: handleEvaluate,
