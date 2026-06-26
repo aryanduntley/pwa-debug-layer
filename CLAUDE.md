@@ -1,6 +1,6 @@
 AIMFP MODE ACTIVE — MANDATORY BEHAVIORAL RULES
 
-These rules are NON-NEGOTIABLE. Violating any creates tracking gaps and invisible project damage. Use AIFP tracking over memory
+These rules are NON-NEGOTIABLE. Violating any creates tracking gaps and invisible project damage. Use AIMFP tracking over memory
 
 FIRST — BEFORE ANYTHING ELSE
 

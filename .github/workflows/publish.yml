@@ -9,8 +9,11 @@
 #
 # Prerequisites:
 #   1. packages/host/package.json "private": false (currently true as a guard).
-#   2. Repo secret NPM_TOKEN = npm automation token for the @pwa-debug scope.
+#   2. A trusted publisher configured on npmjs.com for @aryanduntley/pwa-debug:
+#      GitHub Actions, repo aryanduntley/pwa-debug-layer, workflow "publish.yml",
+#      environment "release". With OIDC there is NO long-lived NPM_TOKEN to rotate.
 #   3. A GitHub Environment named "release" (optionally with required reviewers).
+#      Must match the environment named in the npm trusted-publisher config.
 
 name: Publish to npm
 
@@ -33,7 +36,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: latest
           cache: pnpm
 
       - name: Install
@@ -79,12 +82,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: latest
           registry-url: https://registry.npmjs.org
 
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        # The leading ./ is required — without it npm parses "dist/<file>.tgz"
-        # as a GitHub repo shorthand and tries to git-clone it.
+      # Trusted publishing: npm (>= 11.5.1, bundled with current Node) exchanges
+      # the GitHub OIDC id-token for a short-lived publish credential — no
+      # NODE_AUTH_TOKEN. Provenance is attested automatically from the OIDC claims.
+      # The leading ./ is required — without it npm parses "dist/<file>.tgz" as a
+      # GitHub repo shorthand and tries to git-clone it.
+      - name: Publish to npm (OIDC trusted publisher)
         run: npm publish ./dist/*.tgz --access public --provenance
