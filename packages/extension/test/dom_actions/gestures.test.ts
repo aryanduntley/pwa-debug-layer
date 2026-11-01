@@ -105,6 +105,42 @@ describe('touch gestures', () => {
     expect(start).toHaveBeenCalledTimes(3);
   });
 
+  it('tap ends in a click so onClick handlers fire, in the order a phone produces', () => {
+    mount('<button id="b">+</button>');
+    const el = document.getElementById('b')!;
+    const order: string[] = [];
+    for (const t of ['pointerdown', 'touchstart', 'pointerup', 'touchend', 'mousedown', 'mouseup', 'click']) {
+      el.addEventListener(t, () => order.push(t));
+    }
+    const res = tapElement(el);
+    expect(order).toEqual(['pointerdown', 'touchstart', 'pointerup', 'touchend', 'mousedown', 'mouseup', 'click']);
+    expect(res.detail).toEqual({ clicked: true });
+    expect(document.activeElement).toBe(el);
+  });
+
+  it('tap skips the click when the page prevents touchend', () => {
+    mount('<button id="b">+</button>');
+    const el = document.getElementById('b')!;
+    const click = vi.fn();
+    el.addEventListener('touchend', (e) => e.preventDefault());
+    el.addEventListener('click', click);
+    const res = tapElement(el);
+    expect(click).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ defaultPrevented: true, detail: { clicked: false } });
+  });
+
+  it('doubleTap fires two clicks then dblclick', () => {
+    mount('<div id="d"></div>');
+    const el = document.getElementById('d')!;
+    const click = vi.fn();
+    const dbl = vi.fn();
+    el.addEventListener('click', click);
+    el.addEventListener('dblclick', dbl);
+    expect(doubleTapElement(el).detail).toEqual({ clicked: true });
+    expect(click).toHaveBeenCalledTimes(2);
+    expect(dbl).toHaveBeenCalledOnce();
+  });
+
   it('pinch fires a two-touch start/move/end sequence', () => {
     mount('<div id="d"></div>');
     const el = document.getElementById('d')!;

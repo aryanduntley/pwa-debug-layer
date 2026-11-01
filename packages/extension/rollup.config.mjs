@@ -36,4 +36,15 @@ export default [
     },
     plugins: [resolvePlugin(), tsPlugin()],
   },
+  {
+    // Injected by the host over CDP into pages without the extension (Android).
+    input: 'src/page-world-cdp.ts',
+    output: {
+      file: 'dist/page-world-cdp.js',
+      format: 'iife',
+      name: 'PwaDebugPageWorldCdp',
+      sourcemap: true,
+    },
+    plugins: [resolvePlugin(), tsPlugin()],
+  },
 ];

@@ -1,3 +1,5 @@
+import { normalizeUrl } from '@pwa-debug/shared';
+
 // SW-side navigation primitives — wraps chrome.tabs URL navigation so the request
 // router stays a thin orchestrator. SW-handled (NOT page-world): chrome.tabs is
 // only reachable in the extension service worker, and driving the tab to a new URL
@@ -19,23 +21,8 @@ export type NavResult = {
 
 const DEFAULT_LOAD_TIMEOUT_MS = 10_000;
 
-// A bare javascript: URL would run script in the target page context on navigate;
-// reject it. Everything else (http(s), file:, about:, data:, chrome:, localhost
-// shorthand) is allowed — this is a debugging driver, not a sandbox.
-const JAVASCRIPT_SCHEME = /^javascript:/i;
-const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-
-/**
- * Normalize a caller-supplied URL: trim, reject empty / javascript:, and assume
- * https:// when no scheme is given (so `example.com` works). Returns null when the
- * input is unusable so the caller can surface a clear error.
- */
-export const normalizeUrl = (raw: string): string | null => {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  if (JAVASCRIPT_SCHEME.test(trimmed)) return null;
-  return HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
-};
+// URL rules are shared with the host's CDP navigation (see @pwa-debug/shared).
+export { normalizeUrl };
 
 /** Active tab id in the last-focused window, or undefined when there is none. */
 const activeTabId = async (): Promise<number | undefined> => {

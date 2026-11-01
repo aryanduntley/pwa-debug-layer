@@ -65,15 +65,15 @@ const createFrameReader = () => {
     };
 };
 
-const isRecord = (v) => v !== null && typeof v === 'object';
+const isRecord$1 = (v) => v !== null && typeof v === 'object';
 const isOptionalString = (v) => v === undefined || typeof v === 'string';
 const isErrorField = (v) => {
     if (v === undefined)
         return true;
-    return isRecord(v) && typeof v['message'] === 'string';
+    return isRecord$1(v) && typeof v['message'] === 'string';
 };
 const parseIpcEnvelope = (value) => {
-    if (!isRecord(value)) {
+    if (!isRecord$1(value)) {
         throw new Error('ipc envelope: root is not an object');
     }
     const type = value['type'];
@@ -4158,7 +4158,7 @@ ZodOptional.create;
 ZodNullable.create;
 
 const okResponse = (data, next_steps) => Object.freeze({ ok: true, data, next_steps: Object.freeze([...next_steps]) });
-const errorResponse = (error, next_steps) => Object.freeze({ ok: false, error, next_steps: Object.freeze([...next_steps]) });
+const errorResponse$1 = (error, next_steps) => Object.freeze({ ok: false, error, next_steps: Object.freeze([...next_steps]) });
 const registerTools = (server, tools, ctx) => {
     for (const tool of tools) {
         // The SDK's registerTool generics are tied to the per-call inputSchema; we
@@ -4689,6 +4689,8 @@ const hostStatusHandler = async (_args, ctx) => {
         const launcherPath = safeLauncherPath();
         const launcherOnDisk = launcherPath !== null && (await fileExists$4(launcherPath));
         const activeConnections = ctx.ipcServer.listConnections();
+        const extensionConnections = activeConnections.filter((c) => c.kind !== 'cdp');
+        const cdpConnections = activeConnections.filter((c) => c.kind === 'cdp');
         const data = {
             hostBinaryPath: process.argv[1] ?? '',
             stateFilePath: statePath,
@@ -4710,11 +4712,14 @@ const hostStatusHandler = async (_args, ctx) => {
         else if (!launcherOnDisk) {
             next_steps.push('Manifest exists on disk but the launcher script is missing. Re-run host_register_extension with an existing ID to refresh the launcher.');
         }
-        else if (activeConnections.length === 0) {
-            next_steps.push('Manifest is installed and at least one extension ID is registered, but no NMH instance is currently connected. Ask the user to reload the extension at chrome://extensions so Chrome respawns the NMH; activeConnections will populate once the SW reconnects.');
+        else if (extensionConnections.length === 0 && cdpConnections.length > 0) {
+            next_steps.push(`${cdpConnections.length} CDP connection(s) live (no extension needed for those): ${cdpConnections.map((c) => c.extensionId).join(', ')}. Pass one as extension_id to the other tools. No extension connection is live; only call pdl_launch_browser if you also need a desktop browser with the extension.`);
+        }
+        else if (extensionConnections.length === 0) {
+            next_steps.push('Manifest is installed and at least one extension ID is registered, but no browser with the extension is connected. Call pdl_launch_browser yourself (mode "sandbox-persistent" preloads the extension; connection takes a second or two), then session_ping. Only if a browser with the extension is already open and still not connecting: ask the user to reload the extension at chrome://extensions so Chrome respawns the NMH.');
         }
         else {
-            next_steps.push(`Manifest is installed, launcher is present, and ${activeConnections.length} NMH connection(s) are live. Call session_ping (optionally with extension_id) for a full round-trip via the IPC bridge.`);
+            next_steps.push(`Manifest is installed, launcher is present, and ${extensionConnections.length} NMH connection(s) are live. Call session_ping (optionally with extension_id) for a full round-trip via the IPC bridge.`);
         }
         for (const r of installReports) {
             if (r.verifiable && !r.manifestOnDisk) {
@@ -4727,10 +4732,11 @@ const hostStatusHandler = async (_args, ctx) => {
         if (state.extensionIds.length > 0 && manifestPathsOnDisk.length === 0) {
             next_steps.push('To uninstall cleanly, call host_reset.');
         }
+        next_steps.push('You can navigate (pdl_navigate, pdl_new_tab) and interact (pdl_click, pdl_fill, pdl_tap, ...) yourself, and read page state as data with no screenshots needed. Call pdl_help for the full guide, or pdl_help({ topic: "mobile" }) for phones.');
         return okResponse(data, next_steps);
     }
     catch (err) {
-        return errorResponse(`host_status failed: ${err.message}`, [
+        return errorResponse$1(`host_status failed: ${err.message}`, [
             'Filesystem error reading state. Check ~/.config/pwa-debug/state.json permissions and disk space.',
         ]);
     }
@@ -6098,7 +6104,7 @@ const installCaveatLines = (installs) => installs
     .filter((i) => i.kind !== 'registry' && i.caveat)
     .map((i) => `${i.browser} (${i.kind}): ${i.caveat}`);
 const dedupe$2 = (xs) => [...new Set(xs)];
-const inputSchema$V = { extension_id: stringType().min(1) };
+const inputSchema$W = { extension_id: stringType().min(1) };
 const hostRegisterExtensionHandler = async (args) => {
     try {
         const statePath = defaultStatePath();
@@ -6107,13 +6113,13 @@ const hostRegisterExtensionHandler = async (args) => {
         const added = after !== before;
         const installs = await detectBrowserInstalls(process.env, process.platform, fileExists$3);
         if (installs.length === 0) {
-            return errorResponse('No Chromium-family browser detected on this machine.', [
+            return errorResponse$1('No Chromium-family browser detected on this machine.', [
                 'Verify a Chromium-family browser (Chrome, Chromium, Edge, Brave, Vivaldi, Opera) is installed and has been launched at least once. Detection covers Linux native packages, Linux snap, Linux flatpak, macOS Application Support, and Windows HKCU registry vendors.',
             ]);
         }
         const mainJsPath = process.argv[1] ?? '';
         if (mainJsPath === '') {
-            return errorResponse('host_register_extension: cannot determine bundled main.js path (process.argv[1] is empty).', [
+            return errorResponse$1('host_register_extension: cannot determine bundled main.js path (process.argv[1] is empty).', [
                 'This usually means the host was not started as `node /path/to/dist/main.js`. Verify your Claude Code MCP config points at the host binary directly.',
             ]);
         }
@@ -6194,7 +6200,7 @@ const hostRegisterExtensionHandler = async (args) => {
         return okResponse(data, next_steps);
     }
     catch (err) {
-        return errorResponse(`host_register_extension failed: ${err.message}`, [
+        return errorResponse$1(`host_register_extension failed: ${err.message}`, [
             'Filesystem or registry error during install. Check write permissions on the per-browser NativeMessagingHosts directories (POSIX), %APPDATA%\\pwa-debug (Windows), or HKCU registry access (Windows).',
         ]);
     }
@@ -6202,7 +6208,7 @@ const hostRegisterExtensionHandler = async (args) => {
 const hostRegisterExtensionTool = Object.freeze({
     name: 'host_register_extension',
     description: "Registers an extension ID as an allowed origin for the pwa-debug native messaging host. Detects every Chromium-family install on this machine — Linux native packages, Linux snap (Chromium), Linux flatpak (any vendor), macOS Application Support, Windows HKCU registry — and writes the host manifest into each one. Also drops an install-time launcher script (POSIX sh / Windows .bat) that embeds an absolute node path so the host spawns correctly under sandboxed/stripped PATH (snap, flatpak). Idempotent. ID DISCOVERY: read the pwa-debug service-worker console via chrome-devtools-mcp — the SW logs `[pwa-debug/sw] id=<id>` on every boot. NEVER invent an ID. After this returns requiresReload:true, the user must reload the extension at chrome://extensions for Chrome to re-validate allowed_origins. If next_steps mentions a flatpak caveat, surface it to the user verbatim.",
-    inputSchema: inputSchema$V,
+    inputSchema: inputSchema$W,
     handler: hostRegisterExtensionHandler,
 });
 
@@ -6218,7 +6224,7 @@ const fileExists$2 = async (p) => {
     }
 };
 const dedupe$1 = (xs) => [...new Set(xs)];
-const inputSchema$U = { extension_id: stringType().min(1) };
+const inputSchema$V = { extension_id: stringType().min(1) };
 const hostUnregisterExtensionHandler = async (args) => {
     try {
         const statePath = defaultStatePath();
@@ -6264,7 +6270,7 @@ const hostUnregisterExtensionHandler = async (args) => {
         }
         const mainJsPath = process.argv[1] ?? '';
         if (mainJsPath === '') {
-            return errorResponse('host_unregister_extension: cannot determine bundled main.js path (process.argv[1] is empty).', []);
+            return errorResponse$1('host_unregister_extension: cannot determine bundled main.js path (process.argv[1] is empty).', []);
         }
         const launcherPath = defaultLauncherPath(process.platform, process.env);
         await writeLauncher(process.platform, { nodePath: process.execPath, mainJsPath }, launcherPath);
@@ -6294,7 +6300,7 @@ const hostUnregisterExtensionHandler = async (args) => {
         ]);
     }
     catch (err) {
-        return errorResponse(`host_unregister_extension failed: ${err.message}`, [
+        return errorResponse$1(`host_unregister_extension failed: ${err.message}`, [
             'Filesystem or registry error during unregister. Check write permissions on per-browser NativeMessagingHosts dirs (POSIX), %APPDATA%\\pwa-debug (Windows), and HKCU registry access (Windows).',
         ]);
     }
@@ -6302,7 +6308,7 @@ const hostUnregisterExtensionHandler = async (args) => {
 const hostUnregisterExtensionTool = Object.freeze({
     name: 'host_unregister_extension',
     description: "Removes an extension ID from the pwa-debug host manifest allowed_origins. If at least one ID remains, manifests are rewritten with the new union; if the last ID is removed, manifests are deleted entirely (Windows HKCU keys cleared too). Use to recycle stale IDs after a manifest key change in dev. Idempotent: removing an already-absent ID returns removed:false with no side effects.",
-    inputSchema: inputSchema$U,
+    inputSchema: inputSchema$V,
     handler: hostUnregisterExtensionHandler,
 });
 
@@ -6318,7 +6324,7 @@ const hostListRegistrationsHandler = async () => {
             ]);
     }
     catch (err) {
-        return errorResponse(`host_list_registrations failed: ${err.message}`, ['Filesystem error reading state. Check ~/.config/pwa-debug/state.json.']);
+        return errorResponse$1(`host_list_registrations failed: ${err.message}`, ['Filesystem error reading state. Check ~/.config/pwa-debug/state.json.']);
     }
 };
 const hostListRegistrationsTool = Object.freeze({
@@ -6339,7 +6345,7 @@ const fileExists$1 = async (p) => {
     }
 };
 const dedupe = (xs) => [...new Set(xs)];
-const inputSchema$T = { confirm: literalType('reset') };
+const inputSchema$U = { confirm: literalType('reset') };
 const hostResetHandler = async (_args) => {
     try {
         const statePath = defaultStatePath();
@@ -6372,7 +6378,7 @@ const hostResetHandler = async (_args) => {
         ]);
     }
     catch (err) {
-        return errorResponse(`host_reset failed: ${err.message}`, [
+        return errorResponse$1(`host_reset failed: ${err.message}`, [
             'Filesystem or registry error during reset. Check write permissions on ~/.config/pwa-debug/, the per-browser NativeMessagingHosts dirs, %APPDATA%\\pwa-debug, and HKCU registry access.',
         ]);
     }
@@ -6380,10 +6386,14 @@ const hostResetHandler = async (_args) => {
 const hostResetTool = Object.freeze({
     name: 'host_reset',
     description: 'DESTRUCTIVE: removes ALL registered extension IDs and deletes every per-browser host manifest (POSIX files + Windows HKCU keys + the shared %APPDATA% manifest JSON). Requires confirm:"reset" to invoke (a typed safety guard). Inform the user before calling. Use only when starting setup from scratch.',
-    inputSchema: inputSchema$T,
+    inputSchema: inputSchema$U,
     handler: hostResetHandler,
 });
 
+/**
+ * Pick the connection a tool call goes to. `argId` (the tools' extension_id
+ * arg) may name any live connection: an extension id or a CDP connection id.
+ */
 const resolveTarget$1 = (ctx, argId) => {
     const conns = ctx.ipcServer.listConnections();
     if (argId !== undefined) {
@@ -6391,257 +6401,22 @@ const resolveTarget$1 = (ctx, argId) => {
         if (!found) {
             return {
                 ok: false,
-                error: `no connected NMH for extension_id=${argId}`,
+                error: `no connected NMH for extension_id=${argId} (no extension or CDP connection has that id; host_status lists activeConnections)`,
             };
         }
         return { ok: true, extensionId: argId };
     }
     if (conns.length === 0) {
-        return { ok: false, error: 'no NMH connected' };
+        return { ok: false, error: 'no NMH connected (no extension or CDP connection is live)' };
     }
     if (conns.length > 1) {
         return {
             ok: false,
-            error: `multiple NMH connections (${conns.length}); pass extension_id explicitly`,
+            error: `multiple NMH connections (${conns.length} live extension/CDP connections); pass extension_id explicitly (an extension id or a CDP connection id from host_status activeConnections)`,
         };
     }
     return { ok: true, extensionId: conns[0].extensionId };
 };
-
-const SESSION_PING_TIMEOUT_MS = 5000;
-const inputSchema$S = {
-    extension_id: stringType().min(1).optional(),
-};
-const PAGE_WORLD_ERROR_CODES = new Set([
-    'cs_not_attached_refresh_tab',
-    'page_blocks_scripts',
-    'page_world_blocked',
-    'restricted_url',
-    'no_active_tab',
-    'cs_inject_failed',
-]);
-const NEXT_STEPS_BY_CODE = Object.freeze({
-    cs_not_attached_refresh_tab: [
-        "The page-world bridge is not responding even after the extension auto-injected its content scripts. The auto-recovery did not stick — the page may have rejected the injection silently or reloaded mid-flight.",
-        "Ask the user to hard-refresh the page tab (Ctrl+Shift+R) and retry session_ping. If the problem repeats, ask them to reload the extension at chrome://extensions and then hard-refresh the page.",
-    ],
-    page_blocks_scripts: [
-        "The site is blocking the pwa-debug content script. A content blocker is rejecting it.",
-        "If the user is on Brave: ask them to click the lion icon in the address bar, set Shields to 'Down' for this site, refresh the page, and retry session_ping.",
-        "If the user has uBlock Origin or a similar blocker: ask them to disable it for this site, refresh, and retry. If neither, the site's own CSP is blocking and pwa-debug cannot bypass it — inform the user this origin is unscriptable.",
-    ],
-    page_world_blocked: [
-        "The content script attached but the MAIN-world page-world bridge cannot be reached. The site's Content-Security-Policy most likely blocks the inline script tag the bridge needs.",
-        "Inform the user that this site's CSP prevents page-world introspection. pwa-debug cannot bypass site CSP. Console + network capture may still work via the content-script side, but live page-world reads (component state, store snapshots, evaluate) will not.",
-    ],
-    restricted_url: [
-        "The current tab is on a URL that browsers do not allow extensions to touch (chrome://, the Web Store, about:, devtools://, file://, etc.).",
-        "Ask the user to switch focus to a regular http(s) tab of the PWA they want to debug, then retry session_ping.",
-    ],
-    no_active_tab: [
-        "No active http(s) tab is focused.",
-        "Ask the user to focus a regular browser tab (not DevTools, not the extension popup) and retry session_ping.",
-    ],
-    cs_inject_failed: [
-        "The auto-recovery injection (chrome.scripting.executeScript) itself failed. The extension cannot reach this tab.",
-        "Ask the user to reload the extension at chrome://extensions and hard-refresh the page tab (Ctrl+Shift+R), then retry session_ping. If the problem persists, the tab may be on a URL the browser blocks all extensions from — ask the user what URL is in the address bar.",
-    ],
-});
-const isPageWorldErrorCode = (v) => typeof v === 'string' && PAGE_WORLD_ERROR_CODES.has(v);
-const readPayloadString = (payload, key) => {
-    if (payload === null || typeof payload !== 'object')
-        return null;
-    const v = payload[key];
-    return typeof v === 'string' ? v : null;
-};
-const readPayloadNumber = (payload, key) => {
-    if (payload === null || typeof payload !== 'object')
-        return null;
-    const v = payload[key];
-    return typeof v === 'number' ? v : null;
-};
-const readPayloadBoolean = (payload, key) => {
-    if (payload === null || typeof payload !== 'object')
-        return false;
-    const v = payload[key];
-    return v === true;
-};
-const readPageWorldErrorCode = (payload) => {
-    const raw = readPayloadString(payload, 'pageWorldError');
-    return raw !== null && isPageWorldErrorCode(raw) ? raw : null;
-};
-const readPageWorld = (payload) => {
-    if (payload === null || typeof payload !== 'object')
-        return null;
-    const v = payload['pageWorld'];
-    if (v === null || v === undefined)
-        return null;
-    if (typeof v !== 'object')
-        return null;
-    const obj = v;
-    const url = obj['url'];
-    const title = obj['title'];
-    const readyState = obj['readyState'];
-    if (typeof url !== 'string')
-        return null;
-    if (typeof title !== 'string')
-        return null;
-    if (readyState !== 'loading' &&
-        readyState !== 'interactive' &&
-        readyState !== 'complete') {
-        return null;
-    }
-    return Object.freeze({ url, title, readyState });
-};
-const buildNextSteps = (pageWorld, pageWorldError, selfHealed) => {
-    const steps = [
-        'Round-trip MCP→IPC→NMH→SW→CS→page-world completed. extensionVersion and attachedTabId reflect the SW response; pageWorld carries url/title/readyState read from the active tab. If pageWorld is null and pageWorldError is set, the SW round-trip succeeded but the page-bridge half failed — see the next hint.',
-    ];
-    if (selfHealed && pageWorld !== null) {
-        steps.push('pageWorldSelfHealed:true — the content script was missing on the active tab (loaded before the extension reload) and the SW auto-injected it via chrome.scripting.executeScript. No user action needed; just informational.');
-    }
-    if (pageWorldError !== null) {
-        for (const hint of NEXT_STEPS_BY_CODE[pageWorldError])
-            steps.push(hint);
-    }
-    else if (pageWorld === null) {
-        steps.push('pageWorld is null but no typed pageWorldError was returned. This is unexpected — inspect the SW console for [pwa-debug] errors. The SW response payload may be malformed.');
-    }
-    return steps;
-};
-const sessionPingHandler = async (args, ctx) => {
-    const target = resolveTarget$1(ctx, args.extension_id);
-    if (!target.ok) {
-        return errorResponse(target.error, [
-            'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions so Chrome respawns the NMH.',
-        ]);
-    }
-    const requestId = randomUUID();
-    const env = Object.freeze({
-        type: 'request',
-        requestId,
-        tool: 'session_ping',
-        extensionId: target.extensionId,
-        payload: {},
-    });
-    const startedAt = Date.now();
-    let response;
-    try {
-        response = await ctx.ipcServer.request(target.extensionId, env, {
-            timeoutMs: SESSION_PING_TIMEOUT_MS,
-        });
-    }
-    catch (err) {
-        return errorResponse(`session_ping failed: ${err.message}`, [
-            'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console for errors and confirm the SW is connected to the host. If the SW responder is missing the session_ping handler, the request will time out.',
-        ]);
-    }
-    const latencyMs = Date.now() - startedAt;
-    if (response.error) {
-        return errorResponse(`session_ping nmh error: ${response.error.message}`, [
-            'NMH-mode rejected the request. Inspect the extension service worker console and the host stderr for the underlying error.',
-        ]);
-    }
-    const pageWorld = readPageWorld(response.payload);
-    const pageWorldError = readPageWorldErrorCode(response.payload);
-    const pageWorldErrorMessage = readPayloadString(response.payload, 'pageWorldErrorMessage');
-    const pageWorldSelfHealed = readPayloadBoolean(response.payload, 'pageWorldSelfHealed');
-    const data = {
-        hostVersion: ctx.hostVersion,
-        extensionVersion: readPayloadString(response.payload, 'extensionVersion'),
-        attachedTabId: readPayloadNumber(response.payload, 'attachedTabId'),
-        extensionId: target.extensionId,
-        latencyMs,
-        pageWorld,
-        ...(pageWorldError !== null ? { pageWorldError } : {}),
-        ...(pageWorldErrorMessage !== null ? { pageWorldErrorMessage } : {}),
-        ...(pageWorldSelfHealed ? { pageWorldSelfHealed: true } : {}),
-    };
-    const nextSteps = buildNextSteps(pageWorld, pageWorldError, pageWorldSelfHealed);
-    return okResponse(data, nextSteps);
-};
-const sessionPingTool = Object.freeze({
-    name: 'session_ping',
-    description: "Sends a ping through the full MCP → IPC → NMH → SW → CS → page-world chain and returns round-trip metadata: { hostVersion, extensionVersion, attachedTabId, extensionId, latencyMs, pageWorld, pageWorldError?, pageWorldErrorMessage?, pageWorldSelfHealed? }. pageWorld is { url, title, readyState } read live from the active tab's MAIN-world page-world script. pageWorld is null with pageWorldError set (a typed code: cs_not_attached_refresh_tab | page_blocks_scripts | page_world_blocked | restricted_url | no_active_tab | cs_inject_failed) when the SW round-trip succeeded but the page-bridge half failed. The SW also auto-recovers tabs that loaded before the extension reload by programmatically re-injecting the content script and page-world bundle — when this works, pageWorld is populated and pageWorldSelfHealed:true. The tool's next_steps[] field carries imperative, code-specific guidance the AI should relay verbatim to the user. With no args, targets the single connected NMH (errors if zero or multiple). Pass extension_id to target a specific extension. CALL host_status FIRST to see which extensions are currently connected.",
-    inputSchema: inputSchema$S,
-    handler: sessionPingHandler,
-});
-
-const RECENT_EVENTS_TIMEOUT_MS = 5000;
-const inputSchema$R = {
-    extension_id: stringType().min(1).optional(),
-    kinds: arrayType(stringType()).optional(),
-    since_ms: numberType().optional(),
-    limit: numberType().int().nonnegative().optional(),
-};
-const readPayload$4 = (raw) => {
-    if (raw === null || typeof raw !== 'object')
-        return undefined;
-    return raw;
-};
-const recentEventsHandler = async (args, ctx) => {
-    const target = resolveTarget$1(ctx, args.extension_id);
-    if (!target.ok) {
-        return errorResponse(target.error, [
-            'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions so Chrome respawns the NMH.',
-        ]);
-    }
-    const requestId = randomUUID();
-    const env = Object.freeze({
-        type: 'request',
-        requestId,
-        tool: 'recent_events',
-        extensionId: target.extensionId,
-        payload: {
-            ...(args.kinds !== undefined ? { kinds: args.kinds } : {}),
-            ...(args.since_ms !== undefined ? { sinceMs: args.since_ms } : {}),
-            ...(args.limit !== undefined ? { limit: args.limit } : {}),
-        },
-    });
-    let response;
-    try {
-        response = await ctx.ipcServer.request(target.extensionId, env, {
-            timeoutMs: RECENT_EVENTS_TIMEOUT_MS,
-        });
-    }
-    catch (err) {
-        return errorResponse(`recent_events failed: ${err.message}`, [
-            'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console and confirm the SW is connected to the host. If the SW responder is missing the recent_events handler, the request will time out.',
-        ]);
-    }
-    if (response.error) {
-        return errorResponse(`recent_events nmh error: ${response.error.message}`, [
-            'NMH-mode rejected the request. Inspect the extension service worker console and the host stderr for the underlying error.',
-        ]);
-    }
-    const payload = readPayload$4(response.payload);
-    const events = Array.isArray(payload?.events)
-        ? payload.events
-        : [];
-    const stats = payload?.stats ?? {
-        totalReceived: 0,
-        perKind: {},
-        bufferSize: 0,
-    };
-    const data = {
-        extensionId: target.extensionId,
-        events,
-        stats,
-    };
-    const nextSteps = [
-        "Recent events from the SW ring buffer (in-memory, lost on SW restart). The buffer is populated by page-world capture producers (console now; fetch/XHR/WebSocket land in M9 Task 8). M11 will replace this in-memory buffer with host-side persistence so events survive SW restarts and tab reloads.",
-    ];
-    if (events.length === 0) {
-        nextSteps.push("events:[] — possible causes: (1) the page hasn't generated any captured activity since the SW started — try console.log on a page; (2) the SW restarted recently and the in-memory buffer was reset; (3) the page tab predates the most recent extension reload and content_scripts haven't injected — hard-refresh the tab and call session_ping to confirm the page-bridge half is healthy before retrying.");
-    }
-    return okResponse(data, nextSteps);
-};
-const recentEventsTool = Object.freeze({
-    name: 'recent_events',
-    description: "Returns recent CapturedEvents from the extension's SW-side ring buffer (in-memory, lost on SW restart; M11 will add cross-restart persistence). Each event has shape: { kind, ts, frameUrl, frameKey, ...kind-specific-fields } where kind is 'console' (currently) or 'fetch'/'xhr'/'websocket' (M9 Task 8). Filters: kinds=['console','fetch'] restricts to listed kinds; since_ms is a strict greater-than ts cutoff; limit caps the result to the most-recent N (default 50, hard max = SW bufferSize). Returns { extensionId, events, stats: { totalReceived, perKind, bufferSize } }. With no extension_id, targets the single connected NMH (errors if zero or multiple). CALL host_status FIRST to see which extensions are connected, and session_ping to confirm the page-bridge half is healthy on the active tab.",
-    inputSchema: inputSchema$R,
-    handler: recentEventsHandler,
-});
 
 const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const encodeAsciiToBase64Url = (ascii) => {
@@ -7103,6 +6878,750 @@ const ACTION_TOOL_SPECS = Object.freeze([
     { tool: 'pdl_long_press', action: 'longPress', params: [N('duration', false, 'hold ms before release (default 500)')], summary: 'Long-press the located element (holds, then releases + contextmenu).' },
     { tool: 'pdl_pinch', action: 'pinch', params: [N('scale', true, 'target scale: >1 zoom in, <1 zoom out'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Pinch-zoom on the located element with two touches.' },
 ]);
+
+/**
+ * Wire contract between the host and the page-world CDP bundle
+ * (packages/extension/src/page-world-cdp.ts). Both sides import these, so a
+ * rename cannot silently split them. Bump CDP_BRIDGE_VERSION on any change.
+ */
+const CDP_BRIDGE_VERSION = 1;
+/** Created by the host with Runtime.addBinding before the bundle runs. */
+const CDP_EMIT_BINDING = '__pwaDebugCdpEmit';
+/** Page global the host calls through Runtime.evaluate. */
+const CDP_GLOBAL = '__pwaDebugCdp';
+
+// A bare javascript: URL would run script in the target page context on navigate;
+// reject it. Everything else (http(s), file:, about:, data:, chrome:, localhost
+// shorthand) is allowed — this is a debugging driver, not a sandbox.
+const JAVASCRIPT_SCHEME = /^javascript:/i;
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+/**
+ * Normalize a caller-supplied navigation URL: trim, reject empty / javascript:,
+ * and assume https:// when no scheme is given (so `example.com` works). Returns
+ * null when the input is unusable so the caller can surface a clear error.
+ * Shared by the extension (chrome.tabs) and the host (CDP Page.navigate) so both
+ * navigation paths accept exactly the same URLs.
+ */
+const normalizeUrl = (raw) => {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0)
+        return null;
+    if (JAVASCRIPT_SCHEME.test(trimmed))
+        return null;
+    return HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+
+const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
+const globToRegex = (pattern) => {
+    const escaped = pattern.replace(REGEX_SPECIALS, '\\$&').replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+};
+const matchesAnyGlob = (value, patterns) => patterns.some((p) => globToRegex(p).test(value));
+/**
+ * Raw captured-event kinds (6) -> M7 capture categories (4).
+ * The union side reflects the captured_event.ts kind discriminants.
+ */
+const KIND_MAP = Object.freeze({
+    console: 'console',
+    fetch: 'network',
+    xhr: 'network',
+    websocket: 'network',
+    dom_mutation: 'dom_mutations',
+    lifecycle: 'lifecycle',
+    // App service-worker lifecycle: its own capture category + host buffer.
+    sw_state: 'sw_state',
+    store_change: 'store_change',
+    replay: 'replay',
+    library_popup: 'library_popup',
+});
+const eventKindToCaptureKind = (rawKind) => KIND_MAP[rawKind] ?? null;
+const isKindEnabled = (rawKind, enabledKinds) => {
+    const ck = eventKindToCaptureKind(rawKind);
+    if (ck === null)
+        return true; // unknown raw kinds default-allow (future-compat)
+    return enabledKinds.includes(ck);
+};
+const isUrlAllowed = (url, allowlist, blocklist) => {
+    if (matchesAnyGlob(url, blocklist))
+        return false; // blocklist wins
+    if (allowlist.length === 0)
+        return false; // explicit opt-in model
+    return matchesAnyGlob(url, allowlist);
+};
+/**
+ * Pick the most-specific readControls entry whose glob pattern matches `url`.
+ * Specificity = longest pattern string; ties broken by lexicographic order of
+ * the pattern so the choice is deterministic. Returns undefined when no
+ * pattern matches (caller treats as no restriction).
+ */
+const pickMostSpecificReadControl = (url, controls) => {
+    let winnerPattern;
+    let winnerValue;
+    for (const [pattern, value] of Object.entries(controls)) {
+        if (!matchesAnyGlob(url, [pattern]))
+            continue;
+        if (winnerPattern === undefined) {
+            winnerPattern = pattern;
+            winnerValue = value;
+            continue;
+        }
+        if (pattern.length > winnerPattern.length ||
+            (pattern.length === winnerPattern.length && pattern < winnerPattern)) {
+            winnerPattern = pattern;
+            winnerValue = value;
+        }
+    }
+    return winnerValue;
+};
+/**
+ * True iff the resolved readControls entry permits the given CaptureKind.
+ * Missing flag = allowed (no restriction); explicit `false` denies. Undefined
+ * control (no matching readControls entry) = allowed.
+ */
+const isKindAllowedByReadControls = (kind, control) => control?.[kind] !== false;
+/**
+ * True iff the per-kind capture.filters predicate (if configured) accepts the
+ * event. No filter for the resolved kind => allow. compileSourceFilter ok:false
+ * (malformed regex despite the schema validator) => fail-open (allow) so a
+ * single bad filter cannot suppress all events of a kind.
+ */
+const passesCaptureFilter = (event, captureKind, filters) => {
+    const spec = filters[captureKind];
+    if (spec === undefined)
+        return true;
+    const compiled = compileSourceFilter(spec);
+    if (!compiled.ok)
+        return true;
+    return compiled.predicate(event);
+};
+const shouldCaptureEvent = (event, settings) => {
+    if (!isKindEnabled(event.kind, settings['capture.enabledKinds'])) {
+        return false;
+    }
+    if (!isUrlAllowed(event.frameUrl, settings['sites.allowlist'], settings['sites.blocklist'])) {
+        return false;
+    }
+    const captureKind = eventKindToCaptureKind(event.kind);
+    if (captureKind === null)
+        return true; // unknown raw kinds default-allow
+    const control = pickMostSpecificReadControl(event.frameUrl, settings['sites.readControls']);
+    if (!isKindAllowedByReadControls(captureKind, control))
+        return false;
+    return passesCaptureFilter(event, captureKind, settings['capture.filters']);
+};
+
+const createRingBuffer = (opts) => {
+    if (!Number.isInteger(opts.capacity) || opts.capacity <= 0) {
+        throw new Error(`createRingBuffer: capacity must be a positive integer, got ${String(opts.capacity)}`);
+    }
+    const capacity = opts.capacity;
+    const onEvict = opts.onEvict;
+    const slots = new Array(capacity);
+    let writeIndex = 0;
+    let count = 0;
+    const push = (item) => {
+        if (count < capacity) {
+            slots[writeIndex] = item;
+            writeIndex = (writeIndex + 1) % capacity;
+            count++;
+            return;
+        }
+        const evicted = slots[writeIndex];
+        slots[writeIndex] = item;
+        writeIndex = (writeIndex + 1) % capacity;
+        if (onEvict !== undefined)
+            onEvict(evicted);
+    };
+    const tail = (tailOpts) => {
+        const since = tailOpts?.since;
+        const limit = tailOpts?.limit;
+        const filter = tailOpts?.filter;
+        const startIndex = count < capacity ? 0 : writeIndex;
+        const matched = [];
+        for (let i = 0; i < count; i++) {
+            const entry = slots[(startIndex + i) % capacity];
+            if (since !== undefined && !(entry.ts > since))
+                continue;
+            if (filter !== undefined && !filter(entry))
+                continue;
+            matched.push(entry);
+        }
+        if (limit !== undefined && matched.length > limit) {
+            return matched.slice(matched.length - limit);
+        }
+        return matched;
+    };
+    const size = () => count;
+    const clear = () => {
+        for (let i = 0; i < capacity; i++)
+            slots[i] = undefined;
+        writeIndex = 0;
+        count = 0;
+    };
+    return Object.freeze({ push, tail, size, clear });
+};
+
+const DEFAULT_CAPACITY_PER_KIND = 5000;
+const BUFFER_KINDS = [
+    'console',
+    'network',
+    'dom_mutations',
+    'lifecycle',
+    'store_change',
+    'replay',
+    'library_popup',
+    'page_error',
+    'sw_state',
+];
+const kindToBucket = (kind) => {
+    switch (kind) {
+        case 'console':
+            return 'console';
+        case 'fetch':
+        case 'xhr':
+        case 'websocket':
+            return 'network';
+        case 'dom_mutation':
+            return 'dom_mutations';
+        case 'lifecycle':
+            return 'lifecycle';
+        case 'store_change':
+            return 'store_change';
+        case 'replay':
+            return 'replay';
+        case 'library_popup':
+            return 'library_popup';
+        case 'page_error':
+            return 'page_error';
+        case 'sw_state':
+            return 'sw_state';
+        default:
+            return undefined;
+    }
+};
+const createCapturesIn = (opts) => {
+    const extensionId = opts.extensionId;
+    const capacity = opts.capacityPerKind ?? DEFAULT_CAPACITY_PER_KIND;
+    const getNow = opts.getNow ?? Date.now;
+    const sessionId = opts.sessionId ?? randomUUID();
+    const onEvict = opts.onEvict;
+    const makeBuffer = (kind) => onEvict
+        ? createRingBuffer({
+            capacity,
+            onEvict: (evicted) => onEvict(kind, evicted),
+        })
+        : createRingBuffer({ capacity });
+    const buffers = {
+        console: makeBuffer('console'),
+        network: makeBuffer('network'),
+        dom_mutations: makeBuffer('dom_mutations'),
+        lifecycle: makeBuffer('lifecycle'),
+        store_change: makeBuffer('store_change'),
+        replay: makeBuffer('replay'),
+        library_popup: makeBuffer('library_popup'),
+        page_error: makeBuffer('page_error'),
+        sw_state: makeBuffer('sw_state'),
+    };
+    const received = {
+        console: 0,
+        network: 0,
+        dom_mutations: 0,
+        lifecycle: 0,
+        store_change: 0,
+        replay: 0,
+        library_popup: 0,
+        page_error: 0,
+        sw_state: 0,
+    };
+    const dropped = {
+        console: 0,
+        network: 0,
+        dom_mutations: 0,
+        lifecycle: 0,
+        store_change: 0,
+        replay: 0,
+        library_popup: 0,
+        page_error: 0,
+        sw_state: 0,
+    };
+    const sequence = {
+        console: 0,
+        network: 0,
+        dom_mutations: 0,
+        lifecycle: 0,
+        store_change: 0,
+        replay: 0,
+        library_popup: 0,
+        page_error: 0,
+        sw_state: 0,
+    };
+    let droppedUnknown = 0;
+    const listeners = new Set();
+    const subscribe = (listener) => {
+        listeners.add(listener);
+        return () => {
+            listeners.delete(listener);
+        };
+    };
+    const receive = (input) => {
+        for (const event of input.events) {
+            if (event === null || typeof event !== 'object') {
+                droppedUnknown++;
+                continue;
+            }
+            const e = event;
+            if (typeof e.kind !== 'string') {
+                droppedUnknown++;
+                continue;
+            }
+            const bucket = kindToBucket(e.kind);
+            if (bucket === undefined) {
+                droppedUnknown++;
+                continue;
+            }
+            if (typeof e.ts !== 'number' || !Number.isFinite(e.ts)) {
+                dropped[bucket]++;
+                continue;
+            }
+            sequence[bucket]++;
+            const stored = {
+                ...event,
+                receivedAt: getNow(),
+                sessionId,
+                extensionId,
+                sequenceNumber: sequence[bucket],
+            };
+            buffers[bucket].push(stored);
+            received[bucket]++;
+            for (const listener of listeners) {
+                try {
+                    listener(bucket, stored);
+                }
+                catch {
+                    // A faulty subscriber must never break intake.
+                }
+            }
+        }
+    };
+    const tail = (kind, tailOpts) => buffers[kind].tail(tailOpts);
+    const buffer = (kind) => buffers[kind];
+    const getStats = () => {
+        const perKindEntries = BUFFER_KINDS.map((k) => [
+            k,
+            Object.freeze({
+                received: received[k],
+                dropped: dropped[k],
+                size: buffers[k].size(),
+            }),
+        ]);
+        const perKind = Object.freeze(Object.fromEntries(perKindEntries));
+        let totalReceived = 0;
+        let totalDropped = droppedUnknown;
+        for (const k of BUFFER_KINDS) {
+            totalReceived += received[k];
+            totalDropped += dropped[k];
+        }
+        return Object.freeze({
+            perKind,
+            droppedUnknown,
+            totals: Object.freeze({ received: totalReceived, dropped: totalDropped }),
+            sessionId,
+            extensionId,
+        });
+    };
+    const clear = () => {
+        for (const k of BUFFER_KINDS) {
+            buffers[k].clear();
+            received[k] = 0;
+            dropped[k] = 0;
+            sequence[k] = 0;
+        }
+        droppedUnknown = 0;
+    };
+    return Object.freeze({ receive, tail, buffer, getStats, clear, subscribe });
+};
+const CAPTURES_EVENT_TOOL = 'captures';
+const createCapturesRegistry = (opts = {}) => {
+    const map = new Map();
+    const getOrCreate = (extensionId) => {
+        const existing = map.get(extensionId);
+        if (existing !== undefined)
+            return existing;
+        const created = createCapturesIn({
+            extensionId,
+            ...(opts.capacityPerKind !== undefined && { capacityPerKind: opts.capacityPerKind }),
+            ...(opts.getNow !== undefined && { getNow: opts.getNow }),
+            ...(opts.sessionId !== undefined && { sessionId: opts.sessionId }),
+            ...(opts.onEvict !== undefined && { onEvict: opts.onEvict }),
+        });
+        map.set(extensionId, created);
+        return created;
+    };
+    const get = (extensionId) => map.get(extensionId);
+    const list = () => Object.freeze(Array.from(map.entries(), ([extensionId, captures]) => Object.freeze({ extensionId, captures })));
+    const clear = () => {
+        map.clear();
+    };
+    return Object.freeze({ getOrCreate, get, list, clear });
+};
+const isIntakePayload = (v) => {
+    if (v === null || typeof v !== 'object')
+        return false;
+    return Array.isArray(v.events);
+};
+const dispatchCapturesEvent = (registry, extensionId, env, hooks) => {
+    if (env.tool !== CAPTURES_EVENT_TOOL)
+        return;
+    if (env.extensionId !== undefined && env.extensionId !== extensionId) {
+        hooks?.onMismatch?.(`dispatchCapturesEvent: envelope.extensionId=${env.extensionId} does not match connection.extensionId=${extensionId}; dropping`);
+        return;
+    }
+    if (!isIntakePayload(env.payload)) {
+        hooks?.onInvalid?.(`dispatchCapturesEvent: invalid intake payload from ${extensionId}; dropping`);
+        return;
+    }
+    registry.getOrCreate(extensionId).receive({ events: env.payload.events });
+};
+
+const isRecord = (v) => v !== null && typeof v === 'object';
+const errorResponse = (requestId, message) => Object.freeze({ type: 'response', requestId, error: Object.freeze({ message }) });
+/**
+ * Expression that calls the in-page dispatcher. The request is JSON-encoded
+ * twice so the payload, whatever it holds, arrives as one string literal.
+ */
+const buildDispatchExpression = (req) => `globalThis.${CDP_GLOBAL}.dispatch(${JSON.stringify(JSON.stringify(req))})`;
+const MISSING_BRIDGE = 'the pwa-debug CDP bridge is not present in this page. It may still be loading, or the page navigated somewhere it could not be injected. Retry, or detach and attach again with reload:true.';
+/**
+ * Map a Runtime.evaluate result (awaitPromise + returnByValue) for a dispatch
+ * call to the IPC response shape the tool layer already handles.
+ */
+const parseDispatchResult = (requestId, raw) => {
+    if (!isRecord(raw))
+        return errorResponse(requestId, 'cdp: empty Runtime.evaluate result');
+    const exception = raw['exceptionDetails'];
+    if (isRecord(exception)) {
+        const ex = exception['exception'];
+        const description = isRecord(ex) && typeof ex['description'] === 'string' ? ex['description'] : '';
+        if (/Cannot read propert(y|ies) of undefined|is not defined|undefined is not an object/.test(description)) {
+            return errorResponse(requestId, MISSING_BRIDGE);
+        }
+        const text = typeof exception['text'] === 'string' ? exception['text'] : 'exception';
+        return errorResponse(requestId, `cdp: page threw: ${description || text}`);
+    }
+    const result = raw['result'];
+    const value = isRecord(result) ? result['value'] : undefined;
+    if (typeof value !== 'string')
+        return errorResponse(requestId, MISSING_BRIDGE);
+    let page;
+    try {
+        page = JSON.parse(value);
+    }
+    catch {
+        return errorResponse(requestId, 'cdp: bridge returned non-JSON');
+    }
+    if (!isRecord(page))
+        return errorResponse(requestId, 'cdp: bridge returned a non-object');
+    const err = page['error'];
+    if (isRecord(err) && typeof err['message'] === 'string') {
+        return errorResponse(requestId, err['message']);
+    }
+    return Object.freeze({
+        type: 'response',
+        requestId,
+        ...(page['payload'] !== undefined ? { payload: page['payload'] } : {}),
+    });
+};
+/** One bridge event from a Runtime.bindingCalled notification, or null. */
+const parseBindingEvent = (params) => {
+    if (!isRecord(params) || params['name'] !== CDP_EMIT_BINDING)
+        return null;
+    const payload = params['payload'];
+    if (typeof payload !== 'string')
+        return null;
+    let parsed;
+    try {
+        parsed = JSON.parse(payload);
+    }
+    catch {
+        return null;
+    }
+    if (!isRecord(parsed))
+        return null;
+    const event = parsed['event'];
+    if (!isRecord(event) || typeof event['kind'] !== 'string' || typeof event['ts'] !== 'number') {
+        return null;
+    }
+    return event;
+};
+/** The envelope the captures intake accepts from any connection. */
+const capturesEnvelope = (connectionId, events) => Object.freeze({
+    type: 'event',
+    tool: CAPTURES_EVENT_TOOL,
+    extensionId: connectionId,
+    payload: Object.freeze({ events }),
+});
+/** True for connection ids minted by the CDP transport. */
+const isCdpConnectionId = (id) => id.startsWith('cdp:');
+/** 'cdp:<host>:<port>:<first 8 of targetId>' */
+const cdpConnectionId = (baseUrl, targetId) => {
+    const hostPort = baseUrl.replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
+    return `cdp:${hostPort}:${targetId.slice(0, 8)}`;
+};
+/** pdl_navigate URL rules, shared with the extension (normalizeUrl). */
+const normalizeNavigateUrl = (raw) => {
+    const url = typeof raw === 'string' ? normalizeUrl(raw) : null;
+    return url !== null
+        ? { ok: true, url }
+        : { ok: false, error: 'pdl_navigate: url must be a non-empty string and not a javascript: URL' };
+};
+/** A CDP connection is a single tab, so tab_id has no meaning there. */
+const stripTabId = (payload) => {
+    if (!isRecord(payload) || !('tab_id' in payload))
+        return payload;
+    const { tab_id: _drop, ...rest } = payload;
+    return rest;
+};
+
+const SESSION_PING_TIMEOUT_MS = 5000;
+const inputSchema$T = {
+    extension_id: stringType().min(1).optional(),
+};
+const PAGE_WORLD_ERROR_CODES = new Set([
+    'cs_not_attached_refresh_tab',
+    'page_blocks_scripts',
+    'page_world_blocked',
+    'restricted_url',
+    'no_active_tab',
+    'cs_inject_failed',
+]);
+const NEXT_STEPS_BY_CODE = Object.freeze({
+    cs_not_attached_refresh_tab: [
+        "The page-world bridge is not responding even after the extension auto-injected its content scripts. The auto-recovery did not stick — the page may have rejected the injection silently or reloaded mid-flight.",
+        "Ask the user to hard-refresh the page tab (Ctrl+Shift+R) and retry session_ping. If the problem repeats, ask them to reload the extension at chrome://extensions and then hard-refresh the page.",
+    ],
+    page_blocks_scripts: [
+        "The site is blocking the pwa-debug content script. A content blocker is rejecting it.",
+        "If the user is on Brave: ask them to click the lion icon in the address bar, set Shields to 'Down' for this site, refresh the page, and retry session_ping.",
+        "If the user has uBlock Origin or a similar blocker: ask them to disable it for this site, refresh, and retry. If neither, the site's own CSP is blocking and pwa-debug cannot bypass it — inform the user this origin is unscriptable.",
+    ],
+    page_world_blocked: [
+        "The content script attached but the MAIN-world page-world bridge cannot be reached. The site's Content-Security-Policy most likely blocks the inline script tag the bridge needs.",
+        "Inform the user that this site's CSP prevents page-world introspection. pwa-debug cannot bypass site CSP. Console + network capture may still work via the content-script side, but live page-world reads (component state, store snapshots, evaluate) will not.",
+    ],
+    restricted_url: [
+        "The current tab is on a URL that browsers do not allow extensions to touch (chrome://, the Web Store, about:, devtools://, file://, etc.).",
+        "Ask the user to switch focus to a regular http(s) tab of the PWA they want to debug, then retry session_ping.",
+    ],
+    no_active_tab: [
+        "No active http(s) tab is focused.",
+        "Ask the user to focus a regular browser tab (not DevTools, not the extension popup) and retry session_ping.",
+    ],
+    cs_inject_failed: [
+        "The auto-recovery injection (chrome.scripting.executeScript) itself failed. The extension cannot reach this tab.",
+        "Ask the user to reload the extension at chrome://extensions and hard-refresh the page tab (Ctrl+Shift+R), then retry session_ping. If the problem persists, the tab may be on a URL the browser blocks all extensions from — ask the user what URL is in the address bar.",
+    ],
+});
+const isPageWorldErrorCode = (v) => typeof v === 'string' && PAGE_WORLD_ERROR_CODES.has(v);
+const readPayloadString = (payload, key) => {
+    if (payload === null || typeof payload !== 'object')
+        return null;
+    const v = payload[key];
+    return typeof v === 'string' ? v : null;
+};
+const readPayloadNumber = (payload, key) => {
+    if (payload === null || typeof payload !== 'object')
+        return null;
+    const v = payload[key];
+    return typeof v === 'number' ? v : null;
+};
+const readPayloadBoolean = (payload, key) => {
+    if (payload === null || typeof payload !== 'object')
+        return false;
+    const v = payload[key];
+    return v === true;
+};
+const readPageWorldErrorCode = (payload) => {
+    const raw = readPayloadString(payload, 'pageWorldError');
+    return raw !== null && isPageWorldErrorCode(raw) ? raw : null;
+};
+const readPageWorld = (payload) => {
+    if (payload === null || typeof payload !== 'object')
+        return null;
+    const v = payload['pageWorld'];
+    if (v === null || v === undefined)
+        return null;
+    if (typeof v !== 'object')
+        return null;
+    const obj = v;
+    const url = obj['url'];
+    const title = obj['title'];
+    const readyState = obj['readyState'];
+    if (typeof url !== 'string')
+        return null;
+    if (typeof title !== 'string')
+        return null;
+    if (readyState !== 'loading' &&
+        readyState !== 'interactive' &&
+        readyState !== 'complete') {
+        return null;
+    }
+    return Object.freeze({ url, title, readyState });
+};
+const buildNextSteps = (pageWorld, pageWorldError, selfHealed) => {
+    const steps = [
+        'Round-trip MCP→IPC→NMH→SW→CS→page-world completed. extensionVersion and attachedTabId reflect the SW response; pageWorld carries url/title/readyState read from the active tab. If pageWorld is null and pageWorldError is set, the SW round-trip succeeded but the page-bridge half failed — see the next hint.',
+    ];
+    if (selfHealed && pageWorld !== null) {
+        steps.push('pageWorldSelfHealed:true — the content script was missing on the active tab (loaded before the extension reload) and the SW auto-injected it via chrome.scripting.executeScript. No user action needed; just informational.');
+    }
+    if (pageWorldError !== null) {
+        for (const hint of NEXT_STEPS_BY_CODE[pageWorldError])
+            steps.push(hint);
+    }
+    else if (pageWorld === null) {
+        steps.push('pageWorld is null but no typed pageWorldError was returned. This is unexpected — inspect the SW console for [pwa-debug] errors. The SW response payload may be malformed.');
+    }
+    return steps;
+};
+const sessionPingHandler = async (args, ctx) => {
+    const target = resolveTarget$1(ctx, args.extension_id);
+    if (!target.ok) {
+        return errorResponse$1(target.error, [
+            'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions so Chrome respawns the NMH.',
+        ]);
+    }
+    const requestId = randomUUID();
+    const env = Object.freeze({
+        type: 'request',
+        requestId,
+        tool: 'session_ping',
+        extensionId: target.extensionId,
+        payload: {},
+    });
+    const startedAt = Date.now();
+    let response;
+    try {
+        response = await ctx.ipcServer.request(target.extensionId, env, {
+            timeoutMs: SESSION_PING_TIMEOUT_MS,
+        });
+    }
+    catch (err) {
+        return errorResponse$1(`session_ping failed: ${err.message}`, [
+            'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console for errors and confirm the SW is connected to the host. If the SW responder is missing the session_ping handler, the request will time out.',
+        ]);
+    }
+    const latencyMs = Date.now() - startedAt;
+    if (response.error) {
+        return errorResponse$1(`session_ping nmh error: ${response.error.message}`, [
+            'NMH-mode rejected the request. Inspect the extension service worker console and the host stderr for the underlying error.',
+        ]);
+    }
+    const pageWorld = readPageWorld(response.payload);
+    const pageWorldError = readPageWorldErrorCode(response.payload);
+    const pageWorldErrorMessage = readPayloadString(response.payload, 'pageWorldErrorMessage');
+    const pageWorldSelfHealed = readPayloadBoolean(response.payload, 'pageWorldSelfHealed');
+    const data = {
+        hostVersion: ctx.hostVersion,
+        extensionVersion: readPayloadString(response.payload, 'extensionVersion'),
+        attachedTabId: readPayloadNumber(response.payload, 'attachedTabId'),
+        extensionId: target.extensionId,
+        latencyMs,
+        pageWorld,
+        ...(pageWorldError !== null ? { pageWorldError } : {}),
+        ...(pageWorldErrorMessage !== null ? { pageWorldErrorMessage } : {}),
+        ...(pageWorldSelfHealed ? { pageWorldSelfHealed: true } : {}),
+    };
+    const nextSteps = isCdpConnectionId(target.extensionId)
+        ? [
+            pageWorld !== null
+                ? 'Round-trip MCP -> host -> CDP -> page-world bridge completed (CDP connection, no extension involved). pageWorld carries url/title/readyState of this connection\'s tab.'
+                : 'The CDP connection answered but the page-world bridge did not. See pageWorldErrorMessage; retry after the page loads, or pdl_cdp_detach then pdl_cdp_attach with reload:true.',
+        ]
+        : buildNextSteps(pageWorld, pageWorldError, pageWorldSelfHealed);
+    return okResponse(data, nextSteps);
+};
+const sessionPingTool = Object.freeze({
+    name: 'session_ping',
+    description: "Sends a ping through the full MCP → IPC → NMH → SW → CS → page-world chain and returns round-trip metadata: { hostVersion, extensionVersion, attachedTabId, extensionId, latencyMs, pageWorld, pageWorldError?, pageWorldErrorMessage?, pageWorldSelfHealed? }. pageWorld is { url, title, readyState } read live from the active tab's MAIN-world page-world script. pageWorld is null with pageWorldError set (a typed code: cs_not_attached_refresh_tab | page_blocks_scripts | page_world_blocked | restricted_url | no_active_tab | cs_inject_failed) when the SW round-trip succeeded but the page-bridge half failed. The SW also auto-recovers tabs that loaded before the extension reload by programmatically re-injecting the content script and page-world bundle — when this works, pageWorld is populated and pageWorldSelfHealed:true. The tool's next_steps[] field carries imperative, code-specific guidance the AI should relay verbatim to the user. With no args, targets the single connected NMH (errors if zero or multiple). Pass extension_id to target a specific extension. CALL host_status FIRST to see which extensions are currently connected.",
+    inputSchema: inputSchema$T,
+    handler: sessionPingHandler,
+});
+
+const RECENT_EVENTS_TIMEOUT_MS = 5000;
+const inputSchema$S = {
+    extension_id: stringType().min(1).optional(),
+    kinds: arrayType(stringType()).optional(),
+    since_ms: numberType().optional(),
+    limit: numberType().int().nonnegative().optional(),
+};
+const readPayload$4 = (raw) => {
+    if (raw === null || typeof raw !== 'object')
+        return undefined;
+    return raw;
+};
+const recentEventsHandler = async (args, ctx) => {
+    const target = resolveTarget$1(ctx, args.extension_id);
+    if (!target.ok) {
+        return errorResponse$1(target.error, [
+            'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions so Chrome respawns the NMH.',
+        ]);
+    }
+    const requestId = randomUUID();
+    const env = Object.freeze({
+        type: 'request',
+        requestId,
+        tool: 'recent_events',
+        extensionId: target.extensionId,
+        payload: {
+            ...(args.kinds !== undefined ? { kinds: args.kinds } : {}),
+            ...(args.since_ms !== undefined ? { sinceMs: args.since_ms } : {}),
+            ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        },
+    });
+    let response;
+    try {
+        response = await ctx.ipcServer.request(target.extensionId, env, {
+            timeoutMs: RECENT_EVENTS_TIMEOUT_MS,
+        });
+    }
+    catch (err) {
+        return errorResponse$1(`recent_events failed: ${err.message}`, [
+            'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console and confirm the SW is connected to the host. If the SW responder is missing the recent_events handler, the request will time out.',
+        ]);
+    }
+    if (response.error) {
+        return errorResponse$1(`recent_events nmh error: ${response.error.message}`, [
+            'NMH-mode rejected the request. Inspect the extension service worker console and the host stderr for the underlying error.',
+        ]);
+    }
+    const payload = readPayload$4(response.payload);
+    const events = Array.isArray(payload?.events)
+        ? payload.events
+        : [];
+    const stats = payload?.stats ?? {
+        totalReceived: 0,
+        perKind: {},
+        bufferSize: 0,
+    };
+    const data = {
+        extensionId: target.extensionId,
+        events,
+        stats,
+    };
+    const nextSteps = [
+        "Recent events from the SW ring buffer (in-memory, lost on SW restart). The buffer is populated by page-world capture producers (console now; fetch/XHR/WebSocket land in M9 Task 8). M11 will replace this in-memory buffer with host-side persistence so events survive SW restarts and tab reloads.",
+    ];
+    if (events.length === 0) {
+        nextSteps.push("events:[] — possible causes: (1) the page hasn't generated any captured activity since the SW started — try console.log on a page; (2) the SW restarted recently and the in-memory buffer was reset; (3) the page tab predates the most recent extension reload and content_scripts haven't injected — hard-refresh the tab and call session_ping to confirm the page-bridge half is healthy before retrying.");
+    }
+    return okResponse(data, nextSteps);
+};
+const recentEventsTool = Object.freeze({
+    name: 'recent_events',
+    description: "Returns recent CapturedEvents from the extension's SW-side ring buffer (in-memory, lost on SW restart; M11 will add cross-restart persistence). Each event has shape: { kind, ts, frameUrl, frameKey, ...kind-specific-fields } where kind is 'console' (currently) or 'fetch'/'xhr'/'websocket' (M9 Task 8). Filters: kinds=['console','fetch'] restricts to listed kinds; since_ms is a strict greater-than ts cutoff; limit caps the result to the most-recent N (default 50, hard max = SW bufferSize). Returns { extensionId, events, stats: { totalReceived, perKind, bufferSize } }. With no extension_id, targets the single connected NMH (errors if zero or multiple). CALL host_status FIRST to see which extensions are connected, and session_ping to confirm the page-bridge half is healthy on the active tab.",
+    inputSchema: inputSchema$S,
+    handler: recentEventsHandler,
+});
 
 /**
  * Host-side rolling jsonl archive for the captures ring buffer (M8 — disk
@@ -7792,36 +8311,36 @@ const toFilterSpec = (raw) => {
 const tailErrorToResponse = (err) => {
     switch (err.kind) {
         case 'cursor_invalid':
-            return errorResponse(`filter.${err.fieldPath} is not a valid cursor: ${err.error}`, [
+            return errorResponse$1(`filter.${err.fieldPath} is not a valid cursor: ${err.error}`, [
                 `Cursors are opaque tokens returned in prior tail responses. Drop filter.${err.fieldPath} and call again to get a fresh cursor; then page forward by passing it as filter.since.`,
                 FILTER_SPEC_HINT,
             ]);
         case 'cursor_session_mismatch':
-            return errorResponse(`filter.${err.fieldPath} cursor was minted in session ${err.cursorSessionId}, but the current host buffer session is ${err.currentSessionId}. The host registry was reset (extension reload, host restart, or capture clear).`, [
+            return errorResponse$1(`filter.${err.fieldPath} cursor was minted in session ${err.cursorSessionId}, but the current host buffer session is ${err.currentSessionId}. The host registry was reset (extension reload, host restart, or capture clear).`, [
                 `Drop the stale cursor and call again without filter.${err.fieldPath} to get a fresh tail. Use the returned cursor for forward pagination.`,
                 FILTER_SPEC_HINT,
             ]);
         case 'pattern_invalid':
-            return errorResponse(`filter.${err.fieldPath} is not a valid JS regex source: ${err.error}`, [
+            return errorResponse$1(`filter.${err.fieldPath} is not a valid JS regex source: ${err.error}`, [
                 'Each pattern.include / pattern.exclude entry is compiled via new RegExp(source). Escape regex metacharacters in literal strings (e.g. literal "(" as "\\\\(", literal "." as "\\\\.").',
                 FILTER_SPEC_HINT,
             ]);
         case 'limit_invalid':
-            return errorResponse(`filter.limit invalid: ${err.error}`, [
+            return errorResponse$1(`filter.limit invalid: ${err.error}`, [
                 'limit must be a finite integer in [1, 1000]. Default is 200 when omitted.',
                 FILTER_SPEC_HINT,
             ]);
     }
 };
 
-const inputSchema$Q = {
+const inputSchema$R = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const consoleTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions.',
             FILTER_SPEC_HINT,
         ]);
@@ -7870,13 +8389,13 @@ const consoleTailHandler = async (args, ctx) => {
 const consoleTailTool = Object.freeze({
     name: 'console_tail',
     description: "Tail the host-side console ring buffer for a target extension with cursor pagination + FilterSpec. Returns { entries: ConsoleEntry[]; cursor: Cursor|null; hasMore: bool }. Each ConsoleEntry has page-world fields (ts, frameUrl, frameKey, level, args, optional stack) intersected with host fields (receivedAt, sessionId, extensionId, sequenceNumber) plus a per-entry cursor. Top-level cursor = newest entry's cursor for forward pagination via filter.since. With no extension_id, targets the single connected NMH (errors if zero or multiple). FilterSpec (all optional): level=ConsoleLevel[] (log|info|warn|error|debug|trace); pattern={include?: regex sources[], exclude?: regex sources[]}; since/until=opaque cursor strings; limit=int 1..1000 (default 200). Errors carry kind in next_steps so AI can self-correct: cursor_invalid, cursor_session_mismatch, pattern_invalid, limit_invalid.",
-    inputSchema: inputSchema$Q,
+    inputSchema: inputSchema$R,
     handler: consoleTailHandler,
 });
 
 const EVALUATE_IPC_TIMEOUT_MS = 5000;
 const EVALUATE_MAX_EXPRESSION_TIMEOUT_MS = 3500;
-const inputSchema$P = {
+const inputSchema$Q = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     expression: stringType().min(1),
@@ -7916,7 +8435,7 @@ const isPromiseTag = (v) => v !== null &&
 const evaluateHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions so Chrome respawns the NMH.',
         ]);
     }
@@ -7942,12 +8461,12 @@ const evaluateHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`evaluate failed: ${err.message}`, [
+        return errorResponse$1(`evaluate failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console and confirm the SW is connected to the host. If the SW responder is missing the evaluate handler, the request will time out.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`evaluate nmh error: ${response.error.message}`, [
+        return errorResponse$1(`evaluate nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab (open an http(s) tab), explicit tab_id not found, page-bridge timeout (page-world script not attached on chrome:// pages or the chrome web store), or page-world handler threw before producing an EvaluateOutput. Inspect the SW console for [pwa-debug] errors.',
         ]);
     }
@@ -7974,18 +8493,18 @@ const evaluateHandler = async (args, ctx) => {
 const evaluateTool = Object.freeze({
     name: 'evaluate',
     description: "Evaluate a JavaScript expression in the page (MAIN world) via the page-bridge — NO CDP, so this coexists with the user's open DevTools (chrome-devtools-mcp's evaluate_script cannot). Sees framework globals (window.React, __REACT_DEVTOOLS_GLOBAL_HOOK__, store hooks, etc.) that the SW and content script cannot reach. Args: { extension_id?, tab_id?, expression: non-empty string, timeout_ms?: <=3500ms (default 3000), await_promise? }. Returns { extensionId, tabId, value?, truncated?, durationMs, error? } where value is serialized with a 16KB cap (DOM nodes/functions/promises/errors become { __type: ... } tags; cycles become { __type: 'Cycle' }). When await_promise=true and the expression returns a thenable, races resolution against timeout_ms. error{message,stack?} is populated for syntax errors, sync throws, async rejects, and timeouts — the call still returns ok:true so AI can introspect failure detail. Expression mode only (single expression, no statements; same as DevTools console expression eval). With no extension_id/tab_id, targets the single connected NMH and the active tab. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$P,
+    inputSchema: inputSchema$Q,
     handler: evaluateHandler,
 });
 
-const inputSchema$O = {
+const inputSchema$P = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const networkTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions.',
             FILTER_SPEC_HINT,
         ]);
@@ -8034,11 +8553,11 @@ const networkTailHandler = async (args, ctx) => {
 const networkTailTool = Object.freeze({
     name: 'network_tail',
     description: "Tail the host-side network ring buffer (fetch + xhr + websocket events) for a target extension with cursor pagination + FilterSpec. Returns { entries: NetworkEntry[]; cursor: Cursor|null; hasMore: bool }. Each NetworkEntry is discriminated by kind: 'fetch' | 'xhr' (request/response/error phases correlated by captureId, with method, url, headers, status, body, durationMs; xhr adds responseType) | 'websocket' (subkind=open|frame|close|error, connectionId, url, direction=send|receive, frameType=text|binary, data, code, reason). All carry host fields (receivedAt, sessionId, extensionId, sequenceNumber) plus per-entry cursor. With no extension_id, targets the single connected NMH (errors if zero or multiple). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]} matches against JSON.stringify of each entry; since/until=opaque cursor strings; limit=int 1..1000 (default 200); level applies only to console events and returns empty entries when set on the network buffer; selectors reserved for DOM tail tools. Errors carry kind in next_steps for AI self-correction.",
-    inputSchema: inputSchema$O,
+    inputSchema: inputSchema$P,
     handler: networkTailHandler,
 });
 
-const inputSchema$N = {
+const inputSchema$O = {
     extension_id: stringType().min(1).optional(),
     include_nested: booleanType().optional(),
     filter: filterSchema,
@@ -8061,7 +8580,7 @@ const withNestedExcluded = (spec) => {
 const popupTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension.',
             FILTER_SPEC_HINT,
         ]);
@@ -8114,7 +8633,7 @@ const popupTailHandler = async (args, ctx) => {
 const popupTailTool = Object.freeze({
     name: 'popup_tail',
     description: "Tail the host-side library_popup ring buffer (injected library widgets/popups: WalletConnect, RainbowKit, ConnectKit, Privy, and generic shadow/portal overlays) for a target extension with cursor pagination + FilterSpec. Returns { entries: PopupEntry[]; cursor: Cursor|null; hasMore: bool }. Each PopupEntry carries page-world fields (ts, frameUrl, frameKey, popupId, phase=appeared|updated|disappeared, detection=shadow|portal, library tag ('unknown' when no signature matched), host{tagName, id?, classes?, selector}, role=primary|nested, parentPopupId, and on appeared/updated a state snapshot {visible, title?, text?, buttons?[{label,role}], content?, truncated?} of the widget content) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber) and a per-entry cursor. By DEFAULT only PRIMARY popups are returned — one entry per logical widget — so a component-heavy modal (e.g. a Reown/WalletConnect modal built from ~50 nested shadow-DOM web components) surfaces as a SINGLE popup instead of dozens. Pass include_nested=true to also return the nested component events; each nested entry's parentPopupId points at its enclosing popup so you can reconstruct the widget tree. popupId is stable across a popup's appeared→updated→disappeared lifecycle. With no extension_id, targets the single connected NMH (errors if zero or multiple). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]} matches JSON.stringify of each entry (use it to filter by library, e.g. include:['walletconnect']); since/until=opaque cursor strings; limit=int 1..1000 (default 200); level is ignored (popup events have no console-level field). Errors carry kind in next_steps for AI self-correction.",
-    inputSchema: inputSchema$N,
+    inputSchema: inputSchema$O,
     handler: popupTailHandler,
 });
 
@@ -8125,7 +8644,7 @@ const popupTailTool = Object.freeze({
 // that fired in that window (same frameKey). No I/O, no buffer access — the
 // caller (popup_failures tool) supplies the tails so this stays unit-testable.
 const CONSOLE_TEXT_CAP = 1000;
-const str$1 = (v) => typeof v === 'string' ? v : undefined;
+const str$2 = (v) => typeof v === 'string' ? v : undefined;
 const num = (v) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 const readState = (e) => {
     const s = e.state;
@@ -8167,12 +8686,12 @@ const consoleText = (e) => {
     return text.slice(0, CONSOLE_TEXT_CAP);
 };
 const isNetworkFailure = (e) => {
-    const kind = str$1(e.kind);
+    const kind = str$2(e.kind);
     if (kind === 'websocket') {
-        return str$1(e.subkind) === 'error';
+        return str$2(e.subkind) === 'error';
     }
     if (kind === 'fetch' || kind === 'xhr') {
-        if (str$1(e.phase) === 'error')
+        if (str$2(e.phase) === 'error')
             return true;
         const status = num(e.status);
         if (status !== undefined && (status === 0 || status >= 400))
@@ -8181,12 +8700,12 @@ const isNetworkFailure = (e) => {
     return false;
 };
 const toNetworkError = (e) => {
-    const url = str$1(e.url);
-    const method = str$1(e.method);
+    const url = str$2(e.url);
+    const method = str$2(e.method);
     const status = num(e.status);
-    const phase = str$1(e.phase) ?? str$1(e.subkind);
+    const phase = str$2(e.phase) ?? str$2(e.subkind);
     return {
-        kind: str$1(e.kind) ?? 'unknown',
+        kind: str$2(e.kind) ?? 'unknown',
         ...(url !== undefined ? { url } : {}),
         ...(method !== undefined ? { method } : {}),
         ...(status !== undefined ? { status } : {}),
@@ -8201,7 +8720,7 @@ const correlatePopupFailures = (input) => {
     const order = [];
     const groups = new Map();
     for (const e of input.popups) {
-        const id = str$1(e.popupId);
+        const id = str$2(e.popupId);
         if (id === undefined)
             continue;
         if (input.popupId !== undefined && id !== input.popupId)
@@ -8222,7 +8741,7 @@ const correlatePopupFailures = (input) => {
         // Role/parent come from any event in the group (the producer stamps them on
         // every phase). Default to 'primary' when absent (pre-two-tier events).
         const roleRaw = events
-            .map((e) => str$1(e.role))
+            .map((e) => str$2(e.role))
             .find((r) => r !== undefined);
         const role = roleRaw === 'nested' ? 'nested' : 'primary';
         // Primary-only by default — nested components of one widget share the
@@ -8231,16 +8750,16 @@ const correlatePopupFailures = (input) => {
             continue;
         const parentRaw = first.parentPopupId;
         const parentPopupId = typeof parentRaw === 'string' ? parentRaw : null;
-        const frameKey = str$1(first.frameKey) ?? '';
-        const library = str$1(first.library) ?? 'unknown';
-        const detection = str$1(first.detection) === 'portal'
+        const frameKey = str$2(first.frameKey) ?? '';
+        const library = str$2(first.library) ?? 'unknown';
+        const detection = str$2(first.detection) === 'portal'
             ? 'portal'
             : 'shadow';
-        const appeared = events.find((e) => str$1(e.phase) === 'appeared') ??
+        const appeared = events.find((e) => str$2(e.phase) === 'appeared') ??
             first;
         const disappeared = [...events]
             .reverse()
-            .find((e) => str$1(e.phase) === 'disappeared');
+            .find((e) => str$2(e.phase) === 'disappeared');
         const from = appeared.ts;
         const to = disappeared !== undefined ? disappeared.ts : input.now;
         const open = disappeared === undefined;
@@ -8248,10 +8767,10 @@ const correlatePopupFailures = (input) => {
         const latestWithState = [...events].reverse().find((e) => readState(e) !== undefined);
         const state = latestWithState !== undefined ? readState(latestWithState) : undefined;
         const alerts = readAlerts(state);
-        const reasonFromState = str$1(state?.failure?.reason);
+        const reasonFromState = str$2(state?.failure?.reason);
         const consoleErrors = input.consoleEvents
-            .filter((e) => str$1(e.frameKey) === frameKey &&
-            str$1(e.level) === 'error' &&
+            .filter((e) => str$2(e.frameKey) === frameKey &&
+            str$2(e.level) === 'error' &&
             inWindow(e.ts, from, to))
             .map((e) => ({
             level: 'error',
@@ -8260,17 +8779,17 @@ const correlatePopupFailures = (input) => {
             sequenceNumber: e.sequenceNumber,
         }));
         const networkErrors = input.networkEvents
-            .filter((e) => str$1(e.frameKey) === frameKey &&
+            .filter((e) => str$2(e.frameKey) === frameKey &&
             isNetworkFailure(e) &&
             inWindow(e.ts, from, to))
             .map(toNetworkError);
         const pageErrors = (input.errorEvents ?? [])
-            .filter((e) => str$1(e.frameKey) === frameKey && inWindow(e.ts, from, to))
+            .filter((e) => str$2(e.frameKey) === frameKey && inWindow(e.ts, from, to))
             .map((e) => {
-            const name = str$1(e.name);
+            const name = str$2(e.name);
             return {
-                subkind: str$1(e.subkind) ?? 'error',
-                message: str$1(e.message) ?? '',
+                subkind: str$2(e.subkind) ?? 'error',
+                message: str$2(e.message) ?? '',
                 ...(name !== undefined ? { name } : {}),
                 ts: e.ts,
                 sequenceNumber: e.sequenceNumber,
@@ -8309,7 +8828,7 @@ const correlatePopupFailures = (input) => {
     return reports;
 };
 
-const inputSchema$M = {
+const inputSchema$N = {
     extension_id: stringType().min(1).optional(),
     include_all: booleanType().optional(),
     include_nested: booleanType().optional(),
@@ -8318,7 +8837,7 @@ const inputSchema$M = {
 const popupFailuresHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension.',
         ]);
     }
@@ -8353,18 +8872,18 @@ const popupFailuresHandler = async (args, ctx) => {
 const popupFailuresTool = Object.freeze({
     name: 'popup_failures',
     description: "Surface auth/connect FAILURES from library popups for a target extension. Correlates each tracked popup's in-widget failure (PopupState.failure/alerts captured by popup_tail's producer) with the console errors and failed network requests (fetch/xhr phase 'error' | status>=400 | status===0, websocket 'error') that fired during that popup's open window, matched by frameKey. Returns { reports: PopupFailureReport[] }, each: { popupId, library, detection, frameKey, role=primary|nested, parentPopupId, reason?, alerts?, window{from,to,open}, console[{level,text,ts,sequenceNumber}], network[{kind,url?,method?,status?,phase?,ts,sequenceNumber}] }. reason precedence = in-widget failure text > first uncaught page error (window error/unhandledrejection) > first console error (structured-logger args unwrapped to msg/message) > network error. Each report also carries errors[] (uncaught page errors in the window). By DEFAULT only PRIMARY popups WITH a failure signal are returned — one report per logical widget, so a component-heavy modal (e.g. a Reown/WalletConnect modal of ~hundreds of nested web components) yields ONE failure report, not hundreds. The primary's window already aggregates the whole widget's console/network errors by frameKey. Pass include_nested=true to also report nested component popups (each carries parentPopupId), include_all=true to include primary windows without a failure signal, or popup_id to filter to one. With no extension_id, targets the single connected NMH (errors if zero or multiple). Read-only.",
-    inputSchema: inputSchema$M,
+    inputSchema: inputSchema$N,
     handler: popupFailuresHandler,
 });
 
-const inputSchema$L = {
+const inputSchema$M = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const errorTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension.',
             FILTER_SPEC_HINT,
         ]);
@@ -8411,7 +8930,7 @@ const errorTailHandler = async (args, ctx) => {
 const errorTailTool = Object.freeze({
     name: 'error_tail',
     description: "Tail the host-side page_error ring buffer for a target extension with cursor pagination + FilterSpec. page_error events are UNCAUGHT failures captured app-/framework-agnostically: a window 'error' (ErrorEvent / window.onerror, subkind='error') or an 'unhandledrejection' (a rejected promise the app did not catch, subkind='unhandledrejection'). Returns { entries: PageErrorEntry[]; cursor: Cursor|null; hasMore: bool }. Each entry: { kind:'page_error', subkind, message, name?, stack?, source?(url:line:col), ts, frameUrl, frameKey, ...host fields, cursor }. Use this to see thrown errors and rejected promises (including wallet/connect rejections that bubble) without the app having to log them. NOTE: errors an app fully handles in try/catch do NOT surface here. With no extension_id, targets the single connected NMH (errors if zero or multiple). FilterSpec (all optional): pattern.include/exclude=regex sources matched against each entry's JSON (e.g. include:['rejected','cancelled']); since/until=opaque cursors; limit=int 1..1000 (default 200); level is ignored (page errors have no level field).",
-    inputSchema: inputSchema$L,
+    inputSchema: inputSchema$M,
     handler: errorTailHandler,
 });
 
@@ -8503,7 +9022,7 @@ const stopRecording = async (extensionId, stoppedAt, env) => {
     };
 };
 
-const inputSchema$K = {
+const inputSchema$L = {
     action: enumType(['start', 'stop', 'status']),
     label: stringType().min(1).optional(),
     extension_id: stringType().min(1).optional(),
@@ -8511,7 +9030,7 @@ const inputSchema$K = {
 const popupRecordHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. A recording is bound to one extension.',
         ]);
     }
@@ -8543,7 +9062,7 @@ const popupRecordHandler = async (args, ctx) => {
 const popupRecordTool = Object.freeze({
     name: 'popup_record',
     description: "Bounded, intent-driven recording of the library_popup event stream for a target extension. action='start' subscribes to the extension's capture intake and buffers EVERY library_popup event (primary + nested, in arrival order) in memory — immune to ring-buffer eviction — until action='stop', which persists the stream to <config>/pwa-debug/popup-recordings/<label>/events.jsonl (+ meta.json) and returns { path, count }. action='status' reports the active recording { active, label, startedAt, count }. Forward-only: only events between start and stop are recorded — start with intent, perform the interactions, stop, then view with popup_replay. One recording per extension (start while active returns the in-progress one). Optional label (defaults to rec-<timestamp>); optional extension_id (defaults to the single connected NMH). Use this to capture a specific debugging episode for sequential review instead of always-on noise.",
-    inputSchema: inputSchema$K,
+    inputSchema: inputSchema$L,
     handler: popupRecordHandler,
 });
 
@@ -8554,7 +9073,7 @@ const popupRecordTool = Object.freeze({
 //   - 'tree'    : a hierarchy of popup nodes (primary roots, nested children
 //                 attached by parentPopupId), each node summarizing its phases
 // Pure transforms over the parsed lines; fs reads via host_io.
-const str = (v) => typeof v === 'string' ? v : undefined;
+const str$1 = (v) => typeof v === 'string' ? v : undefined;
 const readEvents = async (label, env) => {
     const path = xdgConfigPath(`${RECORDINGS_SUBDIR}/${label}/events.jsonl`, env);
     const out = [];
@@ -8577,18 +9096,18 @@ const buildTree = (events) => {
     const order = [];
     const nodes = new Map();
     for (const e of events) {
-        const id = str(e.popupId);
+        const id = str$1(e.popupId);
         if (id === undefined)
             continue;
         let node = nodes.get(id);
         if (node === undefined) {
             const parentRaw = e.parentPopupId;
-            const lib = str(e.library);
-            const det = str(e.detection);
+            const lib = str$1(e.library);
+            const det = str$1(e.detection);
             const hostVal = e.host;
             node = {
                 popupId: id,
-                role: str(e.role) ?? 'primary',
+                role: str$1(e.role) ?? 'primary',
                 ...(lib !== undefined ? { library: lib } : {}),
                 ...(det !== undefined ? { detection: det } : {}),
                 ...(hostVal !== undefined ? { host: hostVal } : {}),
@@ -8599,7 +9118,7 @@ const buildTree = (events) => {
             nodes.set(id, node);
             order.push(id);
         }
-        const phase = str(e.phase);
+        const phase = str$1(e.phase);
         if (phase !== undefined)
             node.phases.push(phase);
     }
@@ -8619,7 +9138,7 @@ const readRecording = async (label, mode, opts, env) => {
     if (mode === 'tree') {
         return { mode: 'tree', total: events.length, roots: buildTree(events) };
     }
-    const filtered = mode === 'primary' ? events.filter((e) => str(e.role) !== 'nested') : events;
+    const filtered = mode === 'primary' ? events.filter((e) => str$1(e.role) !== 'nested') : events;
     const offset = Math.max(0, opts.offset ?? 0);
     const limit = Math.min(Math.max(1, opts.limit ?? 500), 2000);
     const entries = filtered.slice(offset, offset + limit);
@@ -8660,7 +9179,7 @@ const listRecordings = async (env) => {
     return out;
 };
 
-const inputSchema$J = {
+const inputSchema$K = {
     label: stringType().min(1).optional(),
     mode: enumType(['flat', 'primary', 'tree']).optional(),
     offset: numberType().int().min(0).optional(),
@@ -8692,12 +9211,12 @@ const popupReplayHandler = async (args, _ctx) => {
 const popupReplayTool = Object.freeze({
     name: 'popup_replay',
     description: "Read back a popup recording captured by popup_record. With no label, lists available recordings on disk ({label, count, startedAt, stoppedAt}). With a label, projects the recorded library_popup events three ways via `mode`: 'primary' (default — only role!=='nested' events, one stream per logical widget; paginated by offset/limit), 'flat' (the raw full-fidelity sequence including nested components; paginated), or 'tree' (a hierarchy of popup nodes — primary roots with nested children attached by parentPopupId, each node summarizing popupId/role/library/detection/host/phases). Reads from <config>/pwa-debug/popup-recordings/<label>/events.jsonl. Use it to review a recorded debugging episode sequentially or hierarchically. Read-only.",
-    inputSchema: inputSchema$J,
+    inputSchema: inputSchema$K,
     handler: popupReplayHandler,
 });
 
 const REACT_TREE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$I = {
+const inputSchema$J = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     root_index: numberType().int().nonnegative().optional(),
@@ -8734,7 +9253,7 @@ const readPayload$3 = (raw) => {
 const reactTreeHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions so Chrome respawns the NMH.',
         ]);
     }
@@ -8762,18 +9281,18 @@ const reactTreeHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`react_tree failed: ${err.message}`, [
+        return errorResponse$1(`react_tree failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console; confirm the SW is connected to the host. If the SW responder is missing the react_tree handler, the request will time out.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`react_tree nmh error: ${response.error.message}`, [
+        return errorResponse$1(`react_tree nmh error: ${response.error.message}`, [
             "NMH-mode rejected the request. Common causes: no active tab (open an http(s) tab to a React page), explicit tab_id not found, page-bridge timeout (page-world script not attached on chrome:// or chrome web store pages), or the page-world react module threw. Inspect the SW console for [pwa-debug] errors.",
         ]);
     }
     const payload = readPayload$3(response.payload);
     if (payload === null) {
-        return errorResponse('react_tree returned a malformed payload (missing roots/truncated/rootCount).', [
+        return errorResponse$1('react_tree returned a malformed payload (missing roots/truncated/rootCount).', [
             'The page-world handler returned a shape that does not match ReactTreeResult. Check packages/extension/src/react/serialize_tree.ts and confirm wire JSON encoding preserved the structure.',
         ]);
     }
@@ -8801,12 +9320,12 @@ const reactTreeHandler = async (args, ctx) => {
 const reactTreeTool = Object.freeze({
     name: 'react_tree',
     description: "Return the React component tree of the active (or specified) tab as a structured ReactTreeNode[]. Each node has { stableId, displayName, key?, hasState, hasHooks, children } where stableId is a re-render-stable component identity (path + displayName + key/index). Args: { extension_id?, tab_id?, root_index?: pick one root (default: all), depth_limit?: max depth (default 8, cap 64), max_nodes?: total cap (default 200, cap 5000) }. Returns { extensionId, tabId, roots, truncated, rootCount }. truncated:true means the walk hit depth_limit or max_nodes; re-call with a tighter root_index or higher caps. Pass any node's stableId to react_get_state for that component's props/state/hooks. Runs in page-world (MAIN world) via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$I,
+    inputSchema: inputSchema$J,
     handler: reactTreeHandler,
 });
 
 const REACT_GET_STATE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$H = {
+const inputSchema$I = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     stable_id: stringType().min(1),
@@ -8832,7 +9351,7 @@ const isComponentSuccess$1 = (v) => {
 const reactGetStateHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -8860,22 +9379,22 @@ const reactGetStateHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`react_get_state failed: ${err.message}`, [
+        return errorResponse$1(`react_get_state failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected to the host and the react_get_state handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`react_get_state nmh error: ${response.error.message}`, [
+        return errorResponse$1(`react_get_state nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$g(response.payload)) {
-        return errorResponse(`react_get_state: ${response.payload.error.message}`, [
+        return errorResponse$1(`react_get_state: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler (NOT a transport error). Most common: stable_id not resolvable — re-call react.tree to refresh ids; the React tree may have re-rendered into a different shape.',
         ]);
     }
     if (!isComponentSuccess$1(response.payload)) {
-        return errorResponse('react_get_state returned a malformed payload (missing stableId/displayName).', [
+        return errorResponse$1('react_get_state returned a malformed payload (missing stableId/displayName).', [
             'The page-world handler did not match the ReactComponentInfo shape. Check packages/extension/src/react/serialize_component.ts.',
         ]);
     }
@@ -8898,12 +9417,12 @@ const reactGetStateHandler = async (args, ctx) => {
 const reactGetStateTool = Object.freeze({
     name: 'react_get_state',
     description: "Return the props, state, and hooks of a single React component identified by stable_id (obtained from a prior react_tree call). Args: { extension_id?, tab_id?, stable_id: required non-empty string, root_index?: number=0 (must match the root used to compute the id), include_props?: bool=true, include_hooks?: bool=true }. Returns { extensionId, tabId, stableId, displayName, key?, props?, state?, hooks?: SerializedHook[], truncated? }. SerializedHook entries: { type: 'state'|'memo'|'effect'|'ref'|'custom'; index; value?; deps?; truncated? }. Tool-level error when stable_id no longer resolves — in that case re-call react_tree to refresh ids. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$H,
+    inputSchema: inputSchema$I,
     handler: reactGetStateHandler,
 });
 
 const REACT_FIND_BY_TEXT_IPC_TIMEOUT_MS = 5000;
-const inputSchema$G = {
+const inputSchema$H = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     pattern: stringType().min(1),
@@ -8931,7 +9450,7 @@ const isFindByTextSuccess$1 = (v) => {
 const reactFindByTextHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -8959,22 +9478,22 @@ const reactFindByTextHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`react_find_by_text failed: ${err.message}`, [
+        return errorResponse$1(`react_find_by_text failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected to the host and the react_find_by_text handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`react_find_by_text nmh error: ${response.error.message}`, [
+        return errorResponse$1(`react_find_by_text nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout (page-world not attached on chrome:// pages), or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$f(response.payload)) {
-        return errorResponse(`react_find_by_text: ${response.payload.error.message}`, [
+        return errorResponse$1(`react_find_by_text: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler (NOT a transport error). Most common: an invalid regex pattern — the pattern is compiled with new RegExp (no flags); fix the source and retry.',
         ]);
     }
     if (!isFindByTextSuccess$1(response.payload)) {
-        return errorResponse('react_find_by_text returned a malformed payload (missing matches/truncated/rootCount).', [
+        return errorResponse$1('react_find_by_text returned a malformed payload (missing matches/truncated/rootCount).', [
             'The page-world handler did not match the FindByTextResult shape. Check packages/extension/src/react/find_by_text.ts.',
         ]);
     }
@@ -9005,12 +9524,12 @@ const reactFindByTextHandler = async (args, ctx) => {
 const reactFindByTextTool = Object.freeze({
     name: 'react_find_by_text',
     description: "Find React components whose rendered host-node text matches a regex. Args: { extension_id?, tab_id?, pattern: required regex source string (compiled with new RegExp — no flags, case-sensitive), exact?: bool=false (true = regex must match the FULL trimmed text of the component’s host node; false = substring match), root_index?: limit to one React root (default: all), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { stableId, displayName, key?, matchedText }[], truncated, rootCount }. Feed any stableId into react_get_state for that component’s props/state/hooks. Tool-level error on an invalid regex pattern. Runs in page-world via the page-bridge — no CDP, coexists with the user’s DevTools. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$G,
+    inputSchema: inputSchema$H,
     handler: reactFindByTextHandler,
 });
 
 const REACT_FIND_BY_ROLE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$F = {
+const inputSchema$G = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     role: stringType().min(1),
@@ -9038,7 +9557,7 @@ const isFindByRoleSuccess$1 = (v) => {
 const reactFindByRoleHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -9066,22 +9585,22 @@ const reactFindByRoleHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`react_find_by_role failed: ${err.message}`, [
+        return errorResponse$1(`react_find_by_role failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected to the host and the react_find_by_role handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`react_find_by_role nmh error: ${response.error.message}`, [
+        return errorResponse$1(`react_find_by_role nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout (page-world not attached on chrome:// pages), or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$e(response.payload)) {
-        return errorResponse(`react_find_by_role: ${response.payload.error.message}`, [
+        return errorResponse$1(`react_find_by_role: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler (NOT a transport error). Most common: an invalid name regex — the name filter is compiled with new RegExp (no flags); fix the source and retry.',
         ]);
     }
     if (!isFindByRoleSuccess$1(response.payload)) {
-        return errorResponse('react_find_by_role returned a malformed payload (missing matches/truncated/rootCount).', [
+        return errorResponse$1('react_find_by_role returned a malformed payload (missing matches/truncated/rootCount).', [
             'The page-world handler did not match the FindByRoleResult shape. Check packages/extension/src/react/find_by_role.ts.',
         ]);
     }
@@ -9112,12 +9631,12 @@ const reactFindByRoleHandler = async (args, ctx) => {
 const reactFindByRoleTool = Object.freeze({
     name: 'react_find_by_role',
     description: "Find React components whose rendered host node has a given ARIA role, optionally narrowed by an accessible-name regex. Args: { extension_id?, tab_id?, role: required ARIA role string (e.g. 'button','link','heading','navigation','region','textbox','checkbox','img' — matched against an explicit role attribute or a simplified implicit-role mapping; exact, lowercase), name?: regex source string matched against the element’s accessible name (aria-label > first aria-labelledby ref > text content; compiled with new RegExp, no flags), root_index?: limit to one React root (default: all), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { stableId, displayName, key?, role, name? }[], truncated, rootCount }. Feed any stableId into react_get_state. Tool-level error on an invalid name regex. Runs in page-world via the page-bridge — no CDP, coexists with the user’s DevTools. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$F,
+    inputSchema: inputSchema$G,
     handler: reactFindByRoleHandler,
 });
 
 const VUE_TREE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$E = {
+const inputSchema$F = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     root_index: numberType().int().nonnegative().optional(),
@@ -9154,7 +9673,7 @@ const readPayload$2 = (raw) => {
 const vueTreeHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions so Chrome respawns the NMH.',
         ]);
     }
@@ -9182,18 +9701,18 @@ const vueTreeHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`vue_tree failed: ${err.message}`, [
+        return errorResponse$1(`vue_tree failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console; confirm the SW is connected to the host. If the SW responder is missing the vue_tree handler, the request will time out.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`vue_tree nmh error: ${response.error.message}`, [
+        return errorResponse$1(`vue_tree nmh error: ${response.error.message}`, [
             "NMH-mode rejected the request. Common causes: no active tab (open an http(s) tab to a Vue page), explicit tab_id not found, page-bridge timeout (page-world script not attached on chrome:// or chrome web store pages), or the page-world vue module threw. Inspect the SW console for [pwa-debug] errors.",
         ]);
     }
     const payload = readPayload$2(response.payload);
     if (payload === null) {
-        return errorResponse('vue_tree returned a malformed payload (missing roots/truncated/rootCount).', [
+        return errorResponse$1('vue_tree returned a malformed payload (missing roots/truncated/rootCount).', [
             'The page-world handler returned a shape that does not match VueTreeResult. Check packages/extension/src/vue/serialize_tree.ts and confirm wire JSON encoding preserved the structure.',
         ]);
     }
@@ -9221,12 +9740,12 @@ const vueTreeHandler = async (args, ctx) => {
 const vueTreeTool = Object.freeze({
     name: 'vue_tree',
     description: "Return the Vue 3 component tree of the active (or specified) tab as a structured VueTreeNode[]. Each node has { stableId, displayName, key?, hasProps, hasState, children } where stableId is a re-render-stable component identity (path + name + key/index). Args: { extension_id?, tab_id?, root_index?: pick one root (default: all), depth_limit?: max depth (default 8, cap 64), max_nodes?: total cap (default 200, cap 5000) }. Returns { extensionId, tabId, roots, truncated, rootCount }. truncated:true means the walk hit depth_limit or max_nodes; re-call with a tighter root_index or higher caps. Pass any node's stableId to vue_get_state for that component's props/setupState/data. Runs in page-world (MAIN world) via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$E,
+    inputSchema: inputSchema$F,
     handler: vueTreeHandler,
 });
 
 const VUE_GET_STATE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$D = {
+const inputSchema$E = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     stable_id: stringType().min(1),
@@ -9251,7 +9770,7 @@ const isComponentSuccess = (v) => {
 const vueGetStateHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -9277,22 +9796,22 @@ const vueGetStateHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`vue_get_state failed: ${err.message}`, [
+        return errorResponse$1(`vue_get_state failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected to the host and the vue_get_state handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`vue_get_state nmh error: ${response.error.message}`, [
+        return errorResponse$1(`vue_get_state nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$d(response.payload)) {
-        return errorResponse(`vue_get_state: ${response.payload.error.message}`, [
+        return errorResponse$1(`vue_get_state: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler (NOT a transport error). Most common: stable_id not resolvable — re-call vue_tree to refresh ids; the Vue tree may have re-rendered into a different shape.',
         ]);
     }
     if (!isComponentSuccess(response.payload)) {
-        return errorResponse('vue_get_state returned a malformed payload (missing stableId/displayName).', [
+        return errorResponse$1('vue_get_state returned a malformed payload (missing stableId/displayName).', [
             'The page-world handler did not match the VueComponentInfo shape. Check packages/extension/src/vue/serialize_component.ts.',
         ]);
     }
@@ -9315,12 +9834,12 @@ const vueGetStateHandler = async (args, ctx) => {
 const vueGetStateTool = Object.freeze({
     name: 'vue_get_state',
     description: "Return the props, setup() bindings, and options-API data of a single Vue 3 component identified by stable_id (obtained from a prior vue_tree call). Args: { extension_id?, tab_id?, stable_id: required non-empty string, include_props?: bool=true, include_state?: bool=true }. Returns { extensionId, tabId, stableId, displayName, key?, props?, setupState?, data?, truncated? }. setupState holds <script setup>/setup() bindings (refs auto-unwrapped); data holds options-API reactive state. Empty surfaces are omitted. Tool-level error when stable_id no longer resolves — re-call vue_tree to refresh ids. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$D,
+    inputSchema: inputSchema$E,
     handler: vueGetStateHandler,
 });
 
 const VUE_FIND_BY_TEXT_IPC_TIMEOUT_MS = 5000;
-const inputSchema$C = {
+const inputSchema$D = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     pattern: stringType().min(1),
@@ -9348,7 +9867,7 @@ const isFindByTextSuccess = (v) => {
 const vueFindByTextHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -9376,22 +9895,22 @@ const vueFindByTextHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`vue_find_by_text failed: ${err.message}`, [
+        return errorResponse$1(`vue_find_by_text failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected to the host and the vue_find_by_text handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`vue_find_by_text nmh error: ${response.error.message}`, [
+        return errorResponse$1(`vue_find_by_text nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout (page-world not attached on chrome:// pages), or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$c(response.payload)) {
-        return errorResponse(`vue_find_by_text: ${response.payload.error.message}`, [
+        return errorResponse$1(`vue_find_by_text: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler (NOT a transport error). Most common: an invalid regex pattern — the pattern is compiled with new RegExp (no flags); fix the source and retry.',
         ]);
     }
     if (!isFindByTextSuccess(response.payload)) {
-        return errorResponse('vue_find_by_text returned a malformed payload (missing matches/truncated/rootCount).', [
+        return errorResponse$1('vue_find_by_text returned a malformed payload (missing matches/truncated/rootCount).', [
             'The page-world handler did not match the FindVueByTextResult shape. Check packages/extension/src/vue/find_by_text.ts.',
         ]);
     }
@@ -9422,12 +9941,12 @@ const vueFindByTextHandler = async (args, ctx) => {
 const vueFindByTextTool = Object.freeze({
     name: 'vue_find_by_text',
     description: "Find Vue 3 components whose rendered DOM text matches a regex. Args: { extension_id?, tab_id?, pattern: required regex source string (compiled with new RegExp — no flags, case-sensitive), exact?: bool=false (true = regex must match the FULL trimmed text of a rendered element; false = substring match), root_index?: limit to one Vue root (default: all), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { stableId, displayName, key?, matchedText }[], truncated, rootCount }. Matching elements are mapped to their owning component (one entry per component). Feed any stableId into vue_get_state for that component's props/setupState/data. Tool-level error on an invalid regex pattern. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$C,
+    inputSchema: inputSchema$D,
     handler: vueFindByTextHandler,
 });
 
 const VUE_FIND_BY_ROLE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$B = {
+const inputSchema$C = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     role: stringType().min(1),
@@ -9455,7 +9974,7 @@ const isFindByRoleSuccess = (v) => {
 const vueFindByRoleHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -9483,22 +10002,22 @@ const vueFindByRoleHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`vue_find_by_role failed: ${err.message}`, [
+        return errorResponse$1(`vue_find_by_role failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected to the host and the vue_find_by_role handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`vue_find_by_role nmh error: ${response.error.message}`, [
+        return errorResponse$1(`vue_find_by_role nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout (page-world not attached on chrome:// pages), or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$b(response.payload)) {
-        return errorResponse(`vue_find_by_role: ${response.payload.error.message}`, [
+        return errorResponse$1(`vue_find_by_role: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler (NOT a transport error). Most common: an invalid name regex — the name filter is compiled with new RegExp (no flags); fix the source and retry.',
         ]);
     }
     if (!isFindByRoleSuccess(response.payload)) {
-        return errorResponse('vue_find_by_role returned a malformed payload (missing matches/truncated/rootCount).', [
+        return errorResponse$1('vue_find_by_role returned a malformed payload (missing matches/truncated/rootCount).', [
             'The page-world handler did not match the FindVueByRoleResult shape. Check packages/extension/src/vue/find_by_role.ts.',
         ]);
     }
@@ -9529,12 +10048,12 @@ const vueFindByRoleHandler = async (args, ctx) => {
 const vueFindByRoleTool = Object.freeze({
     name: 'vue_find_by_role',
     description: "Find Vue 3 components whose rendered DOM node has a given ARIA role, optionally narrowed by an accessible-name regex. Args: { extension_id?, tab_id?, role: required ARIA role string (e.g. 'button','link','heading','navigation','region','textbox','checkbox','img' — matched against an explicit role attribute or a simplified implicit-role mapping; exact, lowercase), name?: regex source string matched against the element's accessible name (aria-label > first aria-labelledby ref > text content; compiled with new RegExp, no flags), root_index?: limit to one Vue root (default: all), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { stableId, displayName, key?, role, name? }[], truncated, rootCount }. Matching elements are mapped to their owning component (one entry per component). Feed any stableId into vue_get_state. Tool-level error on an invalid name regex. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see which extensions are connected.",
-    inputSchema: inputSchema$B,
+    inputSchema: inputSchema$C,
     handler: vueFindByRoleHandler,
 });
 
 const SVELTE_COMPONENTS_IPC_TIMEOUT_MS = 5000;
-const inputSchema$A = {
+const inputSchema$B = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -9553,7 +10072,7 @@ const readPayload$1 = (raw) => {
 const svelteComponentsMcpHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension at brave://extensions.',
         ]);
     }
@@ -9575,18 +10094,18 @@ const svelteComponentsMcpHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`svelte_components failed: ${err.message}`, [
+        return errorResponse$1(`svelte_components failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the svelte_components handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`svelte_components nmh error: ${response.error.message}`, [
+        return errorResponse$1(`svelte_components nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab or page-bridge timeout (page-world not attached on chrome:// pages).',
         ]);
     }
     const payload = readPayload$1(response.payload);
     if (payload === null) {
-        return errorResponse('svelte_components returned a malformed payload.', [
+        return errorResponse$1('svelte_components returned a malformed payload.', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/svelte/discover.ts.',
         ]);
     }
@@ -9612,12 +10131,12 @@ const svelteComponentsMcpHandler = async (args, ctx) => {
 const svelteComponentsTool = Object.freeze({
     name: 'svelte_components',
     description: "List the Svelte components rendered on the active (or specified) tab. Args: { extension_id?, tab_id? }. Returns { extensionId, tabId, present, dev, metaElementCount, components: { stableId, file, firstLoc?, elementCount }[] }. Svelte compiles components to closures with no instance tree, so discovery uses the dev-only __svelte_meta source tags: each component == one .svelte file (the file path is its stableId), and elementCount is how many rendered elements belong to it. dev:false means a production build (no __svelte_meta) → components is empty. There is NO svelte_get_state (Svelte exposes no readable instance/state). Use svelte_find_by_text / svelte_find_by_role to locate components by content. Runs in page-world via the page-bridge — no CDP. CALL host_status FIRST.",
-    inputSchema: inputSchema$A,
+    inputSchema: inputSchema$B,
     handler: svelteComponentsMcpHandler,
 });
 
 const SVELTE_FIND_BY_TEXT_IPC_TIMEOUT_MS = 5000;
-const inputSchema$z = {
+const inputSchema$A = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     pattern: stringType().min(1),
@@ -9641,7 +10160,7 @@ const isFindSuccess$1 = (v) => {
 const svelteFindByTextMcpHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -9667,22 +10186,22 @@ const svelteFindByTextMcpHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`svelte_find_by_text failed: ${err.message}`, [
+        return errorResponse$1(`svelte_find_by_text failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the svelte_find_by_text handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`svelte_find_by_text nmh error: ${response.error.message}`, [
+        return errorResponse$1(`svelte_find_by_text nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$a(response.payload)) {
-        return errorResponse(`svelte_find_by_text: ${response.payload.error.message}`, [
+        return errorResponse$1(`svelte_find_by_text: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Most common: an invalid regex pattern (compiled with new RegExp, no flags).',
         ]);
     }
     if (!isFindSuccess$1(response.payload)) {
-        return errorResponse('svelte_find_by_text returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/svelte/find_by_text.ts.']);
+        return errorResponse$1('svelte_find_by_text returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/svelte/find_by_text.ts.']);
     }
     const data = {
         extensionId: target.extensionId,
@@ -9704,12 +10223,12 @@ const svelteFindByTextMcpHandler = async (args, ctx) => {
 const svelteFindByTextTool = Object.freeze({
     name: 'svelte_find_by_text',
     description: "Find Svelte components whose rendered DOM text matches a regex. Args: { extension_id?, tab_id?, pattern: regex source (new RegExp, no flags, case-sensitive), exact?: bool=false (full-text vs substring), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { stableId, file, matchedText }[], truncated }. Matches map to the owning component .svelte file (stableId === file), de-duped per file. DEV-mode only (relies on __svelte_meta); empty on production builds. No state read exists for Svelte. Runs in page-world via the page-bridge. CALL host_status FIRST.",
-    inputSchema: inputSchema$z,
+    inputSchema: inputSchema$A,
     handler: svelteFindByTextMcpHandler,
 });
 
 const SVELTE_FIND_BY_ROLE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$y = {
+const inputSchema$z = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     role: stringType().min(1),
@@ -9733,7 +10252,7 @@ const isFindSuccess = (v) => {
 const svelteFindByRoleMcpHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -9759,22 +10278,22 @@ const svelteFindByRoleMcpHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`svelte_find_by_role failed: ${err.message}`, [
+        return errorResponse$1(`svelte_find_by_role failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the svelte_find_by_role handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`svelte_find_by_role nmh error: ${response.error.message}`, [
+        return errorResponse$1(`svelte_find_by_role nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$9(response.payload)) {
-        return errorResponse(`svelte_find_by_role: ${response.payload.error.message}`, [
+        return errorResponse$1(`svelte_find_by_role: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Most common: an invalid name regex (compiled with new RegExp, no flags).',
         ]);
     }
     if (!isFindSuccess(response.payload)) {
-        return errorResponse('svelte_find_by_role returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/svelte/find_by_role.ts.']);
+        return errorResponse$1('svelte_find_by_role returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/svelte/find_by_role.ts.']);
     }
     const data = {
         extensionId: target.extensionId,
@@ -9796,12 +10315,12 @@ const svelteFindByRoleMcpHandler = async (args, ctx) => {
 const svelteFindByRoleTool = Object.freeze({
     name: 'svelte_find_by_role',
     description: "Find Svelte components whose rendered DOM node has a given ARIA role, optionally narrowed by an accessible-name regex. Args: { extension_id?, tab_id?, role: ARIA role string (exact, lowercase; explicit role attr or simplified implicit mapping), name?: regex source for the accessible name (new RegExp, no flags), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { stableId, file, role, name? }[], truncated }. Matches map to the owning component .svelte file (stableId === file), de-duped per file. DEV-mode only (relies on __svelte_meta). No state read exists for Svelte. Runs in page-world via the page-bridge. CALL host_status FIRST.",
-    inputSchema: inputSchema$y,
+    inputSchema: inputSchema$z,
     handler: svelteFindByRoleMcpHandler,
 });
 
 const SOLID_DETECT_IPC_TIMEOUT_MS = 5000;
-const inputSchema$x = {
+const inputSchema$y = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -9820,7 +10339,7 @@ const readPayload = (raw) => {
 const solidDetectMcpHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -9842,18 +10361,18 @@ const solidDetectMcpHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`solid_detect failed: ${err.message}`, [
+        return errorResponse$1(`solid_detect failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the solid_detect handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`solid_detect nmh error: ${response.error.message}`, [
+        return errorResponse$1(`solid_detect nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab or page-bridge timeout.',
         ]);
     }
     const payload = readPayload(response.payload);
     if (payload === null) {
-        return errorResponse('solid_detect returned a malformed payload.', [
+        return errorResponse$1('solid_detect returned a malformed payload.', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/solid/detect.ts.',
         ]);
     }
@@ -9882,12 +10401,12 @@ const solidDetectMcpHandler = async (args, ctx) => {
 const solidDetectTool = Object.freeze({
     name: 'solid_detect',
     description: "Detect SolidJS on the active (or specified) tab. Args: { extension_id?, tab_id? }. Returns { extensionId, tabId, present, devtoolsHook, hydration, delegatedEventCount }. Solid has no virtual DOM and no persisted component tree, so unlike React/Vue there is NO solid_components or solid_get_state — detection is best-effort (the @solid-devtools hook window.__SOLID_DEVTOOLS__, the _$HY hydration global, and a heuristic count of elements carrying Solid's $$-delegated-event props). devtoolsHook:true means @solid-devtools is installed (deeper data may be reachable). Use solid_find_by_text / solid_find_by_role for DOM-level element matching. Runs in page-world via the page-bridge. CALL host_status FIRST.",
-    inputSchema: inputSchema$x,
+    inputSchema: inputSchema$y,
     handler: solidDetectMcpHandler,
 });
 
 const SOLID_FIND_BY_TEXT_IPC_TIMEOUT_MS = 5000;
-const inputSchema$w = {
+const inputSchema$x = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     pattern: stringType().min(1),
@@ -9911,7 +10430,7 @@ const isSuccess$2 = (v) => {
 const solidFindByTextMcpHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -9937,22 +10456,22 @@ const solidFindByTextMcpHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`solid_find_by_text failed: ${err.message}`, [
+        return errorResponse$1(`solid_find_by_text failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the solid_find_by_text handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`solid_find_by_text nmh error: ${response.error.message}`, [
+        return errorResponse$1(`solid_find_by_text nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$8(response.payload)) {
-        return errorResponse(`solid_find_by_text: ${response.payload.error.message}`, [
+        return errorResponse$1(`solid_find_by_text: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Most common: an invalid regex pattern (new RegExp, no flags).',
         ]);
     }
     if (!isSuccess$2(response.payload)) {
-        return errorResponse('solid_find_by_text returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/solid/find_by_text.ts.']);
+        return errorResponse$1('solid_find_by_text returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/solid/find_by_text.ts.']);
     }
     const data = {
         extensionId: target.extensionId,
@@ -9974,12 +10493,12 @@ const solidFindByTextMcpHandler = async (args, ctx) => {
 const solidFindByTextTool = Object.freeze({
     name: 'solid_find_by_text',
     description: "Find DOM ELEMENTS whose rendered text matches a regex on a Solid page. Args: { extension_id?, tab_id?, pattern: regex source (new RegExp, no flags, case-sensitive), exact?: bool=false, max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { locator, tag, matchedText }[], truncated }. NOTE: Solid has no component identity, so matches are ELEMENTS (locator = best-effort CSS-ish selector), NOT components — this is the documented Solid degradation. Runs in page-world via the page-bridge. CALL host_status FIRST.",
-    inputSchema: inputSchema$w,
+    inputSchema: inputSchema$x,
     handler: solidFindByTextMcpHandler,
 });
 
 const SOLID_FIND_BY_ROLE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$v = {
+const inputSchema$w = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     role: stringType().min(1),
@@ -10003,7 +10522,7 @@ const isSuccess$1 = (v) => {
 const solidFindByRoleMcpHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -10029,22 +10548,22 @@ const solidFindByRoleMcpHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`solid_find_by_role failed: ${err.message}`, [
+        return errorResponse$1(`solid_find_by_role failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the solid_find_by_role handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`solid_find_by_role nmh error: ${response.error.message}`, [
+        return errorResponse$1(`solid_find_by_role nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$7(response.payload)) {
-        return errorResponse(`solid_find_by_role: ${response.payload.error.message}`, [
+        return errorResponse$1(`solid_find_by_role: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Most common: an invalid name regex (new RegExp, no flags).',
         ]);
     }
     if (!isSuccess$1(response.payload)) {
-        return errorResponse('solid_find_by_role returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/solid/find_by_role.ts.']);
+        return errorResponse$1('solid_find_by_role returned a malformed payload (missing matches/truncated).', ['Check packages/extension/src/solid/find_by_role.ts.']);
     }
     const data = {
         extensionId: target.extensionId,
@@ -10066,12 +10585,12 @@ const solidFindByRoleMcpHandler = async (args, ctx) => {
 const solidFindByRoleTool = Object.freeze({
     name: 'solid_find_by_role',
     description: "Find DOM ELEMENTS with a given ARIA role on a Solid page, optionally narrowed by an accessible-name regex. Args: { extension_id?, tab_id?, role: ARIA role string (exact, lowercase), name?: regex source (new RegExp, no flags), max_matches?: cap (default 20, max 500) }. Returns { extensionId, tabId, matches: { locator, tag, role, name? }[], truncated }. NOTE: Solid has no component identity, so matches are ELEMENTS (locator = best-effort CSS-ish selector), NOT components — documented Solid degradation. Runs in page-world via the page-bridge. CALL host_status FIRST.",
-    inputSchema: inputSchema$v,
+    inputSchema: inputSchema$w,
     handler: solidFindByRoleMcpHandler,
 });
 
 const REDUX_GET_STATE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$u = {
+const inputSchema$v = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     path: stringType().min(1).optional(),
@@ -10094,7 +10613,7 @@ const isStoreSuccess$1 = (v) => {
 const reduxGetStateHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -10118,22 +10637,22 @@ const reduxGetStateHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`redux_get_state failed: ${err.message}`, [
+        return errorResponse$1(`redux_get_state failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the redux_get_state handler is wired in the SW.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`redux_get_state nmh error: ${response.error.message}`, [
+        return errorResponse$1(`redux_get_state nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$6(response.payload)) {
-        return errorResponse(`redux_get_state: ${response.payload.error.message}`, [
+        return errorResponse$1(`redux_get_state: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Common causes: no Redux store detected on the page (the fixture must expose it via window.__pwaDebug_redux, or T2 production-style detection via the __REDUX_DEVTOOLS_EXTENSION__ shim must be in place); malformed path; descent into a primitive.',
         ]);
     }
     if (!isStoreSuccess$1(response.payload)) {
-        return errorResponse('redux_get_state returned a malformed payload (missing state/scopeUrl).', [
+        return errorResponse$1('redux_get_state returned a malformed payload (missing state/scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts redux_get_state branch.',
         ]);
     }
@@ -10153,12 +10672,12 @@ const reduxGetStateHandler = async (args, ctx) => {
 const reduxGetStateTool = Object.freeze({
     name: 'redux_get_state',
     description: "DEPRECATED — prefer store_get_state (unified, framework auto-detect). Return the current Redux store state from the active tab, optionally pruned to a dotted/bracket path. Args: { extension_id?, tab_id?, path?: 'counter.value' | 'todos[0].text' | \"users['by-id']\" }. Returns { extensionId, tabId, state, path?, truncated?, scopeUrl }. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$u,
+    inputSchema: inputSchema$v,
     handler: reduxGetStateHandler,
 });
 
 const REDUX_SUBSCRIBE_IPC_TIMEOUT_MS = 5000;
-const inputSchema$t = {
+const inputSchema$u = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     action: enumType(['start', 'stop']),
@@ -10182,7 +10701,7 @@ const isSubscribeSuccess$1 = (v) => {
 const reduxSubscribeHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -10206,22 +10725,22 @@ const reduxSubscribeHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`redux_subscribe failed: ${err.message}`, [
+        return errorResponse$1(`redux_subscribe failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect).',
         ]);
     }
     if (response.error) {
-        return errorResponse(`redux_subscribe nmh error: ${response.error.message}`, [
+        return errorResponse$1(`redux_subscribe nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$5(response.payload)) {
-        return errorResponse(`redux_subscribe: ${response.payload.error.message}`, [
+        return errorResponse$1(`redux_subscribe: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Common causes: no Redux store detected; malformed path.',
         ]);
     }
     if (!isSubscribeSuccess$1(response.payload)) {
-        return errorResponse('redux_subscribe returned a malformed payload (missing active/scopeUrl).', [
+        return errorResponse$1('redux_subscribe returned a malformed payload (missing active/scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts reduxSubscribeHandler.',
         ]);
     }
@@ -10242,18 +10761,18 @@ const reduxSubscribeHandler = async (args, ctx) => {
 const reduxSubscribeTool = Object.freeze({
     name: 'redux_subscribe',
     description: "DEPRECATED — prefer store_subscribe (unified, framework auto-detect). Start or stop a Redux store subscription on the active tab. While active, each store.subscribe callback whose path-narrowed snapshot differs from the prior snapshot emits a store_change event that flows through the standard capture pipeline; read accumulated events via redux_tail. Args: { extension_id?, tab_id?, action: 'start' | 'stop', path?: 'counter' | 'todos.items' }. Returns { extensionId, tabId, active, path?, scopeUrl }. Single subscription per page-world; calling action='start' again replaces any prior subscription. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$t,
+    inputSchema: inputSchema$u,
     handler: reduxSubscribeHandler,
 });
 
-const inputSchema$s = {
+const inputSchema$t = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const reduxTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension.',
             FILTER_SPEC_HINT,
         ]);
@@ -10302,12 +10821,12 @@ const reduxTailHandler = async (args, ctx) => {
 const reduxTailTool = Object.freeze({
     name: 'redux_tail',
     description: "DEPRECATED — prefer store_tail (unified, framework-tagged entries). Tail the host-side store_change ring buffer (populated while redux_subscribe is active) for a target extension. Returns { entries: StoreChangeEntry[]; cursor: Cursor|null; hasMore: bool }. Each StoreChangeEntry carries page-world fields (ts, frameUrl, frameKey, storeId, path?, diff{added, changed, removed}, snapshot, truncated?) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]}; since/until=opaque cursor strings; limit=int 1..1000 (default 200). level is ignored (store_change has no console-level field). Call redux_subscribe(action='start') first to start producing events.",
-    inputSchema: inputSchema$s,
+    inputSchema: inputSchema$t,
     handler: reduxTailHandler,
 });
 
 const REDUX_DISPATCH_IPC_TIMEOUT_MS = 5000;
-const inputSchema$r = {
+const inputSchema$s = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     action: objectType({
@@ -10334,13 +10853,13 @@ const reduxDispatchHandler = async (args, ctx) => {
     // Setting gate FIRST — never even build an IPC envelope if disabled.
     const allowed = ctx.settingsStore.getSetting('capture.stores.allowDispatch');
     if (allowed !== true) {
-        return errorResponse('redux_dispatch is disabled (capture.stores.allowDispatch=false).', [
+        return errorResponse$1('redux_dispatch is disabled (capture.stores.allowDispatch=false).', [
             "Enable writes via settings.set { key: 'capture.stores.allowDispatch', value: true } and retry. Default false because dispatching mutates user-visible application state; only opt in when intentionally driving the app from the AI side.",
         ]);
     }
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called.',
         ]);
     }
@@ -10362,22 +10881,22 @@ const reduxDispatchHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`redux_dispatch failed: ${err.message}`, [
+        return errorResponse$1(`redux_dispatch failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect).',
         ]);
     }
     if (response.error) {
-        return errorResponse(`redux_dispatch nmh error: ${response.error.message}`, [
+        return errorResponse$1(`redux_dispatch nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
         ]);
     }
     if (isToolErrorPayload$4(response.payload)) {
-        return errorResponse(`redux_dispatch: ${response.payload.error.message}`, [
+        return errorResponse$1(`redux_dispatch: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Common causes: no Redux store detected; malformed action; store.dispatch threw (e.g. an unknown action.type slipped through a stricter user reducer).',
         ]);
     }
     if (!isDispatchSuccess$1(response.payload)) {
-        return errorResponse('redux_dispatch returned a malformed payload (missing dispatched/scopeUrl).', [
+        return errorResponse$1('redux_dispatch returned a malformed payload (missing dispatched/scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts reduxDispatchHandler.',
         ]);
     }
@@ -10393,7 +10912,7 @@ const reduxDispatchHandler = async (args, ctx) => {
 const reduxDispatchTool = Object.freeze({
     name: 'redux_dispatch',
     description: "DEPRECATED — prefer store_dispatch (unified, framework auto-detect). Dispatch an action into the active Redux store (the only WRITE surface in the store-introspection family). DISABLED BY DEFAULT — opt in via settings.set { key: 'capture.stores.allowDispatch', value: true }. Args: { extension_id?, tab_id?, action: { type: non-empty string; payload? } }. Returns { extensionId, tabId, dispatched: true, action, scopeUrl } on success. Tool-level errors (no store detected; user reducer threw) follow the same { error: { message } } convention as redux_get_state. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$r,
+    inputSchema: inputSchema$s,
     handler: reduxDispatchHandler,
 });
 
@@ -10430,7 +10949,7 @@ const requestStoreTool = async (ctx, args) => {
     if (!target.ok) {
         return {
             ok: false,
-            response: errorResponse(target.error, [
+            response: errorResponse$1(target.error, [
                 'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
             ]),
         };
@@ -10456,7 +10975,7 @@ const requestStoreTool = async (ctx, args) => {
     catch (err) {
         return {
             ok: false,
-            response: errorResponse(`${args.toolName} failed: ${err.message}`, [
+            response: errorResponse$1(`${args.toolName} failed: ${err.message}`, [
                 'IPC request did not complete (timeout, send error, or NMH disconnect). Confirm the SW is connected and the store handler is wired in the SW.',
             ]),
         };
@@ -10464,7 +10983,7 @@ const requestStoreTool = async (ctx, args) => {
     if (response.error) {
         return {
             ok: false,
-            response: errorResponse(`${args.toolName} nmh error: ${response.error.message}`, [
+            response: errorResponse$1(`${args.toolName} nmh error: ${response.error.message}`, [
                 'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout, or the page-world handler threw.',
             ]),
         };
@@ -10472,7 +10991,7 @@ const requestStoreTool = async (ctx, args) => {
     if (isToolErrorPayload$3(response.payload)) {
         return {
             ok: false,
-            response: errorResponse(`${args.toolName}: ${response.payload.error.message}`, [
+            response: errorResponse$1(`${args.toolName}: ${response.payload.error.message}`, [
                 "Tool-level error from the page-world handler. Common causes: no supported store detected on the page (e.g. Redux on window.__pwaDebug_redux or via the __REDUX_DEVTOOLS_EXTENSION__ shim); a malformed path; or, when an explicit framework arg was passed, no adapter registered for that framework.",
             ]),
         };
@@ -10485,7 +11004,7 @@ const requestStoreTool = async (ctx, args) => {
     };
 };
 
-const inputSchema$q = {
+const inputSchema$r = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     path: stringType().min(1).optional(),
@@ -10509,7 +11028,7 @@ const storeGetStateHandler = async (args, ctx) => {
     if (!result.ok)
         return result.response;
     if (!isStoreSuccess(result.payload)) {
-        return errorResponse('store_get_state returned a malformed payload (missing state/scopeUrl).', [
+        return errorResponse$1('store_get_state returned a malformed payload (missing state/scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts store_get_state branch.',
         ]);
     }
@@ -10529,11 +11048,11 @@ const storeGetStateHandler = async (args, ctx) => {
 const storeGetStateTool = Object.freeze({
     name: 'store_get_state',
     description: "Return the current state of the active tab's JS store, optionally pruned to a dotted/bracket path. Auto-detects the store framework (Redux today; Zustand/Pinia/Jotai as adapters land), or pass framework to force one. Args: { extension_id?, tab_id?, path?: 'counter.value' | 'todos[0].text', framework?: 'redux' }. Returns { extensionId, tabId, framework, state, path?, truncated?, scopeUrl }. Runs in page-world via the page-bridge — no CDP, coexists with the user's DevTools. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$q,
+    inputSchema: inputSchema$r,
     handler: storeGetStateHandler,
 });
 
-const inputSchema$p = {
+const inputSchema$q = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     framework: stringType().min(1).optional(),
@@ -10561,7 +11080,7 @@ const storeSubscribeHandler = async (args, ctx) => {
     if (!result.ok)
         return result.response;
     if (!isSubscribeSuccess(result.payload)) {
-        return errorResponse('store_subscribe returned a malformed payload (missing active/scopeUrl).', [
+        return errorResponse$1('store_subscribe returned a malformed payload (missing active/scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts store_subscribe branch.',
         ]);
     }
@@ -10582,18 +11101,18 @@ const storeSubscribeHandler = async (args, ctx) => {
 const storeSubscribeTool = Object.freeze({
     name: 'store_subscribe',
     description: "Start or stop a store subscription on the active tab. While active, each store change whose path-narrowed snapshot differs from the prior snapshot emits a store_change event (tagged with the detecting framework) that flows through the standard capture pipeline; read accumulated events via store_tail. Auto-detects the framework or pass framework to force one. Args: { extension_id?, tab_id?, framework?, action: 'start' | 'stop', path?: 'counter' | 'todos.items' }. Returns { extensionId, tabId, active, framework?, path?, scopeUrl }. Single subscription per page-world; calling action='start' again replaces any prior subscription. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$p,
+    inputSchema: inputSchema$q,
     handler: storeSubscribeHandler,
 });
 
-const inputSchema$o = {
+const inputSchema$p = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const storeTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension.',
             FILTER_SPEC_HINT,
         ]);
@@ -10642,11 +11161,11 @@ const storeTailHandler = async (args, ctx) => {
 const storeTailTool = Object.freeze({
     name: 'store_tail',
     description: "Tail the host-side store_change ring buffer (populated while store_subscribe is active) for a target extension. Framework-agnostic: each entry's framework field names the store library that produced it. Returns { entries: StoreChangeEntry[]; cursor: Cursor|null; hasMore: bool }. Each StoreChangeEntry carries page-world fields (ts, frameUrl, frameKey, storeId, framework?, path?, diff{added, changed, removed}, snapshot, truncated?) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). FilterSpec (all optional): pattern={include?: regex sources[], exclude?: regex sources[]}; since/until=opaque cursor strings; limit=int 1..1000 (default 200). level is ignored (store_change has no console-level field). Call store_subscribe(action='start') first to start producing events.",
-    inputSchema: inputSchema$o,
+    inputSchema: inputSchema$p,
     handler: storeTailHandler,
 });
 
-const inputSchema$n = {
+const inputSchema$o = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     framework: stringType().min(1).optional(),
@@ -10665,7 +11184,7 @@ const storeDispatchHandler = async (args, ctx) => {
     // Setting gate FIRST — never even build an IPC envelope if disabled.
     const allowed = ctx.settingsStore.getSetting('capture.stores.allowDispatch');
     if (allowed !== true) {
-        return errorResponse('store_dispatch is disabled (capture.stores.allowDispatch=false).', [
+        return errorResponse$1('store_dispatch is disabled (capture.stores.allowDispatch=false).', [
             "Enable writes via settings.set { key: 'capture.stores.allowDispatch', value: true } and retry. Default false because dispatching mutates user-visible application state; only opt in when intentionally driving the app from the AI side.",
         ]);
     }
@@ -10680,7 +11199,7 @@ const storeDispatchHandler = async (args, ctx) => {
     if (!result.ok)
         return result.response;
     if (!isDispatchSuccess(result.payload)) {
-        return errorResponse('store_dispatch returned a malformed payload (missing dispatched/scopeUrl).', [
+        return errorResponse$1('store_dispatch returned a malformed payload (missing dispatched/scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts store_dispatch branch.',
         ]);
     }
@@ -10696,12 +11215,12 @@ const storeDispatchHandler = async (args, ctx) => {
 const storeDispatchTool = Object.freeze({
     name: 'store_dispatch',
     description: "Dispatch an action into the active tab's store (the only WRITE surface in the store-introspection family). DISABLED BY DEFAULT — opt in via settings.set { key: 'capture.stores.allowDispatch', value: true }. Auto-detects the framework or pass framework to force one. Args: { extension_id?, tab_id?, framework?, action: { type: non-empty string; payload? } }. Returns { extensionId, tabId, dispatched: true, framework, action, scopeUrl }. Note: stores without a Redux-style dispatch (e.g. some Zustand/Jotai setups) return a tool-level error from the page-world handler. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$n,
+    inputSchema: inputSchema$o,
     handler: storeDispatchHandler,
 });
 
 const SOURCE_MAP_RESOLVE_IPC_TIMEOUT_MS = 8000;
-const inputSchema$m = {
+const inputSchema$n = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     script_url: stringType().min(1),
@@ -10726,13 +11245,13 @@ const isSuccess = (v) => {
 const sourceMapResolveHandler = async (args, ctx) => {
     const enabled = ctx.settingsStore.getSetting('capture.sourceMap.enabled');
     if (enabled !== true) {
-        return errorResponse('source_map_resolve is disabled (capture.sourceMap.enabled=false).', [
+        return errorResponse$1('source_map_resolve is disabled (capture.sourceMap.enabled=false).', [
             "Enable via settings.set { key: 'capture.sourceMap.enabled', value: true } and retry. Default is true; the setting exists so users can opt out of the script + map fetch overhead in privacy-sensitive sessions.",
         ]);
     }
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called.',
         ]);
     }
@@ -10758,22 +11277,22 @@ const sourceMapResolveHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`source_map_resolve failed: ${err.message}`, [
+        return errorResponse$1(`source_map_resolve failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Script + map fetch can take longer than other tools; the 8s timeout reflects that.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`source_map_resolve nmh error: ${response.error.message}`, [
+        return errorResponse$1(`source_map_resolve nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout.',
         ]);
     }
     if (isToolErrorPayload$2(response.payload)) {
-        return errorResponse(`source_map_resolve: ${response.payload.error.message}`, [
+        return errorResponse$1(`source_map_resolve: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler. Common causes: script fetch failed (CORS or 4xx/5xx); malformed input.',
         ]);
     }
     if (!isSuccess(response.payload)) {
-        return errorResponse('source_map_resolve returned a malformed payload (missing scopeUrl).', [
+        return errorResponse$1('source_map_resolve returned a malformed payload (missing scopeUrl).', [
             'The page-world handler did not match the expected shape. Check packages/extension/src/page_bridge/page_dispatch.ts sourceMapResolveHandler.',
         ]);
     }
@@ -10795,12 +11314,12 @@ const sourceMapResolveHandler = async (args, ctx) => {
 const sourceMapResolveTool = Object.freeze({
     name: 'source_map_resolve',
     description: "Resolve a single generated stack frame (script_url + line + column) to its original-source location using the script's source map. Args: { extension_id?, tab_id?, script_url: non-empty string, line: int >= 1, column: int >= 0 }. Returns { extensionId, tabId, original?: { source, line, column, name? }, scopeUrl }. original is undefined when no map is available or no mapping exists at the requested coordinates. Disabled via capture.sourceMap.enabled=false. M13 ships query-time resolution; M13.5 will add capture-time auto-annotation when needed.",
-    inputSchema: inputSchema$m,
+    inputSchema: inputSchema$n,
     handler: sourceMapResolveHandler,
 });
 
 const SESSION_RECORD_IPC_TIMEOUT_MS = 5000;
-const inputSchema$l = {
+const inputSchema$m = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     action: enumType(['start', 'stop']),
@@ -10825,7 +11344,7 @@ const isRecordSuccess = (v) => {
 const sessionRecordHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called.',
         ]);
     }
@@ -10851,22 +11370,22 @@ const sessionRecordHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`session_record failed: ${err.message}`, [
+        return errorResponse$1(`session_record failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect).',
         ]);
     }
     if (response.error) {
-        return errorResponse(`session_record nmh error: ${response.error.message}`, [
+        return errorResponse$1(`session_record nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab, page-bridge timeout.',
         ]);
     }
     if (isToolErrorPayload$1(response.payload)) {
-        return errorResponse(`session_record: ${response.payload.error.message}`, [
+        return errorResponse$1(`session_record: ${response.payload.error.message}`, [
             'Tool-level error from the page-world handler.',
         ]);
     }
     if (!isRecordSuccess(response.payload)) {
-        return errorResponse('session_record returned a malformed payload (missing active/scopeUrl).', ['The page-world handler did not match the expected shape.']);
+        return errorResponse$1('session_record returned a malformed payload (missing active/scopeUrl).', ['The page-world handler did not match the expected shape.']);
     }
     const data = {
         extensionId: target.extensionId,
@@ -10888,18 +11407,18 @@ const sessionRecordHandler = async (args, ctx) => {
 const sessionRecordTool = Object.freeze({
     name: 'session_record',
     description: "Start or stop a rrweb session recording on the active tab. Each recorded event flows through the capture pipeline as a 'replay' CaptureKind and accumulates in the host replay ring buffer (readable via session_replay). Args: { extension_id?, tab_id?, action: 'start' | 'stop', session_id?: stable id for grouping (auto-generated when missing), duration_cap_ms?: int > 0 (auto-stop deadline) }. Single recording per page-world; action='start' replaces any prior recording. CALL host_status FIRST to see connections.",
-    inputSchema: inputSchema$l,
+    inputSchema: inputSchema$m,
     handler: sessionRecordHandler,
 });
 
-const inputSchema$k = {
+const inputSchema$l = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const sessionReplayHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called.',
             FILTER_SPEC_HINT,
         ]);
@@ -10948,12 +11467,12 @@ const sessionReplayHandler = async (args, ctx) => {
 const sessionReplayTool = Object.freeze({
     name: 'session_replay',
     description: "Tail the host-side replay ring buffer (populated while session_record is active) for a target extension. Returns { entries: ReplayEntry[]; cursor; hasMore }. Each ReplayEntry carries page-world fields (ts, frameUrl, frameKey, sessionId, rrwebType, data, timestamp) plus host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). FilterSpec: pattern (regex over JSON.stringify), since/until cursors, limit. level is ignored. Call session_record(action='start') first to start producing events.",
-    inputSchema: inputSchema$k,
+    inputSchema: inputSchema$l,
     handler: sessionReplayHandler,
 });
 
 const SW_STATUS_IPC_TIMEOUT_MS = 5000;
-const inputSchema$j = {
+const inputSchema$k = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -10981,7 +11500,7 @@ const readSnapshot = (raw) => {
 const swStatusHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension so Chrome respawns the NMH.',
         ]);
     }
@@ -11002,18 +11521,18 @@ const swStatusHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`sw_status failed: ${err.message}`, [
+        return errorResponse$1(`sw_status failed: ${err.message}`, [
             'IPC request did not complete (timeout, send error, or NMH disconnect). Check the extension service worker console and confirm the SW is connected to the host.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`sw_status nmh error: ${response.error.message}`, [
+        return errorResponse$1(`sw_status nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Common causes: no active tab (open an http(s) tab to the PWA), explicit tab_id not found, or the page-world bridge is not attached (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const snapshot = readSnapshot(response.payload);
     if (snapshot === null) {
-        return errorResponse('sw_status returned a malformed payload (missing supported/registrations/hasWaitingUpdate).', [
+        return errorResponse$1('sw_status returned a malformed payload (missing supported/registrations/hasWaitingUpdate).', [
             'The page-world handler returned a shape that does not match SwStatusSnapshot. Check packages/extension/src/sw_app/projection.ts and the page_dispatch sw_status handler.',
         ]);
     }
@@ -11042,18 +11561,18 @@ const swStatusHandler = async (args, ctx) => {
 const swStatusTool = Object.freeze({
     name: 'sw_status',
     description: "Inspect the DEBUGGED PWA's service worker(s). Returns SwStatusSnapshot { supported, controller, registrations[], hasWaitingUpdate } read from the page's navigator.serviceWorker — the installing/waiting/active worker for each registration (with script URLs + lifecycle state), which worker controls the page, and whether an update is stuck WAITING (the #1 'why isn't my update showing' signal). Reads the app's real SW state in your actual browser profile — something CDP / chrome-devtools-mcp does not surface. Args: { extension_id?, tab_id? }. Runs in page-world via the page-bridge (no CDP). For the lifecycle event stream (updatefound/statechange/controllerchange) use sw_lifecycle_tail. CALL host_status FIRST to see connected extensions.",
-    inputSchema: inputSchema$j,
+    inputSchema: inputSchema$k,
     handler: swStatusHandler,
 });
 
-const inputSchema$i = {
+const inputSchema$j = {
     extension_id: stringType().min(1).optional(),
     filter: filterSchema,
 };
 const swLifecycleTailHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called for the target extension and the user has reloaded the extension at chrome://extensions.',
             FILTER_SPEC_HINT,
         ]);
@@ -11102,12 +11621,12 @@ const swLifecycleTailHandler = async (args, ctx) => {
 const swLifecycleTailTool = Object.freeze({
     name: 'sw_lifecycle_tail',
     description: "Tail the DEBUGGED PWA's service-worker lifecycle event stream (kind 'sw_state') with cursor pagination + FilterSpec. Returns { entries: SwStateEntry[]; cursor: Cursor|null; hasMore: bool }. Each SwStateEntry: { subkind, scope?, scriptURL?, state?, slot? } + host fields (receivedAt, sessionId, extensionId, sequenceNumber, cursor). subkind: 'updatefound' = a new worker started installing; 'statechange' = a worker advanced lifecycle state (installing→installed→activating→activated→redundant); 'controllerchange' = the page's controlling worker changed. This is the EVENT STREAM (transitions over time) — for the point-in-time snapshot (waiting/active/controller, hasWaitingUpdate) use sw_status. Captured in page-world against your real profile; CDP/chrome-devtools-mcp does not surface this. Events only fire on transitions, so a stable app may return none. With no extension_id, targets the single connected NMH. CALL host_status FIRST.",
-    inputSchema: inputSchema$i,
+    inputSchema: inputSchema$j,
     handler: swLifecycleTailHandler,
 });
 
 const CACHE_LIST_IPC_TIMEOUT_MS = 5000;
-const inputSchema$h = {
+const inputSchema$i = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -11124,7 +11643,7 @@ const readResult$8 = (raw) => {
 const cacheListHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11145,18 +11664,18 @@ const cacheListHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`cache_list failed: ${err.message}`, [
+        return errorResponse$1(`cache_list failed: ${err.message}`, [
             'IPC request did not complete. Check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`cache_list nmh error: ${response.error.message}`, [
+        return errorResponse$1(`cache_list nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const result = readResult$8(response.payload);
     if (result === null) {
-        return errorResponse('cache_list returned a malformed payload.', [
+        return errorResponse$1('cache_list returned a malformed payload.', [
             'The page-world handler returned a shape that does not match CacheListResult. Check packages/extension/src/cache_storage/read.ts.',
         ]);
     }
@@ -11175,12 +11694,12 @@ const cacheListHandler = async (args, ctx) => {
 const cacheListTool = Object.freeze({
     name: 'cache_list',
     description: "List the debugged PWA's CacheStorage caches. Returns CacheListResult { supported, caches: [{ name, entryCount }] } read from the page's caches.* API. Use to see what the service worker has cached, then cache_inspect(cache_name) for per-entry detail (age/size/type) or cache_match(url) to find which cache serves a URL — the core of diagnosing stale-cache bugs. Reads your real profile's caches; CDP/chrome-devtools-mcp does not surface this. Args: { extension_id?, tab_id? }. Runs in page-world via the page-bridge. CALL host_status FIRST.",
-    inputSchema: inputSchema$h,
+    inputSchema: inputSchema$i,
     handler: cacheListHandler,
 });
 
 const CACHE_INSPECT_IPC_TIMEOUT_MS = 8000;
-const inputSchema$g = {
+const inputSchema$h = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     cache_name: stringType().min(1),
@@ -11205,7 +11724,7 @@ const readResult$7 = (raw) => {
 const cacheInspectHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11228,18 +11747,18 @@ const cacheInspectHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`cache_inspect failed: ${err.message}`, [
+        return errorResponse$1(`cache_inspect failed: ${err.message}`, [
             'IPC request did not complete. A very large cache can take a while to enumerate — retry with a smaller limit, or check the SW console.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`cache_inspect nmh error: ${response.error.message}`, [
+        return errorResponse$1(`cache_inspect nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA and confirm the cache name (from cache_list).',
         ]);
     }
     const result = readResult$7(response.payload);
     if (result === null) {
-        return errorResponse('cache_inspect returned a malformed payload.', [
+        return errorResponse$1('cache_inspect returned a malformed payload.', [
             'The page-world handler returned a shape that does not match CacheInspectResult. Check packages/extension/src/cache_storage/read.ts.',
         ]);
     }
@@ -11261,12 +11780,12 @@ const cacheInspectHandler = async (args, ctx) => {
 const cacheInspectTool = Object.freeze({
     name: 'cache_inspect',
     description: "Inspect one CacheStorage cache's entries. Returns CacheInspectResult { supported, found, name, entries: [{ url, method, status, contentType, contentLength, dateHeader, ageSeconds, cacheControl }], entryCount, truncated }. ageSeconds (now − the response's Date header) is the staleness signal — old app-shell HTML or API responses are the usual 'why won't my update show' / 'why is my data stale' cause. Get the cache name from cache_list first. Bodies are NOT read (size is from content-length). Args: { extension_id?, tab_id?, cache_name (required), limit?: default 200, max 1000 }. Page-world read; CDP cannot do this. CALL host_status FIRST.",
-    inputSchema: inputSchema$g,
+    inputSchema: inputSchema$h,
     handler: cacheInspectHandler,
 });
 
 const CACHE_MATCH_IPC_TIMEOUT_MS = 5000;
-const inputSchema$f = {
+const inputSchema$g = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     url: stringType().min(1),
@@ -11286,7 +11805,7 @@ const readResult$6 = (raw) => {
 const cacheMatchHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11307,18 +11826,18 @@ const cacheMatchHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`cache_match failed: ${err.message}`, [
+        return errorResponse$1(`cache_match failed: ${err.message}`, [
             'IPC request did not complete. Check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`cache_match nmh error: ${response.error.message}`, [
+        return errorResponse$1(`cache_match nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA.',
         ]);
     }
     const result = readResult$6(response.payload);
     if (result === null) {
-        return errorResponse('cache_match returned a malformed payload.', [
+        return errorResponse$1('cache_match returned a malformed payload.', [
             'The page-world handler returned a shape that does not match CacheMatchResult. Check packages/extension/src/cache_storage/read.ts.',
         ]);
     }
@@ -11337,12 +11856,12 @@ const cacheMatchHandler = async (args, ctx) => {
 const cacheMatchTool = Object.freeze({
     name: 'cache_match',
     description: "Find which CacheStorage cache would serve a URL. Returns CacheMatchResult { supported, url, matched, cacheName, entry } — iterates the caches in order and reports the first hit plus the matched entry (status, content-type, ageSeconds, cache-control). Answers 'is /app.js cached, by which cache, and how old is it'. CAVEAT: a hit means a cached copy EXISTS; the SW's fetch handler decides whether it's actually served (cache-first / network-first / SWR) and that strategy is not observable from here — reported as a heuristic, not a guarantee. Args: { extension_id?, tab_id?, url (required) }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$f,
+    inputSchema: inputSchema$g,
     handler: cacheMatchHandler,
 });
 
 const PWA_STATUS_IPC_TIMEOUT_MS = 5000;
-const inputSchema$e = {
+const inputSchema$f = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -11365,7 +11884,7 @@ const readResult$5 = (raw) => {
 const pwaStatusHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11386,18 +11905,18 @@ const pwaStatusHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`pwa_status failed: ${err.message}`, [
+        return errorResponse$1(`pwa_status failed: ${err.message}`, [
             'IPC request did not complete. Check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`pwa_status nmh error: ${response.error.message}`, [
+        return errorResponse$1(`pwa_status nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const result = readResult$5(response.payload);
     if (result === null) {
-        return errorResponse('pwa_status returned a malformed payload.', [
+        return errorResponse$1('pwa_status returned a malformed payload.', [
             'The page-world handler returned a shape that does not match PwaStatusSnapshot. Check packages/extension/src/pwa_status/read.ts.',
         ]);
     }
@@ -11416,12 +11935,12 @@ const pwaStatusHandler = async (args, ctx) => {
 const pwaStatusTool = Object.freeze({
     name: 'pwa_status',
     description: "Snapshot the debugged PWA's runtime status + capability matrix. Returns PwaStatusSnapshot { displayMode, standalone (installed?), controlledBySW + controllerScriptURL, permissions: { notifications, push, periodicBackgroundSync }, capabilities: { serviceWorker, pushManager, backgroundSync, periodicBackgroundSync, badging, fileSystemAccess, windowControlsOverlay, webShare, notifications } }. capabilities = live feature-detection in THIS browser (answers 'why does push work on Android but not here'); permissions = current Permissions-API grants. One cheap call assembles what DevTools makes you gather piecemeal. Reads your real profile. Args: { extension_id?, tab_id? }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$e,
+    inputSchema: inputSchema$f,
     handler: pwaStatusHandler,
 });
 
 const PWA_INSTALLABILITY_IPC_TIMEOUT_MS = 8000;
-const inputSchema$d = {
+const inputSchema$e = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -11442,7 +11961,7 @@ const readResult$4 = (raw) => {
 const pwaInstallabilityHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11463,18 +11982,18 @@ const pwaInstallabilityHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`pwa_installability failed: ${err.message}`, [
+        return errorResponse$1(`pwa_installability failed: ${err.message}`, [
             'IPC request did not complete (the manifest fetch may have hung). Check the SW console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`pwa_installability nmh error: ${response.error.message}`, [
+        return errorResponse$1(`pwa_installability nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA.',
         ]);
     }
     const result = readResult$4(response.payload);
     if (result === null) {
-        return errorResponse('pwa_installability returned a malformed payload.', [
+        return errorResponse$1('pwa_installability returned a malformed payload.', [
             'The page-world handler returned a shape that does not match InstallabilityResult. Check packages/extension/src/pwa_installability/.',
         ]);
     }
@@ -11498,7 +12017,7 @@ const pwaInstallabilityHandler = async (args, ctx) => {
 const pwaInstallabilityTool = Object.freeze({
     name: 'pwa_installability',
     description: "Diagnose whether the debugged PWA is installable, with actionable gaps instead of 'manifest invalid'. Fetches + parses the web app manifest and checks: manifest present/valid, name/short_name, start_url, app display mode, icons (192 AND 512 AND a maskable purpose), secure context (HTTPS/localhost), and a registered service worker. Returns InstallabilityResult { installable, manifestUrl, manifestFound, secureContext, hasServiceWorker, manifest, gaps: [{ code, severity('error' blocks / 'warning' recommended), message, fix }] }. Each gap names exactly what's wrong and how to fix it. Reads your real page. Args: { extension_id?, tab_id? }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$d,
+    inputSchema: inputSchema$e,
     handler: pwaInstallabilityHandler,
 });
 
@@ -11645,7 +12164,7 @@ const analyzeUpdateSkew = (sw, cacheEntries, failures, options = {}) => {
 };
 
 const UPDATE_ANALYZE_IPC_TIMEOUT_MS = 8000;
-const inputSchema$c = {
+const inputSchema$d = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     per_cache_limit: numberType().int().positive().max(1000).optional(),
@@ -11685,7 +12204,7 @@ const networkFailures = (events) => {
 const pwaUpdateAnalyzeHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11708,18 +12227,18 @@ const pwaUpdateAnalyzeHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`pwa_update_analyze failed: ${err.message}`, [
+        return errorResponse$1(`pwa_update_analyze failed: ${err.message}`, [
             'IPC request did not complete. Gathering many caches can take a moment — check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`pwa_update_analyze nmh error: ${response.error.message}`, [
+        return errorResponse$1(`pwa_update_analyze nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const gathered = readGather(response.payload);
     if (gathered === null) {
-        return errorResponse('pwa_update_analyze returned a malformed gather payload.', [
+        return errorResponse$1('pwa_update_analyze returned a malformed gather payload.', [
             'The page-world gather returned a shape that does not match UpdateGatherResult. Check packages/extension/src/update_analysis/gather.ts.',
         ]);
     }
@@ -11758,12 +12277,12 @@ const pwaUpdateAnalyzeHandler = async (args, ctx) => {
 const pwaUpdateAnalyzeTool = Object.freeze({
     name: 'pwa_update_analyze',
     description: "Diagnose service-worker update propagation + version skew for the debugged PWA. Composes sw_status (waiting worker + controller), CacheStorage entry ages (cached HTML vs JS), and recent network 404s into UpdateAnalysisResult { supported, hasWaitingUpdate, controller, findings: [{ code, severity, message }], cachedHtml, cachedJs, chunk404s, summary }. Detects: waiting_update_active_client (an installed SW is waiting while this client stays on the old worker — 'my update won't show'), html_older_js (stale cached HTML referencing chunk hashes the newer JS dropped), and chunk_404 (live chunk misses corroborating the skew). Use for 'why are some users on old code' / 'why are chunks 404ing after deploy'. Analysis over existing reads; no new capture. Args: { extension_id?, tab_id?, per_cache_limit?: default 100, skew_threshold_seconds?: default 3600 }. CALL host_status FIRST.",
-    inputSchema: inputSchema$c,
+    inputSchema: inputSchema$d,
     handler: pwaUpdateAnalyzeHandler,
 });
 
 const SNAPSHOT_IPC_TIMEOUT_MS = 10000;
-const inputSchema$b = {
+const inputSchema$c = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -11791,7 +12310,7 @@ const readResult$3 = (raw) => {
 const pwaSnapshotHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11812,18 +12331,18 @@ const pwaSnapshotHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`pwa_snapshot failed: ${err.message}`, [
+        return errorResponse$1(`pwa_snapshot failed: ${err.message}`, [
             'IPC request did not complete. Composing the snapshot opens every IndexedDB database — a very large one can take a while; check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`pwa_snapshot nmh error: ${response.error.message}`, [
+        return errorResponse$1(`pwa_snapshot nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const result = readResult$3(response.payload);
     if (result === null) {
-        return errorResponse('pwa_snapshot returned a malformed payload.', [
+        return errorResponse$1('pwa_snapshot returned a malformed payload.', [
             'The page-world gather returned a shape that does not match RuntimeSnapshot. Check packages/extension/src/runtime_snapshot/gather.ts.',
         ]);
     }
@@ -11842,12 +12361,12 @@ const pwaSnapshotHandler = async (args, ctx) => {
 const pwaSnapshotTool = Object.freeze({
     name: 'pwa_snapshot',
     description: "Capture ONE capped runtime-state blob of the debugged PWA for deterministic bug-repro context. Returns RuntimeSnapshot { url, title, capturedAt, sw (service-worker status), store (auto-detected Redux/Pinia/Jotai/Zustand state, value-capped, or null), webStorage: { local, session }, idb (IndexedDB db/store schema — not records), cacheNames (CacheStorage names + counts) }. Composes the existing sw_status / store_get_state / storage_get / idb_list / cache_list reads into one moment-in-time record you can reason over or hand off to reproduce a bug. Read-only; no new capture surface. For deeper detail use idb_query / cache_inspect / store_get_state. Args: { extension_id?, tab_id? }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$b,
+    inputSchema: inputSchema$c,
     handler: pwaSnapshotHandler,
 });
 
 const STORAGE_GET_IPC_TIMEOUT_MS = 5000;
-const inputSchema$a = {
+const inputSchema$b = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     area: enumType(['local', 'session']).optional(),
@@ -11872,7 +12391,7 @@ const readResult$2 = (raw) => {
 const storageGetHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11897,18 +12416,18 @@ const storageGetHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`storage_get failed: ${err.message}`, [
+        return errorResponse$1(`storage_get failed: ${err.message}`, [
             'IPC request did not complete. Check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`storage_get nmh error: ${response.error.message}`, [
+        return errorResponse$1(`storage_get nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const result = readResult$2(response.payload);
     if (result === null) {
-        return errorResponse('storage_get returned a malformed payload.', [
+        return errorResponse$1('storage_get returned a malformed payload.', [
             'The page-world handler returned a shape that does not match StorageGetResult. Check packages/extension/src/storage/web_storage.ts.',
         ]);
     }
@@ -11930,12 +12449,12 @@ const storageGetHandler = async (args, ctx) => {
 const storageGetTool = Object.freeze({
     name: 'storage_get',
     description: "Snapshot the debugged PWA's web storage. Returns StorageGetResult { supported, area, entries: [{ key, value, truncated? }], entryCount, truncated } read from the page's localStorage or sessionStorage. Use to inspect auth tokens, feature flags, cached app state, and 'why is the app in this state' bugs that live in storage. Reads your REAL profile's storage; CDP/chrome-devtools-mcp does not surface this. Values over 8KB are truncated. For structured/large data the app keeps in IndexedDB, use idb_list + idb_query instead. Args: { extension_id?, tab_id?, area?: 'local' (default) | 'session', limit?: default 500, max 2000 }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$a,
+    inputSchema: inputSchema$b,
     handler: storageGetHandler,
 });
 
 const IDB_LIST_IPC_TIMEOUT_MS = 8000;
-const inputSchema$9 = {
+const inputSchema$a = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
 };
@@ -11952,7 +12471,7 @@ const readResult$1 = (raw) => {
 const idbListHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -11973,18 +12492,18 @@ const idbListHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`idb_list failed: ${err.message}`, [
+        return errorResponse$1(`idb_list failed: ${err.message}`, [
             'IPC request did not complete. Opening many databases can take a moment — check the extension service worker console and confirm the SW is connected.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`idb_list nmh error: ${response.error.message}`, [
+        return errorResponse$1(`idb_list nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA (chrome:// / web-store pages cannot be read).',
         ]);
     }
     const result = readResult$1(response.payload);
     if (result === null) {
-        return errorResponse('idb_list returned a malformed payload.', [
+        return errorResponse$1('idb_list returned a malformed payload.', [
             'The page-world handler returned a shape that does not match IdbListResult. Check packages/extension/src/storage/idb_read.ts.',
         ]);
     }
@@ -12003,12 +12522,12 @@ const idbListHandler = async (args, ctx) => {
 const idbListTool = Object.freeze({
     name: 'idb_list',
     description: "List the debugged PWA's IndexedDB databases and their schema. Returns IdbListResult { supported, databases: [{ name, version, stores: [{ name, keyPath, autoIncrement, indexes: [{ name, keyPath, unique, multiEntry }] }], error? }] } read from the page's indexedDB API. Use to discover where the app keeps structured/offline data, then idb_query(db, store) to read records — the recurring 'inspect IndexedDB live' need that CDP/chrome-devtools-mcp does not surface for your real profile. Read-only: opening a database never creates one. Args: { extension_id?, tab_id? }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$9,
+    inputSchema: inputSchema$a,
     handler: idbListHandler,
 });
 
 const IDB_QUERY_IPC_TIMEOUT_MS = 8000;
-const inputSchema$8 = {
+const inputSchema$9 = {
     extension_id: stringType().min(1).optional(),
     tab_id: numberType().int().optional(),
     db: stringType().min(1),
@@ -12034,7 +12553,7 @@ const readResult = (raw) => {
 const idbQueryHandler = async (args, ctx) => {
     const target = resolveTarget$1(ctx, args.extension_id);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the user has reloaded the extension.',
         ]);
     }
@@ -12057,18 +12576,18 @@ const idbQueryHandler = async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`idb_query failed: ${err.message}`, [
+        return errorResponse$1(`idb_query failed: ${err.message}`, [
             'IPC request did not complete. A large store can take a while to read — retry with a smaller limit, or check the SW console.',
         ]);
     }
     if (response.error) {
-        return errorResponse(`idb_query nmh error: ${response.error.message}`, [
+        return errorResponse$1(`idb_query nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request. Open an http(s) tab to the PWA and confirm the db + store names (from idb_list).',
         ]);
     }
     const result = readResult(response.payload);
     if (result === null) {
-        return errorResponse('idb_query returned a malformed payload.', [
+        return errorResponse$1('idb_query returned a malformed payload.', [
             'The page-world handler returned a shape that does not match IdbQueryResult. Check packages/extension/src/storage/idb_read.ts.',
         ]);
     }
@@ -12093,7 +12612,7 @@ const idbQueryHandler = async (args, ctx) => {
 const idbQueryTool = Object.freeze({
     name: 'idb_query',
     description: "Read a capped slice of records from one IndexedDB object store. Returns IdbQueryResult { supported, found, db, store, records: [{ key, value, truncated? }], returned, truncated } read read-only from the page's indexedDB. Get the db + store names from idb_list first. Use to inspect the app's offline/cached structured data — the 'what's actually in IndexedDB' need CDP/chrome-devtools-mcp does not surface for your real profile. Read-only (no writes); values over 16KB are truncated. Args: { extension_id?, tab_id?, db (required), store (required), limit?: default 100, max 1000 }. Page-world read. CALL host_status FIRST.",
-    inputSchema: inputSchema$8,
+    inputSchema: inputSchema$9,
     handler: idbQueryHandler,
 });
 
@@ -12135,7 +12654,7 @@ const wireEntry = (key) => {
         ...(e.enumValues ? { enumValues: e.enumValues } : {}),
     };
 };
-const inputSchema$7 = {
+const inputSchema$8 = {
     key: stringType().optional(),
 };
 const settingsGetHandler = async (args, ctx) => {
@@ -12146,7 +12665,7 @@ const settingsGetHandler = async (args, ctx) => {
         ]);
     }
     if (!isKnownKey$1(args.key)) {
-        return errorResponse(`unknown setting key: '${args.key}'`, [
+        return errorResponse$1(`unknown setting key: '${args.key}'`, [
             'Call settings_list_schema to see the valid key set + each entry’s expected type.',
         ]);
     }
@@ -12161,7 +12680,7 @@ const settingsGetHandler = async (args, ctx) => {
 const settingsGetTool = Object.freeze({
     name: 'settings_get',
     description: 'Reads host settings. Omit key to receive every value. Provide key to receive { value, entry } where entry is the wire-safe schema metadata (type, default, scope, description, enumValues). Unknown keys return an error referencing settings_list_schema.',
-    inputSchema: inputSchema$7,
+    inputSchema: inputSchema$8,
     handler: settingsGetHandler,
 });
 
@@ -12173,7 +12692,7 @@ const LIST_SCHEMA_HINT = 'Call settings_list_schema to see the expected type tag
 // the string "true" and the per-key validator rejected it ("expected boolean").
 // An explicit union gives the schema concrete branches so clients send the right
 // JSON type; the precise per-key check still happens in settingsStore.setSetting.
-const inputSchema$6 = {
+const inputSchema$7 = {
     key: stringType(),
     value: unionType([
         booleanType(),
@@ -12185,7 +12704,7 @@ const inputSchema$6 = {
 };
 const settingsSetHandler = async (args, ctx) => {
     if (!isKnownKey(args.key)) {
-        return errorResponse(`unknown setting key: '${args.key}'`, [
+        return errorResponse$1(`unknown setting key: '${args.key}'`, [
             LIST_SCHEMA_HINT,
         ]);
     }
@@ -12193,7 +12712,7 @@ const settingsSetHandler = async (args, ctx) => {
     // is the bridge from MCP-layer unknown to the per-key typed setSetting.
     const result = await ctx.settingsStore.setSetting(args.key, args.value);
     if (!result.ok) {
-        return errorResponse(result.error, [LIST_SCHEMA_HINT]);
+        return errorResponse$1(result.error, [LIST_SCHEMA_HINT]);
     }
     return okResponse({
         key: args.key,
@@ -12206,7 +12725,7 @@ const settingsSetHandler = async (args, ctx) => {
 const settingsSetTool = Object.freeze({
     name: 'settings_set',
     description: 'Writes a single host setting. Validates the value against the per-key schema validator (rejects with a schema-contextualized error). On accept: atomic-persists to ~/.config/pwa-debug/settings.json and notifies in-process subscribers. Unknown keys and invalid values are rejected with a next_step pointing at settings_list_schema.',
-    inputSchema: inputSchema$6,
+    inputSchema: inputSchema$7,
     handler: settingsSetHandler,
 });
 
@@ -13691,7 +14210,7 @@ const refreshExtensionImpl = async (port) => {
         const wsUrl = extensionSwWsUrl(await fetchCdpTargets(port));
         if (wsUrl)
             return cdpReloadExtension(wsUrl);
-        await sleep(REFRESH_POLL_INTERVAL_MS);
+        await sleep$1(REFRESH_POLL_INTERVAL_MS);
     }
     return false;
 };
@@ -13743,13 +14262,13 @@ const getLaunchRegistry = () => {
     return launchRegistry;
 };
 // ── pdl_close_browser effects ──────────────────────────────────────────────
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep$1 = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Poll the debug port until it stops answering (browser gone) or attempts run out. */
 const waitForPortDown = async (port, attempts) => {
     for (let i = 0; i < attempts; i += 1) {
         if (!(await probeDebugPortImpl(port)))
             return true;
-        await sleep(250);
+        await sleep$1(250);
     }
     return !(await probeDebugPortImpl(port));
 };
@@ -13875,7 +14394,7 @@ const waitForProfileReleased = async (dir, attempts) => {
     for (let i = 0; i < attempts; i += 1) {
         if (!(await profileDirReferenced(dir)))
             return;
-        await sleep(250);
+        await sleep$1(250);
     }
 };
 /**
@@ -13905,7 +14424,7 @@ const discardProfileDirImpl = async (dir) => {
     }
     // A final shutdown write can race the delete; retry once if it reappeared.
     if (existsSync(resolved)) {
-        await sleep(250);
+        await sleep$1(250);
         try {
             rmSync(resolved, { recursive: true, force: true });
         }
@@ -14026,7 +14545,7 @@ const BROWSERS$1 = [
 ];
 const MODES = ['existing', 'sandbox-persistent', 'sandbox-temp'];
 const PACKAGINGS = ['native', 'snap', 'flatpak'];
-const inputSchema$5 = {
+const inputSchema$6 = {
     browser: enumType(BROWSERS$1).optional(),
     port: numberType().int().min(1).max(65535).optional(),
     mode: enumType(MODES).optional(),
@@ -14179,7 +14698,7 @@ const launchBrowserCore = async (args, platform, env, deps) => {
         discovery = await deps.discover(platform, env);
     }
     catch (err) {
-        return errorResponse(`browser discovery failed: ${err.message}`, [
+        return errorResponse$1(`browser discovery failed: ${err.message}`, [
             'Linux is the first-class target; macOS/Windows are deferred.',
         ]);
     }
@@ -14193,18 +14712,18 @@ const launchBrowserCore = async (args, platform, env, deps) => {
             : args.browser
                 ? `Requested browser '${args.browser}' is not installed. Detected: ${detected}.`
                 : `No Chromium-family browser detected to launch. Detected: ${detected}.`;
-        return errorResponse(msg, [
+        return errorResponse$1(msg, [
             'Install a supported browser, or pass an explicit `browser` (and optional `packaging`: native|snap|flatpak) from the detected list.',
         ]);
     }
     if (isSandboxMode(mode)) {
         const userDataDir = deps.resolveSandboxProfileDir(target.browser, mode, target.packaging, env);
         if (!userDataDir) {
-            return errorResponse(`Could not resolve a ${mode} profile dir for ${target.browser} on ${platform}.`, ['Linux is first-class; macOS/Windows sandbox profiles are deferred.']);
+            return errorResponse$1(`Could not resolve a ${mode} profile dir for ${target.browser} on ${platform}.`, ['Linux is first-class; macOS/Windows sandbox profiles are deferred.']);
         }
         const extensionPath = deps.resolveExtensionPath(env);
         if (!extensionPath) {
-            return errorResponse('Could not locate the pwa-debug extension to preload (no manifest.json found in any candidate path).', [
+            return errorResponse$1('Could not locate the pwa-debug extension to preload (no manifest.json found in any candidate path).', [
                 'Build the extension (`pnpm --filter @pwa-debug/extension build`) or set PWA_DEBUG_EXTENSION_PATH to its unpacked dir. pdl_install_extension (M17) will bundle this automatically.',
             ]);
         }
@@ -14237,7 +14756,7 @@ const launchBrowserCore = async (args, platform, env, deps) => {
     // mode === 'existing'
     const userDataDir = deps.resolveUserDataDir(target.browser, platform, env, target.execPath);
     if (!userDataDir) {
-        return errorResponse(`Could not resolve the default user-data-dir for ${target.browser} on ${platform}.`, [
+        return errorResponse$1(`Could not resolve the default user-data-dir for ${target.browser} on ${platform}.`, [
             'Linux native, snap, and flatpak profiles are handled; macOS/Windows live verification is pending. Use sandbox-persistent mode as a workaround.',
         ]);
     }
@@ -14280,11 +14799,11 @@ const launchBrowserHandler = async (args, ctx) => launchBrowserCore(args, proces
 const launchBrowserTool = Object.freeze({
     name: 'pdl_launch_browser',
     description: "Launch or attach to a Chromium-family browser with a live remote-debugging port, for use alongside chrome-devtools-mcp. Modes: mode='existing' (default) targets the user's normal profile and degrades gracefully — (a) port already live → attach; (b) running without a debug port → opens a NEW WINDOW in the existing session (never kills it), attached:false + degradation message; (c) not running → spawns fresh with --remote-debugging-port + --user-data-dir=<your profile>. mode='sandbox-persistent' spawns a dedicated, persistent dev profile at ~/.pwa-debug/profiles/<browser>/ beside your normal browser, with the pwa-debug extension PRELOADED (no reload needed); mode='sandbox-temp' is the same but in a throwaway mkdtemp profile cleaned up on host shutdown. Sandbox modes always work standalone (separate profile → no lock collision) and both pwa-debug + CDP tools are available. Args: browser? (chrome|chromium|edge|brave|vivaldi|opera; defaults to system-default), port? (default 9222), mode?, packaging? (native|snap|flatpak). When the same browser is installed under multiple packagings (e.g. snap AND flatpak chromium), pass packaging to pick one; without it the default preference is native > snap > flatpak and next_steps lists the alternatives so you can re-target. isolateExtensions? (sandbox modes only, default true): true pins the dedicated profile to ONLY the pwa-debug extension (clean room — every other extension is disabled); pass false to let other extensions coexist (pwa-debug still preloads, while extensions already in the persistent profile or Load-unpacked/installed after launch stay enabled) — use this to debug a PWA alongside other extensions or to test your own extension with pwa-debug. existing mode already keeps all your normal-profile extensions. extraArgs? (string[]): extra Chromium startup flags appended after pwa-debug's managed flags — e.g. extraArgs=['--enable-speech-dispatcher'] to enable system TTS/speech-dispatcher, or any other --flag the browser needs at startup. Applied only on a COLD spawn (mode='existing' when the browser isn't already running, or either sandbox mode); they have no effect when attaching to an already-live port or opening a new window in a running session, since startup flags are read once at process start — fully quit the browser (or use a sandbox mode) for them to take effect. Linux is first-class; macOS/Windows deferred. Follow next_steps[] — it carries the chrome-devtools-mcp registration snippet, the profile location, the flatpak onboarding steps, or the degradation guidance.",
-    inputSchema: inputSchema$5,
+    inputSchema: inputSchema$6,
     handler: launchBrowserHandler,
 });
 
-const inputSchema$4 = {};
+const inputSchema$5 = {};
 const browserStatusCore = async (deps) => {
     const launches = deps.listLaunches();
     // Re-probe each distinct launch port once for current liveness.
@@ -14324,14 +14843,15 @@ const browserStatusHandler = async (_args, ctx) => {
     return browserStatusCore({
         listLaunches: () => getLaunchRegistry().list(),
         probePort: probeDebugPort,
-        listConnections: () => ctx.ipcServer.listConnections(),
+        // activeExtensions = extension SW heartbeats; CDP connections are not extensions.
+        listConnections: () => ctx.ipcServer.listConnections().filter((c) => c.kind !== 'cdp'),
         now: Date.now,
     });
 };
 const browserStatusTool = Object.freeze({
     name: 'pdl_browser_status',
     description: 'Live state of the browsers pdl_launch_browser has started or attached to: each managed launch (browser, profile mode, port, pid, browserUrl) with a fresh debug-port liveness re-probe, plus the pwa-debug extension connections (extensionId + lastSeenAt heartbeat age). Cheap, no side effects. Use it to confirm a launch is still alive, find the browserUrl to hand to chrome-devtools-mcp, or see whether the extension SW is connected. Launch records persist across host restarts (launches.json); the liveness re-probe distinguishes still-running browsers from ones that have since closed. Follow next_steps[].',
-    inputSchema: inputSchema$4,
+    inputSchema: inputSchema$5,
     handler: browserStatusHandler,
 });
 
@@ -14409,7 +14929,7 @@ const BROWSERS = [
     'opera',
 ];
 const SESSIONS = ['persist', 'discard', 'detach'];
-const inputSchema$3 = {
+const inputSchema$4 = {
     browser: enumType(BROWSERS).optional(),
     port: numberType().int().min(1).max(65535).optional(),
     pid: numberType().int().positive().optional(),
@@ -14433,7 +14953,7 @@ const closeBrowserCore = async (args, deps) => {
     };
     const plan = planClose(deps.listLaunches(), target, session);
     if (plan.length === 0) {
-        return errorResponse('No managed launch matched. pdl_close_browser only acts on browsers pwa-debug launched (see pdl_browser_status) — it never touches your own browser. Pass browser, port, or pid to target one, or all:true to close every managed launch.', [
+        return errorResponse$1('No managed launch matched. pdl_close_browser only acts on browsers pwa-debug launched (see pdl_browser_status) — it never touches your own browser. Pass browser, port, or pid to target one, or all:true to close every managed launch.', [
             'Call pdl_browser_status to see the managed launches and their ports.',
         ]);
     }
@@ -14498,7 +15018,7 @@ const closeBrowserHandler = async (args, _ctx) => closeBrowserCore(args, {
 const closeBrowserTool = Object.freeze({
     name: 'pdl_close_browser',
     description: "Cleanly close a browser that pdl_launch_browser started — the symmetric counterpart to launch. Operates STRICTLY off the managed-launch registry, so it can NEVER touch your own/normal browser: a launch we only ATTACHED to (didn't spawn) is detached from the registry, never killed. Shutdown prefers a clean CDP Browser.close (no 'restore tabs' crash prompt), falling back to SIGTERM then SIGKILL of the spawned process. Args: target by browser, port, or pid (or all:true for every managed launch); session? = 'persist' (default — keep the profile dir), 'discard' (also delete the sandbox profile dir; ignored for the user's 'existing' profile), or 'detach' (drop the registry record, leave the browser running). With no target it does nothing (returns an error) — closing requires intent. Follow next_steps[].",
-    inputSchema: inputSchema$3,
+    inputSchema: inputSchema$4,
     handler: closeBrowserHandler,
 });
 
@@ -14584,8 +15104,26 @@ const cdpPortOf = (url) => {
  */
 const expectedCdpPort = (managedPorts, defaultPort) => managedPorts[0]?.port ?? defaultPort;
 
-const inputSchema$2 = {};
+const inputSchema$3 = {};
 const HOST_NAME = 'com.pwa_debug.host';
+/** Phone hints for next_steps. Phones are optional, so these are never gaps. */
+const androidHints = (a) => {
+    if (a === undefined)
+        return [];
+    if (a.adbPath === null) {
+        return ['Phones (optional): adb is not installed, so Android phones cannot be driven. To test on a phone, install Android platform-tools.'];
+    }
+    if (a.devices.length === 0) {
+        return ['Phones (optional): adb is installed but no phone is connected. To test on a phone: enable USB debugging, connect by USB, then pdl_android_devices.'];
+    }
+    return a.devices.map((d) => d.state === 'unauthorized'
+        ? `Phone ${d.model ?? d.serial}: waiting for the user to tap "Allow" on the "Allow USB debugging?" prompt.`
+        : d.state !== 'device'
+            ? `Phone ${d.model ?? d.serial}: ${d.state}; ask the user to replug it.`
+            : d.chromeDebuggable
+                ? `Phone ${d.model ?? d.serial}: ready. pdl_android_attach({ open_url, reverse_ports }) drives it.`
+                : `Phone ${d.model ?? d.serial}: connected, but Chrome is not running on it; ask the user to open Chrome, then pdl_android_attach.`);
+};
 const checkSetupCore = async (deps) => {
     // Where chrome-devtools-mcp should attach: the active managed launch port if
     // one is live, otherwise the configured launch.defaultPort.
@@ -14699,6 +15237,7 @@ const checkSetupCore = async (deps) => {
         gaps.push(`The bundled extension's id (${bundledId}) is not registered with the host (registered: ${registered.join(', ')}). When it loads, Chrome will reject its native-messaging connection.`);
         recommendations.push(`Run host_register_extension ${bundledId} (and host_unregister_extension on the stale id) before launching.`);
     }
+    const android = deps.probeAndroid !== undefined ? await deps.probeAndroid().catch(() => undefined) : undefined;
     const ok = gaps.length === 0;
     const data = {
         ok,
@@ -14718,13 +15257,15 @@ const checkSetupCore = async (deps) => {
             activeConnections: connections.length,
             bundledExtensionId: bundledId,
             loadedExtensionIds,
+            ...(android !== undefined ? { android } : {}),
         },
     };
-    const next_steps = ok
-        ? [
-            'Setup looks complete. Launch a browser with pdl_launch_browser, then call session_ping to confirm the page-world round-trip.',
-        ]
-        : recommendations;
+    const next_steps = [
+        ...(ok
+            ? ['Setup looks complete. Launch a browser with pdl_launch_browser, then call session_ping to confirm the page-world round-trip.']
+            : recommendations),
+        ...androidHints(android),
+    ];
     return okResponse(data, next_steps);
 };
 const fileExists = async (p) => {
@@ -14746,13 +15287,32 @@ const checkSetupHandler = async (_args, ctx) => checkSetupCore({
         const state = await loadHostState(defaultStatePath());
         return { extensionIds: state.extensionIds };
     },
-    listConnections: () => ctx.ipcServer.listConnections(),
+    // NMH health checks: CDP connections never involve the native host.
+    listConnections: () => ctx.ipcServer.listConnections().filter((c) => c.kind !== 'cdp'),
     deriveBundledExtensionId: async () => {
         const dir = resolveExtensionPath(process.env);
         if (!dir)
             return null;
         return deriveBundledExtensionId(join(dir, 'manifest.json'), (p) => readFile(p, 'utf8'));
     },
+    ...(ctx.android !== undefined
+        ? {
+            probeAndroid: async () => {
+                const r = await ctx.android.devices();
+                if (!r.ok)
+                    return { adbPath: null, devices: [] };
+                return {
+                    adbPath: r.adbPath,
+                    devices: r.devices.map((d) => ({
+                        serial: d.serial,
+                        state: d.rawState,
+                        ...(d.model !== undefined ? { model: d.model } : {}),
+                        chromeDebuggable: (d.sockets ?? []).some((s) => s.kind === 'chrome'),
+                    })),
+                };
+            },
+        }
+        : {}),
     listManagedPorts: () => getLaunchRegistry()
         .list()
         .map((l) => ({
@@ -14765,18 +15325,18 @@ const checkSetupHandler = async (_args, ctx) => checkSetupCore({
 });
 const checkSetupTool = Object.freeze({
     name: 'pdl_check_setup',
-    description: 'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
-    inputSchema: inputSchema$2,
+    description: 'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Also reports phone readiness as information (never a gap): adb installed, connected Android devices, their authorization state and whether Chrome is debuggable, with what to ask the user. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
+    inputSchema: inputSchema$3,
     handler: checkSetupHandler,
 });
 
-const inputSchema$1 = {
+const inputSchema$2 = {
     target: stringType().min(1).optional(),
 };
 const installExtensionCore = async (args, deps) => {
     const source = deps.resolveSource();
     if (!source) {
-        return errorResponse('The bundled pwa-debug extension was not found to install.', [
+        return errorResponse$1('The bundled pwa-debug extension was not found to install.', [
             'Build it first: `pnpm --filter @pwa-debug/extension build`, or set PWA_DEBUG_EXTENSION_PATH to an unpacked extension dir. (By design pwa-debug ships only with the MCP — there is no Chrome Web Store build; install is always a manual dev-mode "Load unpacked".)',
         ]);
     }
@@ -14785,7 +15345,7 @@ const installExtensionCore = async (args, deps) => {
         await deps.copyDir(source, dest);
     }
     catch (err) {
-        return errorResponse(`Failed to copy the extension to ${dest}: ${err.message}`, ['Check write permission for the target directory, or pass a different `target`.']);
+        return errorResponse$1(`Failed to copy the extension to ${dest}: ${err.message}`, ['Check write permission for the target directory, or pass a different `target`.']);
     }
     return okResponse({ source, dest }, [
         `Copied the pwa-debug extension to ${dest}.`,
@@ -14802,11 +15362,11 @@ const installExtensionHandler = async (args, _ctx) => installExtensionCore(args,
 const installExtensionTool = Object.freeze({
     name: 'pdl_install_extension',
     description: "Copy the bundled pwa-debug extension to a folder for manual unpacked install in a Chromium browser. Args: target? (destination dir; defaults to ~/Downloads/pwa-debug-extension). Returns { source, dest } and step-by-step chrome://extensions Developer-mode 'Load unpacked' instructions in next_steps, plus the host_register_extension follow-up. Errors with build guidance if the bundled extension isn't present. Note: pdl_launch_browser sandbox-persistent/sandbox-temp preload the extension automatically, so this tool is only needed for installing into the user's normal (existing-mode) profile.",
-    inputSchema: inputSchema$1,
+    inputSchema: inputSchema$2,
     handler: installExtensionHandler,
 });
 
-const inputSchema = {
+const inputSchema$1 = {
     port: numberType().int().positive().optional(),
 };
 /**
@@ -14838,14 +15398,14 @@ const registerChromeDevtoolsCore = async (args, deps) => {
     if (reg.registered) {
         const removed = await deps.runMcpRemove();
         if (!removed.ok) {
-            return errorResponse(`chrome-devtools-mcp is registered at the wrong port (${reg.browserUrl}) but removing it failed: ${removed.error}`, [
+            return errorResponse$1(`chrome-devtools-mcp is registered at the wrong port (${reg.browserUrl}) but removing it failed: ${removed.error}`, [
                 `Remove it manually: \`claude mcp remove chrome-devtools\`, then re-run this tool or run: \`${snippet}\`.`,
             ]);
         }
     }
     const added = await deps.runMcpAdd(browserUrl);
     if (!added.ok) {
-        return errorResponse(`Failed to register chrome-devtools-mcp: ${added.error}`, [
+        return errorResponse$1(`Failed to register chrome-devtools-mcp: ${added.error}`, [
             `Run it manually: \`${snippet}\`.`,
             'Ensure the `claude` CLI is installed and on PATH.',
         ]);
@@ -14867,7 +15427,7 @@ const registerChromeDevtoolsHandler = async (args, ctx) => registerChromeDevtool
 const registerChromeDevtoolsTool = Object.freeze({
     name: 'pdl_register_chrome_devtools',
     description: "Register the separate, optional chrome-devtools-mcp server with Claude Code on the user's behalf, pinned to the active debug port. Runs `claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:<port>` via the `claude` CLI. Port resolves to: the `port` arg if given, else the active managed launch port (from pdl_launch_browser), else the host launch.defaultPort. Idempotent: no-op when already registered at the correct port; removes + re-adds when registered at the wrong port. IMPORTANT: this MUTATES the user's global (user-scope) MCP config — ALWAYS ask the user for confirmation before calling it. Because it writes a DIRECT MCP registration, a full Claude Code restart is required afterward for the tools to load (next_steps explains the restart, the context-handoff to hand the user before restarting, and the lower-friction plugin alternative that needs only /reload-plugins). Args: port? (override the debug port).",
-    inputSchema,
+    inputSchema: inputSchema$1,
     handler: registerChromeDevtoolsHandler,
 });
 
@@ -14892,10 +15452,10 @@ const newTabInputSchema = {
  * single request envelope to the SW, and normalize transport vs. handler errors.
  * The SW handler (request_router) drives chrome.tabs and waits for load-complete.
  */
-const sendNavRequest = async (ctx, extensionId, tool, payload, nextSteps) => {
+const sendNavRequest = async (ctx, extensionId, tool, payload, nextSteps, cdpNextSteps) => {
     const target = resolveTarget$1(ctx, extensionId);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the extension reloaded at chrome://extensions.',
         ]);
     }
@@ -14913,12 +15473,12 @@ const sendNavRequest = async (ctx, extensionId, tool, payload, nextSteps) => {
         });
     }
     catch (err) {
-        return errorResponse(`${tool} failed: ${err.message}`, [
+        return errorResponse$1(`${tool} failed: ${err.message}`, [
             `IPC request did not complete. Confirm the SW is connected and the ${tool} handler is wired in the SW.`,
         ]);
     }
     if (response.error) {
-        return errorResponse(`${tool} nmh error: ${response.error.message}`, [
+        return errorResponse$1(`${tool} nmh error: ${response.error.message}`, [
             'The SW rejected the navigation (invalid URL, no active tab, or chrome.tabs threw). Pass an explicit tab_id, or open a tab first.',
         ]);
     }
@@ -14926,7 +15486,10 @@ const sendNavRequest = async (ctx, extensionId, tool, payload, nextSteps) => {
         extensionId: target.extensionId,
         ...response.payload,
     };
-    return okResponse(data, [...nextSteps]);
+    const steps = cdpNextSteps !== undefined && isCdpConnectionId(target.extensionId)
+        ? cdpNextSteps((response.payload ?? {}))
+        : nextSteps;
+    return okResponse(data, [...steps]);
 };
 const navigateHandler = async (args, ctx) => sendNavRequest(ctx, args.extension_id, 'pdl_navigate', {
     url: args.url,
@@ -14941,6 +15504,8 @@ const newTabHandler = async (args, ctx) => sendNavRequest(ctx, args.extension_id
     ...(args.timeout_ms !== undefined ? { timeout_ms: args.timeout_ms } : {}),
 }, [
     'Opened a new tab. Returns { tabId, url, status, created:true }. Pass the returned tabId to other pwa-debug tools (react_tree, console_tail, pdl_click, …) to target this tab; without tab_id they use the active tab.',
+], (payload) => [
+    `Opened a new tab as its own CDP connection "${String(payload['connectionId'])}" (tabId is null over CDP). Pass extension_id: "${String(payload['connectionId'])}" to the other pwa-debug tools to target it; the connection you called this on still targets the original tab.`,
 ]);
 const navigateTool = Object.freeze({
     name: 'pdl_navigate',
@@ -15008,7 +15573,7 @@ const isToolErrorPayload = (v) => {
 const makeActionHandler = (spec) => async (args, ctx) => {
     const target = resolveTarget$1(ctx, args['extension_id']);
     if (!target.ok) {
-        return errorResponse(target.error, [
+        return errorResponse$1(target.error, [
             'Call host_status to see activeConnections. If empty, ensure host_register_extension has been called and the extension reloaded.',
         ]);
     }
@@ -15031,17 +15596,17 @@ const makeActionHandler = (spec) => async (args, ctx) => {
         });
     }
     catch (err) {
-        return errorResponse(`${spec.tool} failed: ${err.message}`, [
+        return errorResponse$1(`${spec.tool} failed: ${err.message}`, [
             `IPC request did not complete. Confirm the SW is connected and the ${spec.tool} handler is wired in the SW.`,
         ]);
     }
     if (response.error) {
-        return errorResponse(`${spec.tool} nmh error: ${response.error.message}`, [
+        return errorResponse$1(`${spec.tool} nmh error: ${response.error.message}`, [
             'NMH-mode rejected the request (no active tab, page-bridge timeout on a chrome:// page, or the page-world handler threw).',
         ]);
     }
     if (isToolErrorPayload(response.payload)) {
-        return errorResponse(`${spec.tool}: ${response.payload.error.message}`, [
+        return errorResponse$1(`${spec.tool}: ${response.payload.error.message}`, [
             'Locator did not resolve (not found / ambiguous) or a required param was missing. Refine the locator (add nth/require_unique) or check the value/label/key arg.',
         ]);
     }
@@ -15065,11 +15630,692 @@ const interactionActionTools = Object.freeze(ACTION_TOOL_SPECS.map((spec) => {
     });
 }));
 
+const topic = (t) => Object.freeze({
+    ...t,
+    guide: Object.freeze([...t.guide]),
+    tools: Object.freeze([...t.tools]),
+});
+/** What pwa-debug can do, shown first in the pdl_help overview. */
+const HELP_CAPABILITIES = Object.freeze([
+    'Drive the page yourself: navigate, open tabs, click, fill, submit, type, scroll, drag and touch gestures (topic "control"). Do not ask the user to do these.',
+    'Read what the page does as data: persistent console, network and error capture that survives reloads, plus evaluate (topic "reading_state"). No screenshots needed to read content.',
+    'See inside the app: React/Vue/Svelte/Solid component trees and state (topic "frameworks"), and Redux/Zustand/Pinia/Jotai stores (topic "stores").',
+    'Diagnose the PWA layer: service worker, caches, installability, storage, IndexedDB and version skew (topic "pwa").',
+    'Capture library popups such as wallet modals, including shadow DOM, and correlate their failures (topic "popups").',
+    "Work on the user's real logged-in profile, or a sandbox profile with the extension preloaded (topic \"browser\").",
+    'Drive Android phones (Chrome tabs and installed PWAs) with the same tools: pdl_android_attach finds the phone over adb and attaches in one call (topic "mobile").',
+]);
+/** The standard startup sequence, shown in the pdl_help overview. */
+const HELP_WORKFLOW = Object.freeze([
+    'host_status: confirm the host is installed and an extension is connected.',
+    'If not connected: pdl_check_setup, then pdl_launch_browser (mode sandbox-persistent is the most reliable).',
+    'session_ping: confirm the page in the active tab is reachable.',
+    'pdl_navigate to the page under test, act with the pdl_* interaction tools, then read results with the tail, framework, store and PWA tools.',
+    'Follow next_steps in every response.',
+]);
+/**
+ * The pdl_help catalog. Every registered tool must appear in at least one
+ * topic's `tools` list, and every listed tool must exist; tests enforce both,
+ * so adding or renaming a tool forces this file to be updated.
+ */
+const HELP_TOPICS = Object.freeze([
+    topic({
+        id: 'getting_started',
+        title: 'Getting started',
+        summary: 'What pwa-debug is for, the startup sequence and the habits that make it work well.',
+        guide: [
+            "pwa-debug connects you to a web app or PWA running in the user's real browser profile (logged-in sessions, real extensions). It reads framework, store, service-worker, cache and storage state as JSON, and it lets you drive the page.",
+            'Startup sequence:',
+            '1. host_status: is the host installed and is an extension connected (activeConnections)?',
+            '2. Nothing connected? pdl_check_setup lists the gaps and the exact fixes.',
+            '3. pdl_launch_browser opens a browser with the extension and a debug port (mode=sandbox-persistent preloads the extension; the default mode=existing uses the normal profile).',
+            '4. session_ping confirms the full round trip reaches the page in the active tab.',
+            'Then work directly:',
+            '- Go to pages yourself with pdl_navigate (current tab) or pdl_new_tab. Do not ask the user to navigate.',
+            '- Interact yourself with pdl_click, pdl_fill, pdl_submit, pdl_key_press, pdl_tap, pdl_swipe and the other pdl_* actions. See topic "control".',
+            '- Read what happened from console_tail, network_tail and error_tail, and read app state from the framework and store tools. See topic "reading_state". No screenshots are needed to know what the page contains.',
+            'Every response has next_steps written for you. Follow them; they carry the fix for the state you are actually in.',
+        ],
+        tools: ['host_status', 'pdl_check_setup', 'pdl_launch_browser', 'session_ping', 'pdl_help'],
+    }),
+    topic({
+        id: 'control',
+        title: 'Driving the page: navigation and interaction',
+        summary: 'You can navigate, open tabs, click, type, submit, scroll and do touch gestures yourself.',
+        guide: [
+            'You control the page. Do not ask the user to navigate, click or type; do it and then read the result.',
+            'Navigation: pdl_navigate({ url }) drives the active tab (or tab_id) and waits for load. pdl_new_tab({ url }) opens a tab and returns its tabId; pass that tabId to later calls to target it. The scheme may be omitted (https:// is assumed).',
+            'Interaction tools all take one locator. Pick one way to find the element:',
+            '- selector: a CSS selector.',
+            '- role (+ name): ARIA role and accessible name, e.g. role="button", name="Save".',
+            '- text (+ exact): visible text.',
+            '- stable_id (+ framework): a component id from react_tree / vue_tree / svelte_components / solid_*, so you can act on a component by identity.',
+            'If several elements match, add nth (0-based) or set require_unique=true to fail instead of guessing.',
+            'Events are real native sequences (pointer, mouse, input, change, touch), so React and Vue delegated handlers fire and controlled inputs update.',
+            'Touch gestures (pdl_tap, pdl_double_tap, pdl_long_press, pdl_swipe, pdl_pinch) take direction/distance/duration/steps, not hand-built coordinates.',
+            'After acting, verify with data: error_tail for exceptions, network_tail for requests, the framework/store tools for state changes.',
+        ],
+        tools: [
+            'pdl_navigate', 'pdl_new_tab',
+            'pdl_click', 'pdl_dblclick', 'pdl_hover', 'pdl_focus', 'pdl_blur',
+            'pdl_fill', 'pdl_type_sequence', 'pdl_key_press', 'pdl_submit',
+            'pdl_check', 'pdl_uncheck', 'pdl_select_option',
+            'pdl_scroll', 'pdl_drag',
+            'pdl_tap', 'pdl_double_tap', 'pdl_long_press', 'pdl_swipe', 'pdl_pinch',
+        ],
+    }),
+    topic({
+        id: 'reading_state',
+        title: 'Reading what the page is doing',
+        summary: 'Console, network, errors and ad-hoc evaluation, as structured data.',
+        guide: [
+            'Capture runs continuously and survives navigations and reloads, so you can act first and read afterwards.',
+            'console_tail, network_tail and error_tail are cursor-paginated and take one filter object: filter.level (console only), filter.pattern.include / .exclude (regex sources), filter.since / filter.until (cursors), filter.limit (1..1000). Pass the previous response\'s cursor as filter.since to get only new entries.',
+            'error_tail includes uncaught errors and unhandled promise rejections with stacks. Resolve minified frames with source_map_resolve.',
+            'evaluate runs one JavaScript expression in the page and returns a serialized value (16KB cap). Use it for anything the dedicated tools do not cover.',
+            'recent_events is a quick, unfiltered look at the latest captured events of any kind.',
+            'Prefer these over screenshots: they give exact text, values and errors. Take a screenshot (chrome-devtools-mcp) only to judge visual layout.',
+        ],
+        tools: ['console_tail', 'network_tail', 'error_tail', 'evaluate', 'recent_events', 'source_map_resolve'],
+    }),
+    topic({
+        id: 'frameworks',
+        title: 'Framework introspection',
+        summary: 'React, Vue, Svelte and Solid component trees, state and lookup.',
+        guide: [
+            'React: react_tree lists components with stable ids; react_get_state returns props, state and hooks for one id; react_find_by_text / react_find_by_role find components by what they render.',
+            'Vue 3: vue_tree, vue_get_state, vue_find_by_text, vue_find_by_role, with the same shape as React.',
+            'Svelte: svelte_components lists rendered components with source locations (dev builds); find by text/role. Svelte exposes no instance state.',
+            'Solid: solid_detect, then element-level find by text/role. No component tree or state without @solid-devtools.',
+            'Stable ids survive re-renders, and the interaction tools accept them (stable_id + framework), so you can find a component and then click it.',
+        ],
+        tools: [
+            'react_tree', 'react_get_state', 'react_find_by_text', 'react_find_by_role',
+            'vue_tree', 'vue_get_state', 'vue_find_by_text', 'vue_find_by_role',
+            'svelte_components', 'svelte_find_by_text', 'svelte_find_by_role',
+            'solid_detect', 'solid_find_by_text', 'solid_find_by_role',
+        ],
+    }),
+    topic({
+        id: 'stores',
+        title: 'Store introspection',
+        summary: 'Read, subscribe to and dispatch on Redux, Zustand, Pinia and Jotai stores.',
+        guide: [
+            'store_get_state / store_subscribe / store_tail / store_dispatch work across Redux, Zustand, Pinia and Jotai through one contract; pass framework to pick a store when several exist.',
+            'redux_* are the Redux-specific versions (JSONPath-lite slice extraction, change-delta tail).',
+            'Subscribe first, act on the page, then tail to see exactly which state changed.',
+            'Dispatch is off by default. It needs the setting capture.stores.allowDispatch=true (settings_set); ask the user before enabling it.',
+        ],
+        tools: [
+            'store_get_state', 'store_subscribe', 'store_tail', 'store_dispatch',
+            'redux_get_state', 'redux_subscribe', 'redux_tail', 'redux_dispatch',
+        ],
+    }),
+    topic({
+        id: 'pwa',
+        title: 'PWA runtime diagnostics',
+        summary: 'Service worker, caches, installability, storage and update/version-skew analysis.',
+        guide: [
+            'Start broad: pwa_status (display mode, controller, permissions, capability matrix) and sw_status (installing/waiting/active workers, and whether an update is stuck waiting).',
+            '"Why is my update not showing?": sw_status for a waiting worker, then pwa_update_analyze, which correlates SW state, cache ages and recent 404s into a verdict.',
+            'Stale content: cache_list, then cache_inspect for entry ages and headers, then cache_match to see which cache serves a URL.',
+            "Won't install: pwa_installability returns gaps and fixes.",
+            'Data: storage_get (localStorage/sessionStorage), idb_list then idb_query for IndexedDB. All reads are read-only.',
+            'sw_lifecycle_tail streams updatefound/statechange/controllerchange events.',
+            'pwa_snapshot captures one capped blob of SW, store, storage, IndexedDB and cache state for a bug report.',
+        ],
+        tools: [
+            'pwa_status', 'sw_status', 'sw_lifecycle_tail', 'pwa_update_analyze',
+            'cache_list', 'cache_inspect', 'cache_match', 'pwa_installability',
+            'storage_get', 'idb_list', 'idb_query', 'pwa_snapshot',
+        ],
+    }),
+    topic({
+        id: 'popups',
+        title: 'Library popups and wallet modals',
+        summary: 'WalletConnect/RainbowKit/SDK modals, including shadow DOM, and their failures.',
+        guide: [
+            'popup_tail streams detected library popups (shadow-root and nested content included).',
+            'popup_failures links a popup\'s auth/connect failure to the console errors and failed requests during its open window.',
+            'For a flaky flow, popup_record start, reproduce, popup_record stop, then popup_replay (flat, primary or tree view). Recordings are immune to ring-buffer eviction.',
+        ],
+        tools: ['popup_tail', 'popup_failures', 'popup_record', 'popup_replay'],
+    }),
+    topic({
+        id: 'recording',
+        title: 'Recording and replay',
+        summary: 'When to use session_record (rarely) and what it is for.',
+        guide: [
+            'You do not need to record to observe the page. Capture (console, network, errors, popups) is always on, and state tools read live.',
+            'session_record start/stop records an rrweb session; session_replay pages through it. Use it to keep a reproducible sequence for a bug report or for later analysis, not to watch what is happening now.',
+            'For popups specifically, popup_record is the targeted equivalent.',
+        ],
+        tools: ['session_record', 'session_replay'],
+    }),
+    topic({
+        id: 'browser',
+        title: 'Launching and managing the browser',
+        summary: 'Profile modes, ports, status and closing.',
+        guide: [
+            'pdl_launch_browser modes:',
+            "- existing (default): the user's normal profile. Attaches if the debug port is live; if the browser runs without one, it opens a new window and reports degraded. The extension must already be installed there (pdl_install_extension).",
+            '- sandbox-persistent: a dedicated dev profile under ~/.pwa-debug/profiles/<browser>/ with the extension preloaded. Most reliable choice.',
+            '- sandbox-temp: same, in a throwaway profile removed on shutdown.',
+            'Args: browser (chrome|chromium|edge|brave|vivaldi|opera, default system browser), port (default 9222), packaging (native|snap|flatpak), isolateExtensions (sandbox only; false keeps other extensions), extraArgs (startup flags, cold spawn only).',
+            'Branded Google Chrome 137+ no longer honours --load-extension, so sandbox preload does not work there; prefer Brave, Chromium or Edge for sandbox modes.',
+            'pdl_browser_status shows managed launches with a live port re-probe; pdl_close_browser closes them.',
+        ],
+        tools: ['pdl_launch_browser', 'pdl_browser_status', 'pdl_close_browser'],
+    }),
+    topic({
+        id: 'chrome_devtools',
+        title: 'Working alongside chrome-devtools-mcp',
+        summary: 'Which server to use for what, and how they share one browser.',
+        guide: [
+            'pwa-debug and chrome-devtools-mcp are separate MCP servers that share one browser. pdl_launch_browser opens it with a debug port; chrome-devtools-mcp attaches to that port via --browserUrl.',
+            'Use pwa-debug for app state (framework, stores, SW, cache, storage), persistent console/network/error capture, navigation and interaction on the real profile.',
+            'Use chrome-devtools-mcp for screenshots, performance traces, Lighthouse, device/network emulation and accessibility snapshots.',
+            'pdl_register_chrome_devtools registers it pinned to the right port. It changes the user\'s global MCP config, so ask first. pdl_check_setup flags it if it is unregistered or pinned to the wrong port.',
+        ],
+        tools: ['pdl_register_chrome_devtools', 'pdl_check_setup'],
+    }),
+    topic({
+        id: 'mobile',
+        title: 'Phones and mobile testing',
+        summary: 'Drive an Android phone (Chrome tab or installed PWA) with the same tools, in one attach call.',
+        guide: [
+            "The extension cannot run in Android Chrome, so pwa-debug reaches phones over adb + the DevTools Protocol. Once attached, every pwa-debug tool (framework, store, PWA, interaction, evaluate, console/network/error capture, navigation) works on the phone tab, and the user watches it happen on the phone.",
+            'Tell the user up front what they need: Developer options + USB debugging on, phone on USB, "Allow USB debugging" accepted, and Chrome open on the phone. Do not wait for them to discover it.',
+            '1. pdl_android_devices: lists phones with their state and DevTools sockets. Its next_steps say exactly what to ask the user when something is missing (adb not installed, unauthorized, offline, Chrome not running).',
+            '2. pdl_android_attach in one call:',
+            '   - testing a desktop dev server: pdl_android_attach({ open_url: "http://localhost:5173", reverse_ports: [5173] }) maps the port to the phone and opens the app in a new tab with the bridge in place before it loads;',
+            '   - a tab already open on the phone: pdl_android_attach({ url_contains: "myapp" }) (add reload: true if a framework/store hook must exist at startup);',
+            '   - an app WebView: socket: "webview" or the app package (the app must enable WebView debugging).',
+            '3. Pass the returned connection id ("cdp:127.0.0.1:<port>:<tab>") as extension_id to every other tool: pdl_navigate, pdl_click, pdl_tap, pdl_swipe, react_tree, store_get_state, console_tail, network_tail, sw_status, ...',
+            'pdl_new_tab with that extension_id opens further phone tabs (each its own connection). pdl_cdp_detach drops a connection. adb forwards/reverses pwa-debug created are removed when the host shuts down.',
+            'Everything works on the phone except recent_events (use the tail tools instead). Capture settings (sites.allowlist / blocklist / readControls, capture.enabledKinds, capture.filters) apply to phone connections exactly as to the extension. If the tab crashes, calls say so; pdl_navigate reloads it.',
+            'Manual fallback without the Android tools: `adb forward tcp:9223 localabstract:chrome_devtools_remote`, then pdl_cdp_targets / pdl_cdp_attach with browser_url "9223".',
+            'The user can mirror the phone screen on the desktop at chrome://inspect/#devices (Inspect); pwa-debug does not need it.',
+        ],
+        tools: [
+            'pdl_android_devices', 'pdl_android_attach',
+            'pdl_cdp_targets', 'pdl_cdp_attach', 'pdl_cdp_detach',
+            'pdl_tap', 'pdl_swipe', 'pdl_pinch', 'pdl_long_press',
+        ],
+    }),
+    topic({
+        id: 'targeting',
+        title: 'Targeting a connection and a tab',
+        summary: 'extension_id and tab_id, and what happens when several are connected.',
+        guide: [
+            'With no extension_id, tools target the single connected extension. If several are connected (several browsers or profiles), the call errors; pass extension_id from host_status activeConnections.',
+            'With no tab_id, page tools target the active tab of the last-focused window. pdl_new_tab returns a tabId to pass explicitly.',
+            'CDP connections (phones, browsers without the extension) have ids like "cdp:127.0.0.1:9223:AB12CD34" and appear in host_status activeConnections with kind "cdp". Pass that id as extension_id; tab_id is ignored because each CDP connection is exactly one tab.',
+            'If session_ping returns pageWorld:null with a pageWorldError code, follow its next_steps (refresh the tab, Brave Shields, CSP, restricted URL, etc.).',
+        ],
+        tools: ['host_status', 'session_ping', 'pdl_android_attach', 'pdl_cdp_targets', 'pdl_cdp_attach'],
+    }),
+    topic({
+        id: 'settings',
+        title: 'Settings',
+        summary: 'Capture filters, site allow/block lists, disk spill, launch defaults, store dispatch.',
+        guide: [
+            'settings_list_schema lists every key with type, default and description; settings_get reads current values; settings_set writes one (validated, applied live to the extension).',
+            'Common keys: sites.allowlist / sites.blocklist, capture.enabledKinds, capture.diskSpill.*, launch.defaultPort, capture.stores.allowDispatch.',
+        ],
+        tools: ['settings_list_schema', 'settings_get', 'settings_set'],
+    }),
+    topic({
+        id: 'setup',
+        title: 'Installing and registering the host',
+        summary: 'Native-messaging registration, the unpacked extension and resets.',
+        guide: [
+            'pdl_check_setup first: it reports every gap with the exact remediation.',
+            'host_register_extension(id) / host_unregister_extension(id) add or remove an extension id across per-browser manifests; host_list_registrations reads them.',
+            'pdl_install_extension copies the bundled extension to a folder for Load unpacked (Developer mode) in the normal profile. Sandbox launch modes do not need it.',
+            'host_reset is destructive cleanup for re-bootstrapping; confirm with the user first.',
+        ],
+        tools: [
+            'pdl_check_setup', 'host_register_extension', 'host_unregister_extension',
+            'host_list_registrations', 'host_reset', 'pdl_install_extension', 'host_status',
+        ],
+    }),
+    topic({
+        id: 'troubleshooting',
+        title: 'Troubleshooting',
+        summary: 'The verification sequence and the common failure codes.',
+        guide: [
+            'Verify in order: host_status (installed? connected?) -> pdl_check_setup (gaps) -> pdl_browser_status (port live? extension heartbeat?) -> session_ping (page reachable?).',
+            'No connection after launch: the extension id may not be whitelisted; pdl_check_setup detects it and gives the host_register_extension fix.',
+            'session_ping pageWorldError codes: cs_not_attached_refresh_tab (hard-refresh the tab), page_blocks_scripts (content blocker / Brave Shields), page_world_blocked (site CSP), restricted_url (chrome://, Web Store, file://), no_active_tab.',
+            'A tool times out: confirm with session_ping that the tab still responds; a navigation in flight or a frozen tab is the usual cause.',
+        ],
+        tools: ['host_status', 'pdl_check_setup', 'pdl_browser_status', 'session_ping'],
+    }),
+]);
+
+const MAX_SUGGESTIONS = 5;
+const SUMMARY_MAX_CHARS = 220;
+const defOf = (schema) => schema._def;
+/** Strip optional/default/nullable/effects wrappers down to the value type. */
+const unwrap = (schema) => {
+    const def = defOf(schema);
+    switch (def.typeName) {
+        case 'ZodOptional':
+        case 'ZodDefault':
+        case 'ZodNullable':
+            return def.innerType !== undefined ? unwrap(def.innerType) : schema;
+        case 'ZodEffects':
+            return def.schema !== undefined ? unwrap(def.schema) : schema;
+        default:
+            return schema;
+    }
+};
+const enumValues = (schema) => {
+    const def = defOf(schema);
+    if (def.typeName === 'ZodEnum' && Array.isArray(def.values)) {
+        return def.values.map(String);
+    }
+    if (def.typeName === 'ZodNativeEnum' && def.values !== undefined) {
+        return Object.values(def.values).map(String);
+    }
+    return undefined;
+};
+const typeLabel = (raw) => {
+    const schema = unwrap(raw);
+    const def = defOf(schema);
+    switch (def.typeName) {
+        case 'ZodString':
+            return 'string';
+        case 'ZodNumber':
+            return (def.checks ?? []).some((c) => c.kind === 'int') ? 'integer' : 'number';
+        case 'ZodBoolean':
+            return 'boolean';
+        case 'ZodEnum':
+        case 'ZodNativeEnum':
+            return 'enum';
+        case 'ZodLiteral':
+            return JSON.stringify(def.value);
+        case 'ZodArray':
+            return def.type !== undefined ? `${typeLabel(def.type)}[]` : 'array';
+        case 'ZodObject': {
+            const keys = def.shape !== undefined ? Object.keys(def.shape()) : [];
+            return keys.length > 0 ? `object { ${keys.join(', ')} }` : 'object';
+        }
+        case 'ZodUnion':
+            return (def.options ?? []).map(typeLabel).join(' | ') || 'union';
+        case 'ZodRecord':
+            return 'record';
+        default:
+            return 'any';
+    }
+};
+const describeParam = (name, schema) => {
+    const values = enumValues(unwrap(schema));
+    const description = schema.description ?? unwrap(schema).description;
+    return Object.freeze({
+        name,
+        type: typeLabel(schema),
+        required: !schema.isOptional(),
+        ...(description !== undefined ? { description } : {}),
+        ...(values !== undefined ? { values: Object.freeze([...values]) } : {}),
+    });
+};
+/** Document every parameter of a tool from its Zod raw shape. */
+const describeParams = (shape) => Object.freeze(Object.entries(shape).map(([name, schema]) => describeParam(name, schema)));
+/** First sentence of a description, capped, for one-line tool listings. */
+const summarize = (description) => {
+    const firstSentence = description.split(/(?<=[.!?])\s/)[0] ?? description;
+    return firstSentence.length > SUMMARY_MAX_CHARS
+        ? `${firstSentence.slice(0, SUMMARY_MAX_CHARS - 1)}…`
+        : firstSentence;
+};
+const ok$2 = (data, next_steps) => Object.freeze({ ok: true, data, next_steps: Object.freeze([...next_steps]) });
+const fail$4 = (error, next_steps) => Object.freeze({ ok: false, error, next_steps: Object.freeze([...next_steps]) });
+/** pdl_help with no arguments: capabilities, workflow, and the topic index. */
+const renderOverview = (topics, toolCount) => ok$2({
+    title: 'pwa-debug: how to use it',
+    capabilities: HELP_CAPABILITIES,
+    workflow: HELP_WORKFLOW,
+    how_to_use_help: [
+        'pdl_help() returns this overview.',
+        'pdl_help({ topic: "<id>" }) returns a how-to for one area (ids below).',
+        'pdl_help({ tool: "<name>" }) returns one tool\'s full description and parameters, read from the live tool registry.',
+    ],
+    topics: topics.map((t) => ({ id: t.id, title: t.title, summary: t.summary })),
+    toolCount,
+}, [
+    'New to this session? Read pdl_help({ topic: "getting_started" }) and pdl_help({ topic: "control" }).',
+    'Then start with host_status.',
+]);
+/** pdl_help({ topic }): the guide plus a one-line summary per covered tool. */
+const renderTopic = (topic, tools) => {
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    return ok$2({
+        topic: topic.id,
+        title: topic.title,
+        guide: topic.guide,
+        tools: topic.tools
+            .map((name) => byName.get(name))
+            .filter((t) => t !== undefined)
+            .map((t) => ({ name: t.name, summary: summarize(t.description) })),
+    }, ['pdl_help({ tool: "<name>" }) gives the parameters for any tool listed here.']);
+};
+/** pdl_help({ tool }): full description, parameters, and covering topics. */
+const renderToolHelp = (tool, topics) => {
+    const covering = topics.filter((t) => t.tools.includes(tool.name));
+    return ok$2({
+        tool: tool.name,
+        description: tool.description,
+        parameters: describeParams(tool.inputSchema),
+        topics: covering.map((t) => t.id),
+    }, covering.length > 0
+        ? [`For how this tool fits a workflow: pdl_help({ topic: "${covering[0].id}" }).`]
+        : []);
+};
+const tokens = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1);
+/** Rank candidates by substring and token overlap with the query. */
+const suggest = (query, candidates) => {
+    const q = query.toLowerCase();
+    const qTokens = tokens(query);
+    return candidates
+        .map((c) => {
+        const key = c.key.toLowerCase();
+        const text = c.text.toLowerCase();
+        const substring = key.includes(q) || q.includes(key) ? 3 : 0;
+        const inText = text.includes(q) ? 2 : 0;
+        const overlap = qTokens.filter((w) => text.includes(w)).length;
+        return { key: c.key, score: substring + inText + overlap };
+    })
+        .filter((c) => c.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_SUGGESTIONS)
+        .map((c) => c.key);
+};
+const resolveTool = (name, topics, tools) => {
+    const exact = tools.find((t) => t.name === name) ??
+        tools.find((t) => t.name.toLowerCase() === name.toLowerCase());
+    if (exact !== undefined)
+        return renderToolHelp(exact, topics);
+    const suggestions = suggest(name, tools.map((t) => ({ key: t.name, text: `${t.name} ${t.description}` })));
+    return fail$4(`unknown tool: ${name}`, [
+        suggestions.length > 0
+            ? `Closest tools: ${suggestions.join(', ')}.`
+            : 'No similar tool names.',
+        'pdl_help() lists the topics; each topic lists its tools.',
+    ]);
+};
+const resolveTopic = (id, topics, tools) => {
+    const exact = topics.find((t) => t.id === id.toLowerCase());
+    if (exact !== undefined)
+        return renderTopic(exact, tools);
+    const suggestions = suggest(id, topics.map((t) => ({ key: t.id, text: `${t.id} ${t.title} ${t.summary}` })));
+    return fail$4(`unknown topic: ${id}`, [
+        suggestions.length > 0
+            ? `Closest topics: ${suggestions.join(', ')}.`
+            : `Topics: ${topics.map((t) => t.id).join(', ')}.`,
+    ]);
+};
+/** Dispatch a help query. A tool name wins when both topic and tool are given. */
+const resolveHelp = (query, topics, tools) => {
+    if (query.tool !== undefined && query.tool.trim() !== '') {
+        return resolveTool(query.tool.trim(), topics, tools);
+    }
+    if (query.topic !== undefined && query.topic.trim() !== '') {
+        return resolveTopic(query.topic.trim(), topics, tools);
+    }
+    return renderOverview(topics, tools.length);
+};
+
+const inputSchema = {
+    topic: stringType()
+        .optional()
+        .describe(`How-to topic id: ${HELP_TOPICS.map((t) => t.id).join(' | ')}. Omit for the overview.`),
+    tool: stringType()
+        .optional()
+        .describe('A tool name, e.g. "pdl_click", to get its full description and parameters.'),
+};
+/**
+ * Build the pdl_help tool. getTools is read lazily at call time so the registry
+ * index can include pdl_help in the very list pdl_help documents.
+ */
+const createHelpTool = (getTools) => Object.freeze({
+    name: 'pdl_help',
+    description: "How to use pwa-debug, as data. Call with no args for the overview: what pwa-debug can do (you can navigate, click, type and read app state yourself, with no screenshots needed), the startup sequence, and the list of how-to topics. Pass topic (e.g. 'control', 'reading_state', 'mobile', 'pwa') for a how-to, or tool (e.g. 'pdl_click') for that tool's full description and parameters, read from the live registry. Cheap, no side effects; call it whenever you are unsure what pwa-debug can do or how to call a tool.",
+    inputSchema,
+    handler: async (args) => {
+        const result = resolveHelp({ ...(args.topic !== undefined ? { topic: args.topic } : {}), ...(args.tool !== undefined ? { tool: args.tool } : {}) }, HELP_TOPICS, getTools());
+        return result.ok
+            ? okResponse(result.data, result.next_steps)
+            : errorResponse$1(result.error ?? 'help lookup failed', result.next_steps);
+    },
+});
+
+const PHONE_HINT = 'For an Android phone: forward its DevTools socket first with `adb forward tcp:9223 localabstract:chrome_devtools_remote` (run it yourself if you have a shell, otherwise give the user that command), then use browser_url "9223". To load a desktop dev server on the phone, also run `adb reverse tcp:<port> tcp:<port>` so the phone can open http://localhost:<port>.';
+const NO_CDP = errorResponse$1('CDP connections are not available in this host process', [
+    'This host was started without the CDP transport (older build or test context). Rebuild/restart the pwa-debug host.',
+]);
+const targetsSchema = {
+    browser_url: stringType()
+        .min(1)
+        .describe("Debug endpoint: a port ('9222'), 'host:port', or an http/ws URL."),
+};
+const attachSchema$1 = {
+    browser_url: stringType()
+        .min(1)
+        .describe("Debug endpoint: a port ('9222'), 'host:port', or an http/ws URL."),
+    target_id: stringType().min(1).optional().describe('Page target id (or its prefix) from pdl_cdp_targets.'),
+    url_contains: stringType().min(1).optional().describe('Attach to the page whose URL contains this text.'),
+    reload: booleanType()
+        .optional()
+        .describe('Reload after attaching so the bridge runs before the app code (needed for hooks that must exist at startup).'),
+};
+const detachSchema = {
+    connection_id: stringType().min(1).describe("Connection id returned by pdl_cdp_attach ('cdp:...')."),
+};
+const targetsHandler = async (args, ctx) => {
+    if (ctx.cdp === undefined)
+        return NO_CDP;
+    const r = await ctx.cdp.targets(args.browser_url);
+    if (!r.ok)
+        return errorResponse$1(r.error, [PHONE_HINT, 'Desktop: the port pdl_launch_browser reported (default 9222).']);
+    return okResponse({
+        browserUrl: r.browserUrl,
+        browser: r.version.browser,
+        ...(r.version.androidPackage !== undefined ? { androidPackage: r.version.androidPackage } : {}),
+        targets: r.targets.map((t) => ({
+            id: t.id,
+            connectionId: t.connectionId,
+            attached: t.attached,
+            title: t.title,
+            url: t.url,
+        })),
+    }, [
+        r.targets.length === 0
+            ? 'No page is open on this endpoint. Open one (on a phone: ask the user to open Chrome, or attach to any page and use pdl_new_tab).'
+            : 'Attach with pdl_cdp_attach({ browser_url, target_id }) or url_contains. Already-attached pages show attached:true.',
+    ]);
+};
+const attachHandler$1 = async (args, ctx) => {
+    if (ctx.cdp === undefined)
+        return NO_CDP;
+    const r = await ctx.cdp.attach({
+        browserUrl: args.browser_url,
+        ...(args.target_id !== undefined ? { targetId: args.target_id } : {}),
+        ...(args.url_contains !== undefined ? { urlContains: args.url_contains } : {}),
+        ...(args.reload !== undefined ? { reload: args.reload } : {}),
+    });
+    if (!r.ok) {
+        return errorResponse$1(r.error, [
+            ...(r.candidates !== undefined && r.candidates.length > 0
+                ? [`Pages on this endpoint: ${r.candidates.map((c) => `${c.id.slice(0, 8)} ${c.url}`).join(' | ')}. Pass target_id or url_contains.`]
+                : []),
+            PHONE_HINT,
+        ]);
+    }
+    const status = (r.status ?? {});
+    return okResponse({
+        connectionId: r.connectionId,
+        title: r.target.title,
+        url: r.target.url,
+        reused: r.reused,
+        bridge: r.status,
+    }, [
+        `Pass extension_id: "${r.connectionId}" to the other pwa-debug tools (session_ping, react_tree, pdl_click, store_get_state, console_tail, network_tail, pdl_navigate, ...). If this is the only live connection you may omit it.`,
+        status.captures === 'skipped_extension_present'
+            ? 'The pwa-debug extension is also running in this page, so console/network/error capture stays on the extension connection: read the tails with the extension id (host_status), not this one. Requests through this connection work normally.'
+            : 'Capture is live: console, network and errors from this page now land in console_tail / network_tail / error_tail for this connection id.',
+        'If framework/store tools find nothing that should be there, attach again with reload:true so the bridge is in place before the app starts.',
+        'recent_events is not available over CDP; use the tail tools.',
+    ]);
+};
+const detachHandler = async (args, ctx) => {
+    if (ctx.cdp === undefined)
+        return NO_CDP;
+    const detached = await ctx.cdp.detach(args.connection_id);
+    return detached
+        ? okResponse({ connectionId: args.connection_id, detached: true }, [
+            'The page is left as it was; capture for this connection has stopped. Already-captured events stay queryable.',
+        ])
+        : errorResponse$1(`no CDP connection ${args.connection_id}`, ['host_status lists live connections (kind "cdp").']);
+};
+const cdpTargetsTool = Object.freeze({
+    name: 'pdl_cdp_targets',
+    description: `List the pages open on a Chrome DevTools Protocol endpoint (desktop debug port or an Android phone over adb), with the connection id each would get and whether it is already attached. Use it to reach pages the pwa-debug extension cannot run in: Android Chrome tabs, installed PWAs on a phone, or a desktop browser without the extension. Args: { browser_url }. ${PHONE_HINT}`,
+    inputSchema: targetsSchema,
+    handler: targetsHandler,
+});
+const cdpAttachTool = Object.freeze({
+    name: 'pdl_cdp_attach',
+    description: `Attach pwa-debug to one page over CDP and inject its page-world bridge, so every pwa-debug tool (framework, store, PWA, interaction, evaluate, console/network/error capture, navigation) works on that page exactly as through the extension. Returns a connection id ('cdp:host:port:target') to pass as extension_id to the other tools. Picks the page by target_id, by url_contains, or the single regular page when only one is open. reload:true reloads so the bridge is present before the app starts. Args: { browser_url, target_id?, url_contains?, reload? }. ${PHONE_HINT}`,
+    inputSchema: attachSchema$1,
+    handler: attachHandler$1,
+});
+const cdpDetachTool = Object.freeze({
+    name: 'pdl_cdp_detach',
+    description: 'Detach a CDP page connection made by pdl_cdp_attach: removes the injected bridge registration and stops capture for it. Args: { connection_id }.',
+    inputSchema: detachSchema,
+    handler: detachHandler,
+});
+const CDP_TOOLS = Object.freeze([cdpTargetsTool, cdpAttachTool, cdpDetachTool]);
+
+const NO_ANDROID = errorResponse$1('Android support is not available in this host process', [
+    'This host was started without the Android bridge (older build or test context). Rebuild/restart the pwa-debug host.',
+]);
+/** What to tell the user for each way reaching the phone can fail. */
+const STEPS_BY_KIND = Object.freeze({
+    not_installed: [
+        'adb (Android platform-tools) is not installed or not found. Ask the user to install it: https://developer.android.com/tools/releases/platform-tools (or their package manager, e.g. `sudo apt install adb`), or set ANDROID_HOME to their SDK.',
+    ],
+    no_device: [
+        'No phone is visible to adb. Ask the user to: enable Developer options (Settings > About phone > tap Build number 7 times), turn on USB debugging (Settings > Developer options), connect the phone by USB (a data cable, not charge-only) and choose "File transfer" if asked. Then call pdl_android_devices again.',
+    ],
+    unauthorized: [
+        'The phone is connected but has not trusted this computer. Ask the user to unlock the phone and tap "Allow" on the "Allow USB debugging?" prompt (tick "Always allow"). If no prompt appears: unplug and replug, or Developer options > Revoke USB debugging authorizations, then replug.',
+    ],
+    offline: [
+        'adb sees the phone but it is offline. Ask the user to unplug and replug it; if it stays offline, run `adb kill-server` then `adb devices`.',
+    ],
+    multiple_devices: ['Several phones are connected. Call pdl_android_devices and pass serial.'],
+    not_found: ['adb could not read the device. Retry; if it persists, replug the phone.'],
+    failed: ['An adb command failed; see the error. Retry, or ask the user to replug the phone.'],
+    no_socket: [
+        'No browser is exposing DevTools on the phone. Chrome only exposes it while it is running: ask the user to open Chrome on the phone (any tab), then retry. For an app WebView, the app must enable WebView debugging (debug builds: WebView.setWebContentsDebuggingEnabled(true)).',
+    ],
+    ambiguous_socket: [
+        'Several browsers/WebViews are debuggable. Pass socket: a socket name from pdl_android_devices, or "chrome" / "webview", or an app package.',
+    ],
+    attach_failed: [
+        'Reached the phone browser but could not attach to a page. If several tabs are open pass url_contains or target_id; or pass open_url to open a fresh tab.',
+    ],
+});
+const failure = (f) => errorResponse$1(f.message, [
+    ...STEPS_BY_KIND[f.kind],
+    ...(f.candidates !== undefined && f.candidates.length > 0
+        ? [`Tabs on the phone: ${f.candidates.map((c) => `${c.id.slice(0, 8)} ${c.url}`).join(' | ')}.`]
+        : []),
+    ...(f.sockets !== undefined && f.sockets.length > 0
+        ? [`DevTools sockets: ${f.sockets.map((s) => `${s.socket}${s.package !== undefined ? ` (${s.package})` : ''}`).join(', ')}.`]
+        : []),
+]);
+const devicesSchema = {};
+const attachSchema = {
+    serial: stringType().min(1).optional().describe('Device serial from pdl_android_devices; optional when one phone is connected.'),
+    socket: stringType()
+        .min(1)
+        .optional()
+        .describe('DevTools socket name, "chrome", "webview", or an app package. Default: Chrome.'),
+    open_url: stringType()
+        .min(1)
+        .optional()
+        .describe('Open a new tab at this URL on the phone and attach it (bridge present before the page loads).'),
+    url_contains: stringType().min(1).optional().describe('Attach to the open tab whose URL contains this text.'),
+    target_id: stringType().min(1).optional().describe('Attach to this tab id (or prefix).'),
+    reload: booleanType().optional().describe('Reload the attached tab so the bridge runs before the app code.'),
+    reverse_ports: arrayType(numberType().int().min(1).max(65535))
+        .optional()
+        .describe('Desktop ports to expose on the phone as localhost:<port> (adb reverse), e.g. [5173] for a dev server.'),
+};
+const devicesHandler = async (_args, ctx) => {
+    if (ctx.android === undefined)
+        return NO_ANDROID;
+    const r = await ctx.android.devices();
+    if (!r.ok)
+        return failure(r);
+    const ready = r.devices.filter((d) => d.state === 'device');
+    return okResponse({ adbPath: r.adbPath, devices: r.devices }, r.devices.length === 0
+        ? STEPS_BY_KIND.no_device
+        : ready.length === 0
+            ? r.devices.some((d) => d.state === 'unauthorized')
+                ? STEPS_BY_KIND.unauthorized
+                : STEPS_BY_KIND.offline
+            : [
+                'Attach with pdl_android_attach: pass open_url to open the app in a new tab (add reverse_ports for a desktop dev server), or url_contains to attach to a tab already open.',
+                ...(ready.some((d) => (d.sockets ?? []).length === 0) ? STEPS_BY_KIND.no_socket : []),
+            ]);
+};
+const attachHandler = async (args, ctx) => {
+    if (ctx.android === undefined)
+        return NO_ANDROID;
+    const r = await ctx.android.attach({
+        ...(args.serial !== undefined ? { serial: args.serial } : {}),
+        ...(args.socket !== undefined ? { socket: args.socket } : {}),
+        ...(args.open_url !== undefined ? { openUrl: args.open_url } : {}),
+        ...(args.url_contains !== undefined ? { urlContains: args.url_contains } : {}),
+        ...(args.target_id !== undefined ? { targetId: args.target_id } : {}),
+        ...(args.reload !== undefined ? { reload: args.reload } : {}),
+        ...(args.reverse_ports !== undefined ? { reversePorts: args.reverse_ports } : {}),
+    });
+    if (!r.ok)
+        return failure(r);
+    return okResponse(r, [
+        `Attached to the phone (${r.model ?? r.serial}). Pass extension_id: "${r.connectionId}" to the other pwa-debug tools: pdl_navigate, pdl_click, pdl_tap, pdl_swipe, react_tree, store_get_state, console_tail, network_tail, sw_status, ... The user sees every action live on the phone.`,
+        ...(r.reversed.length > 0
+            ? [`The phone can now open ${r.reversed.map((p) => `http://localhost:${p}`).join(', ')}.`]
+            : []),
+        'If framework or store tools find nothing that should be there, call pdl_android_attach again with url_contains and reload:true.',
+        'Port forwards and reverses pwa-debug created are removed when the host shuts down. pdl_cdp_detach drops a page connection.',
+    ]);
+};
+const androidDevicesTool = Object.freeze({
+    name: 'pdl_android_devices',
+    description: "List Android phones connected over adb, each with its authorization state (device / unauthorized / offline), model, and the DevTools sockets it exposes (Chrome, other Chromium browsers, debuggable app WebViews with their package). Use it before pdl_android_attach, or when attaching fails, to tell the user exactly what to do (install adb, enable USB debugging, accept the authorization prompt, open Chrome). Finds adb on PATH or in the Android SDK. No args.",
+    inputSchema: devicesSchema,
+    handler: devicesHandler,
+});
+const androidAttachTool = Object.freeze({
+    name: 'pdl_android_attach',
+    description: "Attach pwa-debug to a page on an Android phone in one call: finds the phone over adb, forwards its browser's DevTools socket, optionally exposes desktop ports to the phone (reverse_ports, so http://localhost:<port> works there), then attaches to an open tab (url_contains / target_id / the only one) or opens a new tab at open_url. Returns a connection id to pass as extension_id to every other pwa-debug tool, so framework, store, PWA, interaction, evaluate, navigation and console/network/error capture all work on the phone. Args: { serial?, socket?, open_url?, url_contains?, target_id?, reload?, reverse_ports? }.",
+    inputSchema: attachSchema,
+    handler: attachHandler,
+});
+const ANDROID_TOOLS = Object.freeze([androidDevicesTool, androidAttachTool]);
+
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
 // cast at this boundary; registerTools only reads the description+inputSchema
 // and forwards the parsed args back to the handler unchanged.
-const TOOLS = Object.freeze([
+const BASE_TOOLS = Object.freeze([
     hostStatusTool,
     hostRegisterExtensionTool,
     hostUnregisterExtensionTool,
@@ -15133,7 +16379,14 @@ const TOOLS = Object.freeze([
     checkSetupTool,
     installExtensionTool,
     registerChromeDevtoolsTool,
+    ...CDP_TOOLS,
+    ...ANDROID_TOOLS,
     ...interactionActionTools,
+]);
+// pdl_help documents the registry it belongs to, so it reads TOOLS lazily.
+const TOOLS = Object.freeze([
+    createHelpTool(() => TOOLS),
+    ...BASE_TOOLS,
 ]);
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -15348,279 +16601,6 @@ const createIpcServer = async (opts) => {
     return Object.freeze({ close, sendTo, request, listConnections });
 };
 
-const createRingBuffer = (opts) => {
-    if (!Number.isInteger(opts.capacity) || opts.capacity <= 0) {
-        throw new Error(`createRingBuffer: capacity must be a positive integer, got ${String(opts.capacity)}`);
-    }
-    const capacity = opts.capacity;
-    const onEvict = opts.onEvict;
-    const slots = new Array(capacity);
-    let writeIndex = 0;
-    let count = 0;
-    const push = (item) => {
-        if (count < capacity) {
-            slots[writeIndex] = item;
-            writeIndex = (writeIndex + 1) % capacity;
-            count++;
-            return;
-        }
-        const evicted = slots[writeIndex];
-        slots[writeIndex] = item;
-        writeIndex = (writeIndex + 1) % capacity;
-        if (onEvict !== undefined)
-            onEvict(evicted);
-    };
-    const tail = (tailOpts) => {
-        const since = tailOpts?.since;
-        const limit = tailOpts?.limit;
-        const filter = tailOpts?.filter;
-        const startIndex = count < capacity ? 0 : writeIndex;
-        const matched = [];
-        for (let i = 0; i < count; i++) {
-            const entry = slots[(startIndex + i) % capacity];
-            if (since !== undefined && !(entry.ts > since))
-                continue;
-            if (filter !== undefined && !filter(entry))
-                continue;
-            matched.push(entry);
-        }
-        if (limit !== undefined && matched.length > limit) {
-            return matched.slice(matched.length - limit);
-        }
-        return matched;
-    };
-    const size = () => count;
-    const clear = () => {
-        for (let i = 0; i < capacity; i++)
-            slots[i] = undefined;
-        writeIndex = 0;
-        count = 0;
-    };
-    return Object.freeze({ push, tail, size, clear });
-};
-
-const DEFAULT_CAPACITY_PER_KIND = 5000;
-const BUFFER_KINDS = [
-    'console',
-    'network',
-    'dom_mutations',
-    'lifecycle',
-    'store_change',
-    'replay',
-    'library_popup',
-    'page_error',
-    'sw_state',
-];
-const kindToBucket = (kind) => {
-    switch (kind) {
-        case 'console':
-            return 'console';
-        case 'fetch':
-        case 'xhr':
-        case 'websocket':
-            return 'network';
-        case 'dom_mutation':
-            return 'dom_mutations';
-        case 'lifecycle':
-            return 'lifecycle';
-        case 'store_change':
-            return 'store_change';
-        case 'replay':
-            return 'replay';
-        case 'library_popup':
-            return 'library_popup';
-        case 'page_error':
-            return 'page_error';
-        case 'sw_state':
-            return 'sw_state';
-        default:
-            return undefined;
-    }
-};
-const createCapturesIn = (opts) => {
-    const extensionId = opts.extensionId;
-    const capacity = opts.capacityPerKind ?? DEFAULT_CAPACITY_PER_KIND;
-    const getNow = opts.getNow ?? Date.now;
-    const sessionId = opts.sessionId ?? randomUUID();
-    const onEvict = opts.onEvict;
-    const makeBuffer = (kind) => onEvict
-        ? createRingBuffer({
-            capacity,
-            onEvict: (evicted) => onEvict(kind, evicted),
-        })
-        : createRingBuffer({ capacity });
-    const buffers = {
-        console: makeBuffer('console'),
-        network: makeBuffer('network'),
-        dom_mutations: makeBuffer('dom_mutations'),
-        lifecycle: makeBuffer('lifecycle'),
-        store_change: makeBuffer('store_change'),
-        replay: makeBuffer('replay'),
-        library_popup: makeBuffer('library_popup'),
-        page_error: makeBuffer('page_error'),
-        sw_state: makeBuffer('sw_state'),
-    };
-    const received = {
-        console: 0,
-        network: 0,
-        dom_mutations: 0,
-        lifecycle: 0,
-        store_change: 0,
-        replay: 0,
-        library_popup: 0,
-        page_error: 0,
-        sw_state: 0,
-    };
-    const dropped = {
-        console: 0,
-        network: 0,
-        dom_mutations: 0,
-        lifecycle: 0,
-        store_change: 0,
-        replay: 0,
-        library_popup: 0,
-        page_error: 0,
-        sw_state: 0,
-    };
-    const sequence = {
-        console: 0,
-        network: 0,
-        dom_mutations: 0,
-        lifecycle: 0,
-        store_change: 0,
-        replay: 0,
-        library_popup: 0,
-        page_error: 0,
-        sw_state: 0,
-    };
-    let droppedUnknown = 0;
-    const listeners = new Set();
-    const subscribe = (listener) => {
-        listeners.add(listener);
-        return () => {
-            listeners.delete(listener);
-        };
-    };
-    const receive = (input) => {
-        for (const event of input.events) {
-            if (event === null || typeof event !== 'object') {
-                droppedUnknown++;
-                continue;
-            }
-            const e = event;
-            if (typeof e.kind !== 'string') {
-                droppedUnknown++;
-                continue;
-            }
-            const bucket = kindToBucket(e.kind);
-            if (bucket === undefined) {
-                droppedUnknown++;
-                continue;
-            }
-            if (typeof e.ts !== 'number' || !Number.isFinite(e.ts)) {
-                dropped[bucket]++;
-                continue;
-            }
-            sequence[bucket]++;
-            const stored = {
-                ...event,
-                receivedAt: getNow(),
-                sessionId,
-                extensionId,
-                sequenceNumber: sequence[bucket],
-            };
-            buffers[bucket].push(stored);
-            received[bucket]++;
-            for (const listener of listeners) {
-                try {
-                    listener(bucket, stored);
-                }
-                catch {
-                    // A faulty subscriber must never break intake.
-                }
-            }
-        }
-    };
-    const tail = (kind, tailOpts) => buffers[kind].tail(tailOpts);
-    const buffer = (kind) => buffers[kind];
-    const getStats = () => {
-        const perKindEntries = BUFFER_KINDS.map((k) => [
-            k,
-            Object.freeze({
-                received: received[k],
-                dropped: dropped[k],
-                size: buffers[k].size(),
-            }),
-        ]);
-        const perKind = Object.freeze(Object.fromEntries(perKindEntries));
-        let totalReceived = 0;
-        let totalDropped = droppedUnknown;
-        for (const k of BUFFER_KINDS) {
-            totalReceived += received[k];
-            totalDropped += dropped[k];
-        }
-        return Object.freeze({
-            perKind,
-            droppedUnknown,
-            totals: Object.freeze({ received: totalReceived, dropped: totalDropped }),
-            sessionId,
-            extensionId,
-        });
-    };
-    const clear = () => {
-        for (const k of BUFFER_KINDS) {
-            buffers[k].clear();
-            received[k] = 0;
-            dropped[k] = 0;
-            sequence[k] = 0;
-        }
-        droppedUnknown = 0;
-    };
-    return Object.freeze({ receive, tail, buffer, getStats, clear, subscribe });
-};
-const CAPTURES_EVENT_TOOL = 'captures';
-const createCapturesRegistry = (opts = {}) => {
-    const map = new Map();
-    const getOrCreate = (extensionId) => {
-        const existing = map.get(extensionId);
-        if (existing !== undefined)
-            return existing;
-        const created = createCapturesIn({
-            extensionId,
-            ...(opts.capacityPerKind !== undefined && { capacityPerKind: opts.capacityPerKind }),
-            ...(opts.getNow !== undefined && { getNow: opts.getNow }),
-            ...(opts.sessionId !== undefined && { sessionId: opts.sessionId }),
-            ...(opts.onEvict !== undefined && { onEvict: opts.onEvict }),
-        });
-        map.set(extensionId, created);
-        return created;
-    };
-    const get = (extensionId) => map.get(extensionId);
-    const list = () => Object.freeze(Array.from(map.entries(), ([extensionId, captures]) => Object.freeze({ extensionId, captures })));
-    const clear = () => {
-        map.clear();
-    };
-    return Object.freeze({ getOrCreate, get, list, clear });
-};
-const isIntakePayload = (v) => {
-    if (v === null || typeof v !== 'object')
-        return false;
-    return Array.isArray(v.events);
-};
-const dispatchCapturesEvent = (registry, extensionId, env, hooks) => {
-    if (env.tool !== CAPTURES_EVENT_TOOL)
-        return;
-    if (env.extensionId !== undefined && env.extensionId !== extensionId) {
-        hooks?.onMismatch?.(`dispatchCapturesEvent: envelope.extensionId=${env.extensionId} does not match connection.extensionId=${extensionId}; dropping`);
-        return;
-    }
-    if (!isIntakePayload(env.payload)) {
-        hooks?.onInvalid?.(`dispatchCapturesEvent: invalid intake payload from ${extensionId}; dropping`);
-        return;
-    }
-    registry.getOrCreate(extensionId).receive({ events: env.payload.events });
-};
-
 /**
  * Host-side typed settings store.
  *
@@ -15832,6 +16812,1065 @@ const createSettingsStore = (options = {}) => {
     return { init, getSetting, getAll, setSetting, subscribe, dispose };
 };
 
+/**
+ * Sent to the MCP client on initialize. Clients such as Claude Code place it in
+ * the AI's system prompt, so it is the one piece of guidance an AI sees before
+ * it calls any tool. Keep it short: orientation here, detail in pdl_help.
+ */
+const SERVER_INSTRUCTIONS = [
+    'pwa-debug gives you live, structured access to a web app or PWA running in the user\'s real browser, and lets you control it.',
+    '',
+    '- You drive the page yourself. Use pdl_navigate / pdl_new_tab to open URLs and pdl_click, pdl_fill, pdl_submit, pdl_key_press, pdl_tap, pdl_swipe, pdl_scroll (and the other pdl_* actions) to interact. Do not ask the user to navigate, click or type for you.',
+    '- You read state as data, not pixels. console_tail, network_tail, error_tail, evaluate, the react_/vue_/svelte_/solid_ tools, store_/redux_ tools, sw_status, cache_*, storage_get and idb_* return structured JSON. You do not need screenshots to know what is on the page; take one only to judge visual layout.',
+    '- session_record (rrweb) captures a session for later replay or a bug report. It is not needed to watch the page.',
+    '- Start with host_status. If nothing is connected: pdl_check_setup, then pdl_launch_browser, then session_ping.',
+    '- Phones (Android): the extension cannot run there, so pwa-debug attaches over adb. pdl_android_attach({ open_url, reverse_ports }) (or url_contains for an open tab) does it in one call; pass the returned connection id as extension_id to every tool. pdl_android_devices tells you what to ask the user if the phone is not ready. See pdl_help({ topic: "mobile" }).',
+    '',
+    'Call pdl_help for the full guide, pdl_help({ topic }) for a how-to, or pdl_help({ tool }) for any tool\'s parameters. Every response carries next_steps: follow them.',
+].join('\n');
+
+/** Expose the native-messaging IPC server as the 'extension' transport. */
+const fromIpcServer = (ipcServer) => Object.freeze({
+    kind: 'extension',
+    listConnections: () => ipcServer
+        .listConnections()
+        .map((c) => Object.freeze({ ...c, kind: 'extension' })),
+    request: ipcServer.request,
+    sendTo: ipcServer.sendTo,
+    close: ipcServer.close,
+});
+
+// Same wording the IPC server has always used, so existing callers and the
+// tests that match on it keep working when the id belongs to no transport.
+const unknownConnection = (id) => `no connected NMH for ${id}`;
+/**
+ * Merge every transport's connections and send each call to the transport
+ * that currently lists the id. Ownership is looked up per call because
+ * connections come and go (NMH respawns, CDP attach/detach).
+ */
+const createTransportRouter = (transports) => {
+    const owner = (id) => transports.find((t) => t.listConnections().some((c) => c.extensionId === id));
+    const listConnections = () => Object.freeze(transports.flatMap((t) => t.listConnections()));
+    const request = (id, env, opts) => {
+        const t = owner(id);
+        return t !== undefined
+            ? t.request(id, env, opts)
+            : Promise.reject(new Error(unknownConnection(id)));
+    };
+    const sendTo = (id, env) => {
+        const t = owner(id);
+        return t !== undefined
+            ? t.sendTo(id, env)
+            : Object.freeze({ ok: false, error: unknownConnection(id) });
+    };
+    const close = async () => {
+        await Promise.all(transports.map((t) => t.close()));
+    };
+    return Object.freeze({ listConnections, request, sendTo, close });
+};
+
+const cdpError = (kind, message, code) => Object.assign(new Error(message), {
+    name: 'CdpError',
+    kind,
+    ...(code !== undefined ? { code } : {}),
+});
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
+const WS_OPEN = 1;
+const parseMessage = (data) => {
+    if (typeof data !== 'string')
+        return null;
+    try {
+        const v = JSON.parse(data);
+        return v !== null && typeof v === 'object' ? v : null;
+    }
+    catch {
+        return null;
+    }
+};
+const resolveCtor = (opts) => opts?.WebSocketImpl ??
+    globalThis.WebSocket ??
+    null;
+const openSocket = (Ctor, wsUrl, timeoutMs) => new Promise((resolve, reject) => {
+    let settled = false;
+    let ws;
+    try {
+        ws = new Ctor(wsUrl);
+    }
+    catch (err) {
+        reject(cdpError('connect_failed', `cdp: cannot open ${wsUrl}: ${err.message}`));
+        return;
+    }
+    const timer = setTimeout(() => {
+        if (settled)
+            return;
+        settled = true;
+        try {
+            ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+        reject(cdpError('timeout', `cdp: connect to ${wsUrl} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    ws.addEventListener('open', () => {
+        if (settled)
+            return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ws);
+    });
+    const fail = () => {
+        if (settled)
+            return;
+        settled = true;
+        clearTimeout(timer);
+        reject(cdpError('connect_failed', `cdp: could not connect to ${wsUrl}`));
+    };
+    ws.addEventListener('error', fail);
+    ws.addEventListener('close', fail);
+});
+/**
+ * Open a CDP WebSocket. Commands are matched to responses by id; events fan
+ * out to every handler registered for their method. When the socket closes,
+ * every pending command rejects with kind 'closed' and close handlers run once.
+ */
+const connectCdp = async (wsUrl, opts) => {
+    const Ctor = resolveCtor(opts);
+    if (Ctor === null) {
+        throw cdpError('no_websocket', 'cdp: no WebSocket implementation available. CDP connections need Node 22 or newer.');
+    }
+    const ws = await openSocket(Ctor, wsUrl, opts?.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
+    const defaultTimeoutMs = opts?.defaultTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    // Connection state lives in this closure: it is the socket's lifetime.
+    let nextId = 1;
+    let open = true;
+    const pending = new Map();
+    const handlers = new Map();
+    const closeHandlers = new Set();
+    const settleAllClosed = () => {
+        if (!open)
+            return;
+        open = false;
+        for (const [id, p] of pending) {
+            clearTimeout(p.timer);
+            p.reject(cdpError('closed', `cdp: socket closed before ${p.method} answered`));
+            pending.delete(id);
+        }
+        for (const h of [...closeHandlers]) {
+            try {
+                h();
+            }
+            catch {
+                /* a close handler must not break the others */
+            }
+        }
+    };
+    ws.addEventListener('message', (ev) => {
+        const msg = parseMessage(ev.data);
+        if (msg === null)
+            return;
+        if (typeof msg.id === 'number') {
+            const p = pending.get(msg.id);
+            if (p === undefined)
+                return;
+            pending.delete(msg.id);
+            clearTimeout(p.timer);
+            if (msg.error !== undefined) {
+                const detail = msg.error.data !== undefined ? ` (${msg.error.data})` : '';
+                p.reject(cdpError('protocol', `cdp: ${p.method} failed: ${msg.error.message ?? 'unknown error'}${detail}`, msg.error.code));
+            }
+            else {
+                p.resolve(msg.result ?? {});
+            }
+            return;
+        }
+        if (typeof msg.method === 'string') {
+            const set = handlers.get(msg.method);
+            if (set === undefined)
+                return;
+            for (const h of [...set]) {
+                try {
+                    h(msg.params, msg.sessionId);
+                }
+                catch {
+                    /* one bad handler must not starve the rest */
+                }
+            }
+        }
+    });
+    ws.addEventListener('close', settleAllClosed);
+    ws.addEventListener('error', settleAllClosed);
+    const send = (method, params, sendOpts) => {
+        if (!open || ws.readyState !== WS_OPEN) {
+            return Promise.reject(cdpError('closed', `cdp: socket is closed; cannot send ${method}`));
+        }
+        const id = nextId++;
+        const timeoutMs = sendOpts?.timeoutMs ?? defaultTimeoutMs;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(id);
+                reject(cdpError('timeout', `cdp: ${method} timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+            pending.set(id, { method, resolve, reject, timer });
+            try {
+                ws.send(JSON.stringify({
+                    id,
+                    method,
+                    ...(params !== undefined ? { params } : {}),
+                    ...(sendOpts?.sessionId !== undefined ? { sessionId: sendOpts.sessionId } : {}),
+                }));
+            }
+            catch (err) {
+                clearTimeout(timer);
+                pending.delete(id);
+                reject(cdpError('closed', `cdp: send ${method} failed: ${err.message}`));
+            }
+        });
+    };
+    const on = (method, handler) => {
+        const set = handlers.get(method) ?? new Set();
+        set.add(handler);
+        handlers.set(method, set);
+        return () => {
+            set.delete(handler);
+            if (set.size === 0)
+                handlers.delete(method);
+        };
+    };
+    const onClose = (handler) => {
+        closeHandlers.add(handler);
+        return () => {
+            closeHandlers.delete(handler);
+        };
+    };
+    const close = () => {
+        try {
+            ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+        settleAllClosed();
+    };
+    return Object.freeze({ send, on, onClose, close, isOpen: () => open });
+};
+
+const DEFAULT_HTTP_TIMEOUT_MS = 2_000;
+const fail$3 = (kind, message) => Object.freeze({ ok: false, kind, message });
+const okv = (value) => Object.freeze({ ok: true, value });
+/**
+ * Accept '9222', '127.0.0.1:9222', 'http://host:port/...', 'ws://host:port/...'
+ * and return 'http://host:port'. Null when no host/port can be read.
+ */
+const normalizeBrowserUrl = (input) => {
+    const s = input.trim();
+    if (s === '')
+        return null;
+    if (/^\d{1,5}$/.test(s))
+        return `http://127.0.0.1:${s}`;
+    const withScheme = /^[a-z]+:\/\//i.test(s) ? s : `http://${s}`;
+    try {
+        const u = new URL(withScheme);
+        if (u.hostname === '' || u.port === '')
+            return null;
+        return `http://${u.hostname}:${u.port}`;
+    }
+    catch {
+        return null;
+    }
+};
+const getJson = async (url, deps) => {
+    const fetchImpl = deps?.fetchImpl ?? fetch;
+    const controller = new AbortController();
+    const timeoutMs = deps?.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetchImpl(url, { signal: controller.signal });
+        const text = await res.text();
+        if (!res.ok)
+            return fail$3('http', `GET ${url} -> HTTP ${res.status}: ${text.slice(0, 120)}`);
+        try {
+            return okv(JSON.parse(text));
+        }
+        catch {
+            // Android Chrome answers some endpoints with plain text, e.g.
+            // 'Could not create new page'.
+            return fail$3('bad_body', `GET ${url} returned non-JSON: ${text.slice(0, 120)}`);
+        }
+    }
+    catch (err) {
+        return controller.signal.aborted
+            ? fail$3('timeout', `GET ${url} timed out after ${timeoutMs}ms`)
+            : fail$3('connect_failed', `GET ${url} failed: ${err.message}`);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+};
+const str = (o, k) => typeof o[k] === 'string' ? o[k] : undefined;
+/** GET /json/version: browser identity plus the browser-level socket URL. */
+const fetchBrowserVersion = async (baseUrl, deps) => {
+    const r = await getJson(`${baseUrl}/json/version`, deps);
+    if (!r.ok)
+        return r;
+    if (r.value === null || typeof r.value !== 'object') {
+        return fail$3('bad_body', `${baseUrl}/json/version is not an object`);
+    }
+    const o = r.value;
+    const androidPackage = str(o, 'Android-Package');
+    const ws = str(o, 'webSocketDebuggerUrl');
+    return okv(Object.freeze({
+        browser: str(o, 'Browser') ?? 'unknown',
+        protocolVersion: str(o, 'Protocol-Version') ?? 'unknown',
+        userAgent: str(o, 'User-Agent') ?? '',
+        ...(androidPackage !== undefined ? { androidPackage } : {}),
+        ...(ws !== undefined ? { webSocketDebuggerUrl: ws } : {}),
+    }));
+};
+/** GET /json/list: page targets that can be attached to. */
+const listPageTargets = async (baseUrl, deps) => {
+    const r = await getJson(`${baseUrl}/json/list`, deps);
+    if (!r.ok)
+        return r;
+    if (!Array.isArray(r.value))
+        return fail$3('bad_body', `${baseUrl}/json/list is not an array`);
+    const targets = r.value.flatMap((raw) => {
+        if (raw === null || typeof raw !== 'object')
+            return [];
+        const o = raw;
+        const id = str(o, 'id');
+        const ws = str(o, 'webSocketDebuggerUrl');
+        if (str(o, 'type') !== 'page' || id === undefined || ws === undefined)
+            return [];
+        return [
+            Object.freeze({
+                id,
+                type: 'page',
+                title: str(o, 'title') ?? '',
+                url: str(o, 'url') ?? '',
+                webSocketDebuggerUrl: ws,
+            }),
+        ];
+    });
+    return okv(Object.freeze(targets));
+};
+
+/** Not tied to a page connection; they behave the same whatever is attached. */
+/** Need the extension's service worker; refused on CDP connections with this guidance. */
+const EXTENSION_ONLY_TOOLS = Object.freeze({
+    recent_events: "recent_events reads the extension service worker's buffer, which CDP connections do not have. Use console_tail, network_tail or error_tail with this connection's id instead (same events, filterable, persistent).",
+});
+
+const DEFAULT_LOAD_TIMEOUT_MS = 10_000;
+const MAX_LOAD_TIMEOUT_MS = 12_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
+/** Reported as extensionVersion by session_ping on CDP connections. */
+const CDP_SESSION_VERSION_LABEL = `cdp-bridge/${CDP_BRIDGE_VERSION}`;
+const ok$1 = (requestId, payload) => Object.freeze({ type: 'response', requestId, payload });
+const fail$2 = (requestId, message) => Object.freeze({ type: 'response', requestId, error: Object.freeze({ message }) });
+const readNumber = (payload, key) => {
+    if (payload === null || typeof payload !== 'object')
+        return undefined;
+    const v = payload[key];
+    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+};
+/** Resolve on the next Page.loadEventFired, or 'timeout'. */
+const waitForLoad = (client, timeoutMs) => new Promise((resolve) => {
+    let off = () => undefined;
+    const timer = setTimeout(() => {
+        off();
+        resolve('loading');
+    }, timeoutMs);
+    off = client.on('Page.loadEventFired', () => {
+        clearTimeout(timer);
+        off();
+        resolve('complete');
+    });
+});
+const evaluateValue = async (client, expression) => {
+    const r = (await client.send('Runtime.evaluate', { expression, returnByValue: true }));
+    return r.result?.value;
+};
+/**
+ * Attach to one page over an open client and install the bridge. Order
+ * matters: the binding must exist before the bundle runs, and the
+ * new-document script must be registered before any reload or navigation.
+ */
+const attachSession = async (deps) => {
+    const { client, connectionId } = deps;
+    const loadTimeoutMs = deps.loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS;
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    // Inspector reports renderer crashes; a crashed tab answers nothing until it reloads.
+    await client.send('Inspector.enable').catch(() => undefined);
+    let crashed = false;
+    const offCrash = client.on('Inspector.targetCrashed', () => {
+        crashed = true;
+    });
+    const offRecovered = client.on('Page.loadEventFired', () => {
+        crashed = false;
+    });
+    await client.send('Runtime.addBinding', { name: CDP_EMIT_BINDING });
+    const added = (await client.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: deps.bundleSource,
+    }));
+    const offBinding = client.on('Runtime.bindingCalled', (params) => {
+        const event = parseBindingEvent(params);
+        if (event !== null)
+            deps.onEvent(connectionId, capturesEnvelope(connectionId, [event]));
+    });
+    if (deps.reload === true) {
+        const loaded = waitForLoad(client, loadTimeoutMs);
+        await client.send('Page.reload', { ignoreCache: false });
+        await loaded;
+    }
+    else {
+        await client.send('Runtime.evaluate', { expression: deps.bundleSource });
+    }
+    const readStatus = () => evaluateValue(client, `globalThis.${CDP_GLOBAL}?.status?.() ?? null`);
+    const status = await readStatus();
+    const forward = async (env, timeoutMs) => {
+        const raw = await client.send('Runtime.evaluate', {
+            expression: buildDispatchExpression({
+                requestId: env.requestId,
+                tool: env.tool,
+                ...(env.payload !== undefined ? { payload: stripTabId(env.payload) } : {}),
+            }),
+            awaitPromise: true,
+            returnByValue: true,
+        }, { timeoutMs });
+        return parseDispatchResult(env.requestId, raw);
+    };
+    const sessionPing = async (env, timeoutMs) => {
+        const page = await forward({ ...env, tool: 'session_ping', payload: undefined }, timeoutMs);
+        return ok$1(env.requestId, {
+            extensionVersion: CDP_SESSION_VERSION_LABEL,
+            attachedTabId: null,
+            pageWorld: page.error === undefined ? page.payload ?? null : null,
+            ...(page.error !== undefined ? { pageWorldErrorMessage: page.error.message } : {}),
+        });
+    };
+    const navigate = async (env) => {
+        const payload = env.payload;
+        const url = normalizeNavigateUrl(payload?.['url']);
+        if (!url.ok)
+            return fail$2(env.requestId, url.error);
+        const waitMs = Math.min(readNumber(payload, 'timeout_ms') ?? loadTimeoutMs, MAX_LOAD_TIMEOUT_MS);
+        const loaded = waitForLoad(client, waitMs);
+        const nav = (await client.send('Page.navigate', { url: url.url }));
+        if (typeof nav.errorText === 'string' && nav.errorText !== '') {
+            return fail$2(env.requestId, `pdl_navigate: ${nav.errorText} (${url.url})`);
+        }
+        return ok$1(env.requestId, { tabId: null, url: url.url, status: await loaded });
+    };
+    const request = async (env, opts) => {
+        const timeoutMs = opts?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+        if (crashed && env.tool !== 'pdl_navigate') {
+            return fail$2(env.requestId, 'the tab crashed (renderer gone). Reload it with pdl_navigate to its URL, or ask the user to reload it on the device; the connection recovers when the page loads.');
+        }
+        try {
+            switch (env.tool) {
+                case 'session_ping':
+                    return await sessionPing(env, timeoutMs);
+                case 'pdl_navigate':
+                    return await navigate(env);
+                default:
+                    if (env.tool in EXTENSION_ONLY_TOOLS)
+                        return fail$2(env.requestId, EXTENSION_ONLY_TOOLS[env.tool]);
+                    return await forward(env, timeoutMs);
+            }
+        }
+        catch (err) {
+            return fail$2(env.requestId, `cdp: ${env.tool} failed: ${err.message}`);
+        }
+    };
+    const detach = async () => {
+        offBinding();
+        offCrash();
+        offRecovered();
+        if (client.isOpen()) {
+            // Best effort: leave the page as we found it for the next navigation.
+            if (typeof added.identifier === 'string') {
+                await client
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: added.identifier })
+                    .catch(() => undefined);
+            }
+            await client.send('Runtime.removeBinding', { name: CDP_EMIT_BINDING }).catch(() => undefined);
+        }
+        client.close();
+    };
+    return Object.freeze({ connectionId, status, request, detach, readStatus });
+};
+
+const NEW_TARGET_POLL_MS = 150;
+const NEW_TARGET_WAIT_MS = 4_000;
+const isUserPage = (t) => !/^(chrome|chrome-native|devtools|chrome-extension|about):/i.test(t.url);
+/** Pick one target from a list, or explain why none or several match. */
+const pickTarget = (targets, opts) => {
+    if (opts.targetId !== undefined) {
+        const t = targets.find((x) => x.id === opts.targetId || x.id.startsWith(opts.targetId));
+        return t !== undefined ? { ok: true, target: t } : { ok: false, error: `no page target with id ${opts.targetId}` };
+    }
+    const pool = opts.urlContains !== undefined
+        ? targets.filter((t) => t.url.includes(opts.urlContains))
+        : targets.filter(isUserPage);
+    if (pool.length === 1)
+        return { ok: true, target: pool[0] };
+    if (pool.length === 0) {
+        return {
+            ok: false,
+            error: opts.urlContains !== undefined
+                ? `no page target whose URL contains "${opts.urlContains}"`
+                : 'no regular web page is open on that endpoint (only browser-internal pages)',
+        };
+    }
+    return { ok: false, error: `${pool.length} page targets match; pass target_id or url_contains` };
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * The 'cdp' transport: one entry per attached page. Sessions are dropped as
+ * soon as their socket closes (tab closed, browser quit, adb unplugged).
+ */
+const createCdpTransport = (deps) => {
+    const connect = deps.connect ?? connectCdp;
+    const now = deps.now ?? Date.now;
+    const discovery = deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : undefined;
+    const entries = new Map();
+    const listConnections = () => [...entries.entries()].map(([id, e]) => Object.freeze({
+        extensionId: id,
+        kind: 'cdp',
+        connectedAt: e.connectedAt,
+        lastSeenAt: e.lastSeenAt,
+        label: e.target.title !== '' ? `${e.target.title} (${e.target.url})` : e.target.url,
+    }));
+    const attachTarget = async (baseUrl, target, reload) => {
+        const connectionId = cdpConnectionId(baseUrl, target.id);
+        const existing = entries.get(connectionId);
+        if (existing !== undefined) {
+            return { ok: true, connectionId, target: existing.target, status: existing.session.status, reused: true };
+        }
+        const bundleSource = await deps.loadBundle();
+        const client = await connect(target.webSocketDebuggerUrl);
+        let session;
+        try {
+            session = await attachSession({
+                client,
+                bundleSource,
+                connectionId,
+                reload,
+                onEvent: (id, env) => {
+                    const e = entries.get(id);
+                    if (e !== undefined)
+                        e.lastSeenAt = now();
+                    const payload = env.payload;
+                    const events = (payload?.events ?? []).filter((ev) => deps.shouldCapture?.(ev) ?? true);
+                    if (events.length > 0)
+                        deps.onEvent(id, { ...env, payload: { events } });
+                },
+            });
+        }
+        catch (err) {
+            client.close();
+            return { ok: false, error: `attach to ${target.url} failed: ${err.message}` };
+        }
+        const t = now();
+        entries.set(connectionId, { session, target, baseUrl, connectedAt: t, lastSeenAt: t });
+        client.onClose(() => {
+            entries.delete(connectionId);
+        });
+        client.on('Page.frameNavigated', (params) => {
+            const frame = params?.frame;
+            const e = entries.get(connectionId);
+            if (e === undefined || frame === undefined || frame.parentId !== undefined || typeof frame.url !== 'string')
+                return;
+            // The title belongs to the previous document; drop it rather than mislabel.
+            e.target = { ...e.target, url: frame.url, title: '' };
+        });
+        return { ok: true, connectionId, target, status: session.status, reused: false };
+    };
+    const attach = async (opts) => {
+        const baseUrl = normalizeBrowserUrl(opts.browserUrl);
+        if (baseUrl === null)
+            return { ok: false, error: `cannot read a host:port from "${opts.browserUrl}"` };
+        const listed = await listPageTargets(baseUrl, discovery);
+        if (!listed.ok)
+            return { ok: false, error: `cannot list pages at ${baseUrl}: ${listed.message}` };
+        const picked = pickTarget(listed.value, opts);
+        if (!picked.ok)
+            return { ok: false, error: picked.error, candidates: listed.value };
+        return attachTarget(baseUrl, picked.target, opts.reload === true);
+    };
+    const detach = async (connectionId) => {
+        const e = entries.get(connectionId);
+        if (e === undefined)
+            return false;
+        entries.delete(connectionId);
+        await e.session.detach();
+        return true;
+    };
+    const targets = async (browserUrl) => {
+        const baseUrl = normalizeBrowserUrl(browserUrl);
+        if (baseUrl === null)
+            return { ok: false, error: `cannot read a host:port from "${browserUrl}"` };
+        const version = await fetchBrowserVersion(baseUrl, discovery);
+        if (!version.ok)
+            return { ok: false, error: `no debug endpoint at ${baseUrl}: ${version.message}` };
+        const listed = await listPageTargets(baseUrl, discovery);
+        if (!listed.ok)
+            return { ok: false, error: `cannot list pages at ${baseUrl}: ${listed.message}` };
+        return {
+            ok: true,
+            browserUrl: baseUrl,
+            version: version.value,
+            targets: listed.value.map((t) => {
+                const connectionId = cdpConnectionId(baseUrl, t.id);
+                return { ...t, connectionId, attached: entries.has(connectionId) };
+            }),
+        };
+    };
+    /**
+     * Open a tab on an endpoint and attach it. The tab starts blank so the
+     * bridge is registered before the real page's first script runs, then it
+     * navigates to the URL.
+     */
+    const openTab = async (opts) => {
+        const baseUrl = normalizeBrowserUrl(opts.browserUrl);
+        if (baseUrl === null)
+            return { ok: false, error: `cannot read a host:port from "${opts.browserUrl}"` };
+        const url = normalizeNavigateUrl(opts.url);
+        if (!url.ok)
+            return { ok: false, error: url.error.replace('pdl_navigate', 'open tab') };
+        const version = await fetchBrowserVersion(baseUrl, discovery);
+        if (!version.ok || version.value.webSocketDebuggerUrl === undefined) {
+            return { ok: false, error: `no browser socket at ${baseUrl}` };
+        }
+        const browser = await connect(version.value.webSocketDebuggerUrl);
+        let targetId;
+        try {
+            const created = (await browser.send('Target.createTarget', { url: 'about:blank' }));
+            if (typeof created.targetId !== 'string')
+                return { ok: false, error: 'Target.createTarget returned no targetId' };
+            targetId = created.targetId;
+        }
+        finally {
+            browser.close();
+        }
+        const deadline = now() + NEW_TARGET_WAIT_MS;
+        let target;
+        while (target === undefined && now() < deadline) {
+            const listed = await listPageTargets(baseUrl, discovery);
+            target = listed.ok ? listed.value.find((t) => t.id === targetId) : undefined;
+            if (target === undefined)
+                await sleep(NEW_TARGET_POLL_MS);
+        }
+        if (target === undefined)
+            return { ok: false, error: `new tab ${targetId} never appeared in /json/list` };
+        const attached = await attachTarget(baseUrl, target, false);
+        if (!attached.ok)
+            return attached;
+        const e = entries.get(attached.connectionId);
+        const nav = await e.session.request({
+            type: 'request',
+            requestId: `open-tab-${attached.connectionId}`,
+            tool: 'pdl_navigate',
+            payload: { url: url.url, ...(opts.timeoutMs !== undefined ? { timeout_ms: opts.timeoutMs } : {}) },
+        });
+        if (nav.error !== undefined)
+            return { ok: false, error: nav.error.message };
+        const status = nav.payload?.status ?? 'loading';
+        // The status read at attach describes about:blank; report the real page's.
+        const bridge = await e.session.readStatus().catch(() => attached.status);
+        return { ...attached, status: bridge, target: { ...attached.target, url: url.url }, url: url.url, loadStatus: status };
+    };
+    const newTab = async (from, env) => {
+        const payload = env.payload;
+        const timeout = payload?.['timeout_ms'];
+        const r = await openTab({
+            browserUrl: from.baseUrl,
+            url: payload?.['url'],
+            ...(typeof timeout === 'number' ? { timeoutMs: timeout } : {}),
+        });
+        if (!r.ok)
+            return { type: 'response', requestId: env.requestId, error: { message: `pdl_new_tab: ${r.error}` } };
+        return {
+            type: 'response',
+            requestId: env.requestId,
+            payload: { tabId: null, url: r.url, status: r.loadStatus, created: true, connectionId: r.connectionId },
+        };
+    };
+    const request = async (id, env, opts) => {
+        const e = entries.get(id);
+        if (e === undefined)
+            throw new Error(`no connected NMH for ${id}`);
+        e.lastSeenAt = now();
+        return env.tool === 'pdl_new_tab' ? newTab(e, env) : e.session.request(env, opts);
+    };
+    // Settings pushes target the extension's settings cache; a CDP page has
+    // none yet (capture gating for CDP connections is host-side, later).
+    const sendTo = (id) => entries.has(id) ? { ok: true } : { ok: false, error: `no connected NMH for ${id}` };
+    const close = async () => {
+        const all = [...entries.keys()];
+        await Promise.all(all.map((id) => detach(id)));
+    };
+    return Object.freeze({ kind: 'cdp', listConnections, request, sendTo, close, attach, openTab, detach, targets });
+};
+
+const KNOWN_STATES = new Set(['device', 'unauthorized', 'offline']);
+/** `adb devices -l` -> devices. */
+const parseDevices = (stdout) => Object.freeze(stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('List of devices') && !l.startsWith('*'))
+    .flatMap((line) => {
+    const [serial, rawState, ...rest] = line.split(/\s+/);
+    if (serial === undefined || rawState === undefined)
+        return [];
+    const kv = Object.fromEntries(rest.flatMap((t) => {
+        const i = t.indexOf(':');
+        return i > 0 ? [[t.slice(0, i), t.slice(i + 1)]] : [];
+    }));
+    return [
+        Object.freeze({
+            serial,
+            state: (KNOWN_STATES.has(rawState) ? rawState : 'other'),
+            rawState,
+            ...(kv['model'] !== undefined ? { model: kv['model'] } : {}),
+            ...(kv['product'] !== undefined ? { product: kv['product'] } : {}),
+            ...(kv['device'] !== undefined ? { device: kv['device'] } : {}),
+            ...(kv['transport_id'] !== undefined ? { transportId: kv['transport_id'] } : {}),
+        }),
+    ];
+}));
+const classifySocket = (socket) => {
+    if (socket === 'chrome_devtools_remote') {
+        return Object.freeze({ socket, kind: 'chrome', package: 'com.android.chrome' });
+    }
+    const webview = /^webview_devtools_remote_(\d+)$/.exec(socket);
+    if (webview)
+        return Object.freeze({ socket, kind: 'webview', pid: Number(webview[1]) });
+    const pkg = /^(.+)_devtools_remote$/.exec(socket)?.[1];
+    return Object.freeze({ socket, kind: 'browser', ...(pkg !== undefined ? { package: pkg } : {}) });
+};
+/**
+ * /proc/net/unix -> DevTools sockets. Stetho sockets (Facebook's library in
+ * apps such as Google Messages) end in _devtools_remote too but are not
+ * Chromium pages, so they are dropped.
+ */
+const parseDevtoolsSockets = (procNetUnix) => {
+    const names = new Set(procNetUnix
+        .split(/\r?\n/)
+        .map((l) => /@(\S*devtools_remote\S*)\s*$/.exec(l)?.[1])
+        .filter((n) => n !== undefined && !n.startsWith('stetho_')));
+    return Object.freeze([...names].sort().map(classifySocket));
+};
+/** `adb forward --list` -> forwards. */
+const parseForwards = (stdout) => Object.freeze(stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim().split(/\s+/))
+    .filter((p) => p.length === 3)
+    .map(([serial, local, remote]) => {
+    const port = /^tcp:(\d+)$/.exec(local)?.[1];
+    return Object.freeze({ serial, local, remote, ...(port !== undefined ? { localPort: Number(port) } : {}) });
+}));
+/** Best-effort reading of why an adb command failed. */
+const classifyAdbFailure = (output) => {
+    const s = output.toLowerCase();
+    if (s.includes('unauthorized'))
+        return 'unauthorized';
+    if (s.includes('offline'))
+        return 'offline';
+    if (s.includes('more than one device') || s.includes('more than one emulator'))
+        return 'multiple_devices';
+    if (s.includes('no devices') || s.includes('device not found') || /device '.*' not found/.test(s))
+        return 'no_device';
+    if (s.includes('no such file') || s.includes('not found'))
+        return 'not_found';
+    return 'failed';
+};
+/** SDK install locations to try when adb is not on PATH. */
+const adbPathCandidates = (env, platform) => {
+    const exe = platform === 'win32' ? 'adb.exe' : 'adb';
+    const roots = [
+        env['ANDROID_HOME'],
+        env['ANDROID_SDK_ROOT'],
+        platform === 'linux' && env['HOME'] ? join(env['HOME'], 'Android', 'Sdk') : undefined,
+        platform === 'darwin' && env['HOME'] ? join(env['HOME'], 'Library', 'Android', 'sdk') : undefined,
+        platform === 'win32' && env['LOCALAPPDATA'] ? join(env['LOCALAPPDATA'], 'Android', 'Sdk') : undefined,
+    ].filter((r) => typeof r === 'string' && r !== '');
+    return Object.freeze([...new Set(roots.map((r) => join(r, 'platform-tools', exe)))]);
+};
+
+const ok = (value) => Object.freeze({ ok: true, value });
+const fail$1 = (kind, message) => Object.freeze({ ok: false, kind, message });
+/** Run adb; a non-zero exit becomes a classified failure. */
+const run = async (adb, args) => {
+    const r = await adb.deps.run(adb.adbPath, args);
+    if (r.code === 0)
+        return ok(r.stdout);
+    const output = `${r.stderr}\n${r.stdout}`.trim();
+    return fail$1(classifyAdbFailure(output), `adb ${args.join(' ')}: ${output || `exit ${r.code}`}`);
+};
+/** PATH first, then the usual SDK locations. */
+const findAdb = async (deps) => {
+    const onPath = await deps.which('adb');
+    if (onPath !== null)
+        return ok(onPath);
+    for (const candidate of adbPathCandidates(deps.env, deps.platform)) {
+        if (await deps.fileExists(candidate))
+            return ok(candidate);
+    }
+    return fail$1('not_installed', 'adb not found on PATH or in the Android SDK locations (ANDROID_HOME, ANDROID_SDK_ROOT, ~/Android/Sdk).');
+};
+const listDevices = async (adb) => {
+    const r = await run(adb, ['devices', '-l']);
+    return r.ok ? ok(parseDevices(r.value)) : r;
+};
+const packageForPid = async (adb, serial, pid) => {
+    const r = await run(adb, ['-s', serial, 'shell', 'cat', `/proc/${pid}/cmdline`]);
+    if (!r.ok)
+        return undefined;
+    const name = r.value.split('\0')[0]?.trim();
+    return name !== undefined && name !== '' ? name : undefined;
+};
+/** DevTools sockets on a device; WebView sockets get their app package. */
+const listSockets = async (adb, serial) => {
+    const r = await run(adb, ['-s', serial, 'shell', 'cat', '/proc/net/unix']);
+    if (!r.ok)
+        return r;
+    const sockets = parseDevtoolsSockets(r.value);
+    const resolved = await Promise.all(sockets.map(async (s) => {
+        if (s.kind !== 'webview' || s.pid === undefined)
+            return s;
+        const pkg = await packageForPid(adb, serial, s.pid);
+        return pkg !== undefined ? Object.freeze({ ...s, package: pkg }) : s;
+    }));
+    return ok(Object.freeze(resolved));
+};
+/**
+ * Make a device socket reachable on a local port. Reuses an existing forward
+ * for the same device and socket; otherwise lets adb pick a free port.
+ */
+const forwardSocket = async (adb, serial, socket) => {
+    const remote = `localabstract:${socket}`;
+    const list = await run(adb, ['forward', '--list']);
+    if (list.ok) {
+        const existing = parseForwards(list.value).find((f) => f.serial === serial && f.remote === remote && f.localPort !== undefined);
+        if (existing?.localPort !== undefined)
+            return ok({ port: existing.localPort, reused: true });
+    }
+    const r = await run(adb, ['-s', serial, 'forward', 'tcp:0', remote]);
+    if (!r.ok)
+        return r;
+    const port = Number(r.value.trim());
+    return Number.isInteger(port) && port > 0
+        ? ok({ port, reused: false })
+        : fail$1('failed', `adb forward tcp:0 ${remote} returned no port: ${r.value.trim()}`);
+};
+const removeForward = async (adb, serial, port) => {
+    const r = await run(adb, ['-s', serial, 'forward', '--remove', `tcp:${port}`]);
+    return r.ok ? ok(true) : r;
+};
+const reversePort = async (adb, serial, port) => {
+    const r = await run(adb, ['-s', serial, 'reverse', `tcp:${port}`, `tcp:${port}`]);
+    return r.ok ? ok(true) : r;
+};
+const removeReverse = async (adb, serial, port) => {
+    const r = await run(adb, ['-s', serial, 'reverse', '--remove', `tcp:${port}`]);
+    return r.ok ? ok(true) : r;
+};
+/** Current reverse mappings on a device (the first column is the transport, not the serial). */
+const listReverses = async (adb, serial) => {
+    const r = await run(adb, ['-s', serial, 'reverse', '--list']);
+    return r.ok ? ok(parseForwards(r.value)) : r;
+};
+
+const fail = (kind, message, extra) => Object.freeze({ ok: false, kind, message, ...extra });
+/** Choose the device: the given serial, or the only authorized one. */
+const pickDevice = (devices, serial) => {
+    if (serial !== undefined) {
+        const d = devices.find((x) => x.serial === serial);
+        if (d === undefined)
+            return fail('no_device', `no device with serial ${serial}`, { devices });
+        if (d.state === 'unauthorized')
+            return fail('unauthorized', `${serial} has not authorized this computer`, { devices });
+        if (d.state !== 'device')
+            return fail('offline', `${serial} is ${d.rawState}`, { devices });
+        return { ok: true, device: d };
+    }
+    const ready = devices.filter((d) => d.state === 'device');
+    if (ready.length === 1)
+        return { ok: true, device: ready[0] };
+    if (ready.length > 1) {
+        return fail('multiple_devices', `${ready.length} devices are connected; pass serial`, { devices });
+    }
+    const unauthorized = devices.find((d) => d.state === 'unauthorized');
+    if (unauthorized !== undefined) {
+        return fail('unauthorized', `${unauthorized.serial} is connected but has not authorized this computer`, { devices });
+    }
+    const offline = devices.find((d) => d.state !== 'device');
+    return offline !== undefined
+        ? fail('offline', `${offline.serial} is ${offline.rawState}`, { devices })
+        : fail('no_device', 'no Android device is connected over adb', { devices });
+};
+/** Choose the socket: by name, by kind, else Chrome, else the only one. */
+const pickSocket = (sockets, wanted) => {
+    if (sockets.length === 0)
+        return fail('no_socket', 'no browser or debuggable WebView is exposing a DevTools socket on the device', { sockets });
+    const byWanted = wanted === undefined
+        ? sockets.filter((s) => s.kind === 'chrome')
+        : sockets.filter((s) => s.socket === wanted || s.kind === wanted || s.package === wanted);
+    const pool = byWanted.length > 0 ? byWanted : wanted === undefined ? sockets : [];
+    if (pool.length === 1)
+        return { ok: true, socket: pool[0] };
+    if (pool.length === 0)
+        return fail('no_socket', `no DevTools socket matches "${wanted}"`, { sockets });
+    return fail('ambiguous_socket', `${pool.length} DevTools sockets match; pass socket`, { sockets });
+};
+/**
+ * Glue between adb and the CDP transport: find the phone, expose its
+ * DevTools socket locally, then attach (or open a tab) over CDP.
+ */
+const createAndroidBridge = (deps) => {
+    // Mappings this host created, so cleanup never removes the user's own.
+    const createdForwards = new Map();
+    const createdReverses = new Map();
+    let adbCache = null;
+    const adbContext = async () => {
+        if (adbCache !== null)
+            return { ok: true, adb: adbCache };
+        const found = await findAdb(deps.adb);
+        if (!found.ok)
+            return fail(found.kind, found.message);
+        adbCache = { adbPath: found.value, deps: deps.adb };
+        return { ok: true, adb: adbCache };
+    };
+    const devices = async () => {
+        const ctx = await adbContext();
+        if (!ctx.ok)
+            return ctx;
+        const listed = await listDevices(ctx.adb);
+        if (!listed.ok)
+            return fail(listed.kind, listed.message);
+        const reports = await Promise.all(listed.value.map(async (d) => {
+            if (d.state !== 'device')
+                return d;
+            const s = await listSockets(ctx.adb, d.serial);
+            return s.ok ? { ...d, sockets: s.value } : { ...d, socketsError: s.message };
+        }));
+        return { ok: true, adbPath: ctx.adb.adbPath, devices: Object.freeze(reports) };
+    };
+    const reverse = async (adb, serial, ports) => {
+        const existing = await listReverses(adb, serial);
+        const already = new Set(existing.ok ? existing.value.map((r) => r.localPort) : []);
+        for (const port of ports) {
+            if (already.has(port))
+                continue;
+            const r = await reversePort(adb, serial, port);
+            if (!r.ok)
+                return fail(r.kind, `adb reverse tcp:${port} failed: ${r.message}`);
+            createdReverses.set(`${serial}:${port}`, { serial, port });
+        }
+        return null;
+    };
+    const attach = async (opts) => {
+        const ctx = await adbContext();
+        if (!ctx.ok)
+            return ctx;
+        const listed = await listDevices(ctx.adb);
+        if (!listed.ok)
+            return fail(listed.kind, listed.message);
+        const picked = pickDevice(listed.value, opts.serial);
+        if (!picked.ok)
+            return picked;
+        const { device } = picked;
+        const reverseFailure = await reverse(ctx.adb, device.serial, opts.reversePorts ?? []);
+        if (reverseFailure !== null)
+            return reverseFailure;
+        const sockets = await listSockets(ctx.adb, device.serial);
+        if (!sockets.ok)
+            return fail(sockets.kind, sockets.message);
+        const chosen = pickSocket(sockets.value, opts.socket);
+        if (!chosen.ok)
+            return chosen;
+        const fwd = await forwardSocket(ctx.adb, device.serial, chosen.socket.socket);
+        if (!fwd.ok)
+            return fail(fwd.kind, fwd.message);
+        if (!fwd.value.reused)
+            createdForwards.set(`${device.serial}:${fwd.value.port}`, { serial: device.serial, port: fwd.value.port });
+        const browserUrl = `127.0.0.1:${fwd.value.port}`;
+        const r = opts.openUrl !== undefined
+            ? await deps.cdp.openTab({ browserUrl, url: opts.openUrl })
+            : await deps.cdp.attach({
+                browserUrl,
+                ...(opts.targetId !== undefined ? { targetId: opts.targetId } : {}),
+                ...(opts.urlContains !== undefined ? { urlContains: opts.urlContains } : {}),
+                ...(opts.reload !== undefined ? { reload: opts.reload } : {}),
+            });
+        if (!r.ok) {
+            const candidates = 'candidates' in r && r.candidates !== undefined ? r.candidates.map((c) => ({ id: c.id, url: c.url })) : undefined;
+            return fail('attach_failed', r.error, candidates !== undefined ? { candidates } : undefined);
+        }
+        return Object.freeze({
+            ok: true,
+            serial: device.serial,
+            ...(device.model !== undefined ? { model: device.model } : {}),
+            socket: chosen.socket,
+            browserUrl,
+            forwardReused: fwd.value.reused,
+            reversed: Object.freeze([...(opts.reversePorts ?? [])]),
+            connectionId: r.connectionId,
+            url: r.url ?? r.target.url,
+            title: r.target.title,
+            reused: r.reused,
+            ...(r.loadStatus !== undefined ? { loadStatus: r.loadStatus } : {}),
+            bridge: r.status,
+        });
+    };
+    const cleanup = async () => {
+        if (adbCache === null)
+            return;
+        const adb = adbCache;
+        await Promise.all([
+            ...[...createdForwards.values()].map((f) => removeForward(adb, f.serial, f.port)),
+            ...[...createdReverses.values()].map((r) => removeReverse(adb, r.serial, r.port)),
+        ]);
+        createdForwards.clear();
+        createdReverses.clear();
+    };
+    return Object.freeze({ devices, attach, cleanup });
+};
+
+const DEFAULT_ADB_TIMEOUT_MS = 15_000;
+/** Run adb, capturing both streams (adb reports most errors on stderr). Never rejects. */
+const runAdbProcess = (adbPath, args, timeoutMs = DEFAULT_ADB_TIMEOUT_MS) => new Promise((resolve) => {
+    execFile(adbPath, [...args], { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+        const code = err === null
+            ? 0
+            : typeof err.code === 'number'
+                ? err.code
+                : 1;
+        const timedOut = err !== null && err.killed === true;
+        resolve({
+            code,
+            stdout: String(stdout ?? ''),
+            stderr: timedOut ? `adb timed out after ${timeoutMs}ms` : String(stderr ?? err?.message ?? ''),
+        });
+    });
+});
+/** Real OS effects for the android_adb module. */
+const defaultAdbDeps = () => {
+    const d = defaultDiscoveryDeps();
+    return Object.freeze({
+        which: d.which,
+        fileExists: d.fileExists,
+        run: runAdbProcess,
+        env: process.env,
+        platform: process.platform,
+    });
+};
+
 const snapshotEvent = (store) => ({
     type: 'event',
     tool: 'settings_snapshot',
@@ -15842,10 +17881,10 @@ const changedEvent = (change) => ({
     tool: 'settings_changed',
     payload: change,
 });
-const broadcastChange = (ipcServer, store, change) => {
+const broadcastChange = (router, store, change) => {
     const env = changedEvent(change);
-    for (const conn of ipcServer.listConnections()) {
-        ipcServer.sendTo(conn.extensionId, env);
+    for (const conn of router.listConnections()) {
+        router.sendTo(conn.extensionId, env);
     }
 };
 const FALLBACK_VERSION = '0.0.0';
@@ -15943,16 +17982,37 @@ const runMcpMode = async () => {
         }),
     });
     ipcServerRef = ipcServer;
+    // CDP transport: pages the extension cannot reach (Android Chrome, browsers
+    // without the extension). Its captures feed the same intake as the NMH.
+    // Read on every attach (~0.5MB, once per page) so a rebuilt bundle applies
+    // without restarting the host.
+    const loadCdpBundle = async () => {
+        const dir = resolveExtensionPath(process.env);
+        if (dir === null) {
+            throw new Error('pwa-debug extension build not found; cannot load page-world-cdp.js (build the extension and host)');
+        }
+        return readFile(join(dir, 'page-world-cdp.js'), 'utf8');
+    };
+    const cdpTransport = createCdpTransport({
+        loadBundle: loadCdpBundle,
+        // Same gate the extension SW applies, read live so settings_set applies at once.
+        shouldCapture: (event) => shouldCaptureEvent({ ...event, frameUrl: typeof event['frameUrl'] === 'string' ? event['frameUrl'] : '' }, settingsStore.getAll()),
+        onEvent: (connectionId, env) => dispatchCapturesEvent(capturesRegistry, connectionId, env, {
+            onMismatch: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
+            onInvalid: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
+        }),
+    });
+    const router = createTransportRouter([fromIpcServer(ipcServer), cdpTransport]);
+    const android = createAndroidBridge({ adb: defaultAdbDeps(), cdp: cdpTransport });
     const unsubscribeSettings = settingsStore.subscribe((change) => {
-        broadcastChange(ipcServer, settingsStore, change);
+        broadcastChange(router, settingsStore, change);
     });
     try {
-        const server = new McpServer({
-            name: 'pwa-debug',
-            version: '0.0.0-m4',
-        });
+        const server = new McpServer({ name: 'pwa-debug', version: hostVersion }, { instructions: SERVER_INSTRUCTIONS });
         registerTools(server, TOOLS, {
-            ipcServer,
+            ipcServer: router,
+            cdp: cdpTransport,
+            android,
             hostVersion,
             capturesRegistry,
             settingsStore,
@@ -15965,7 +18025,9 @@ const runMcpMode = async () => {
     }
     finally {
         unsubscribeSettings();
-        await ipcServer.close();
+        await router.close();
+        // Remove only the adb forwards/reverses this host created.
+        await android.cleanup().catch(() => undefined);
         settingsStore.dispose();
         stderr.write('[pwa-debug-host mcp] ipc server closed\n');
     }

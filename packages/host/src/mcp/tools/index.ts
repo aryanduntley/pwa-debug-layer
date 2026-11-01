@@ -62,12 +62,15 @@ import { installExtensionTool } from './install_extension.js';
 import { registerChromeDevtoolsTool } from './register_chrome_devtools.js';
 import { navigateTool, newTabTool } from './navigation.js';
 import { interactionActionTools } from './interaction_actions.js';
+import { createHelpTool } from './help.js';
+import { CDP_TOOLS } from './cdp.js';
+import { ANDROID_TOOLS } from './android.js';
 
 // Each per-tool ToolDef<X> is variant-incompatible with ToolDef<ZodRawShape>
 // (handler arg is contravariant). The runtime contract is identical, so we
 // cast at this boundary; registerTools only reads the description+inputSchema
 // and forwards the parsed args back to the handler unchanged.
-export const TOOLS: readonly ToolDef[] = Object.freeze([
+const BASE_TOOLS: readonly ToolDef[] = Object.freeze([
   hostStatusTool,
   hostRegisterExtensionTool,
   hostUnregisterExtensionTool,
@@ -131,5 +134,13 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   checkSetupTool,
   installExtensionTool,
   registerChromeDevtoolsTool,
+  ...CDP_TOOLS,
+  ...ANDROID_TOOLS,
   ...interactionActionTools,
 ] as unknown as readonly ToolDef[]);
+
+// pdl_help documents the registry it belongs to, so it reads TOOLS lazily.
+export const TOOLS: readonly ToolDef[] = Object.freeze([
+  createHelpTool(() => TOOLS) as unknown as ToolDef,
+  ...BASE_TOOLS,
+]);

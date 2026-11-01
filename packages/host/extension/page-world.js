@@ -1936,26 +1936,47 @@ var PwaDebugPageWorld = (function (exports) {
         ]);
         return actionOk('swipe', { defaultPrevented, detail: { direction: opts.direction, distance, steps } });
     };
-    /** One touchstart/touchend pair at a point; returns defaultPrevented. */
+    /**
+     * One tap at a point, in the order a phone browser produces it: pointer and
+     * touch phases, then the compatibility mouse events and `click` (which is what
+     * onClick handlers listen for). Synthetic touch events never make the browser
+     * emit that click itself, so we do. A page that calls preventDefault() on
+     * touchend is suppressing the click on purpose, so it is skipped then.
+     */
     const tapOnce = (el, c) => {
-        dispatchAll(el, [makeTouchEvent('touchstart', [makeTouch(el, c.x, c.y)])]);
-        return dispatchAll(el, [makeTouchEvent('touchend', [], [makeTouch(el, c.x, c.y)])]).defaultPrevented;
+        const at = { clientX: c.x, clientY: c.y };
+        const touch = { ...at, pointerType: 'touch' };
+        dispatchAll(el, [makePointerEvent('pointerdown', touch), makeTouchEvent('touchstart', [makeTouch(el, c.x, c.y)])]);
+        dispatchAll(el, [makePointerEvent('pointerup', touch)]);
+        const end = dispatchAll(el, [makeTouchEvent('touchend', [], [makeTouch(el, c.x, c.y)])]);
+        if (end.defaultPrevented)
+            return { defaultPrevented: true, clicked: false };
+        const clicked = dispatchAll(el, [
+            makeMouseEvent('mousedown', at),
+            makeMouseEvent('mouseup', at),
+            makeMouseEvent('click', at),
+        ]);
+        return { defaultPrevented: clicked.defaultPrevented, clicked: true };
     };
-    /** Tap an element (single touchstart/touchend at its center). */
+    /** Tap an element at its center: touch phases plus the click a real tap yields. */
     const tapElement = (el) => {
         if (!isElement$1(el))
             return actionFail('tap', 'target is not an element');
-        const defaultPrevented = tapOnce(el, centerOf(el));
-        return actionOk('tap', { defaultPrevented });
+        el.focus?.();
+        const r = tapOnce(el, centerOf(el));
+        return actionOk('tap', { defaultPrevented: r.defaultPrevented, detail: { clicked: r.clicked } });
     };
-    /** Double-tap an element (two touchstart/touchend pairs). */
+    /** Double-tap an element: two taps (each with its click) then dblclick. */
     const doubleTapElement = (el) => {
         if (!isElement$1(el))
             return actionFail('doubleTap', 'target is not an element');
+        el.focus?.();
         const c = centerOf(el);
-        tapOnce(el, c);
-        const defaultPrevented = tapOnce(el, c);
-        return actionOk('doubleTap', { defaultPrevented });
+        const first = tapOnce(el, c);
+        const second = tapOnce(el, c);
+        const clicked = first.clicked && second.clicked;
+        const dbl = clicked ? dispatchAll(el, [makeMouseEvent('dblclick', { clientX: c.x, clientY: c.y })]).defaultPrevented : false;
+        return actionOk('doubleTap', { defaultPrevented: second.defaultPrevented || dbl, detail: { clicked } });
     };
     /**
      * Long-press (async): touchstart, hold for `duration` ms so the page's
@@ -12472,6 +12493,11 @@ var PwaDebugPageWorld = (function (exports) {
         return shim;
     };
 
+    /**
+     * Window flag set by the extension page-world entry. The CDP entry reads it so
+     * it never installs a second capture set into a page the extension owns.
+     */
+    const EXTENSION_PAGE_WORLD_GUARD = '__pwaDebugPageWorldInstalled';
     const probeGlobals = () => {
         const w = window;
         return {
@@ -12523,39 +12549,23 @@ var PwaDebugPageWorld = (function (exports) {
         svelte: early.svelte || dom.svelte,
         redux: early.redux,
     });
-    const installBridgeListener = () => {
-        window.addEventListener('message', (event) => {
-            if (!isInboundCsToPage(event))
-                return;
-            dispatchPageRequest(event.data).then((response) => {
-                window.postMessage(response, window.location.origin);
-            }, (err) => {
-                console.warn('[pwa-debug/page] dispatchPageRequest rejected (should not happen):', err.message);
-            });
-        });
-    };
-    const installCaptures = (frame) => {
-        const emit = (event) => {
-            window.postMessage(encodeEvent(event), window.location.origin);
-        };
-        const kinds = {
-            console: typeof console !== 'undefined',
-            fetch: typeof globalThis.fetch === 'function',
-            xhr: typeof globalThis.XMLHttpRequest === 'function',
-            websocket: typeof globalThis.WebSocket === 'function',
-            dom_mutation: typeof MutationObserver !== 'undefined' &&
-                typeof document !== 'undefined',
-            lifecycle: typeof window !== 'undefined' &&
-                typeof document !== 'undefined' &&
-                typeof history?.pushState === 'function',
-            library_popup: typeof MutationObserver !== 'undefined' &&
-                typeof document !== 'undefined' &&
-                typeof Element !== 'undefined',
-            page_error: typeof window !== 'undefined' &&
-                typeof window.addEventListener === 'function',
-            sw_state: typeof navigator !== 'undefined' &&
-                navigator.serviceWorker !== undefined,
-        };
+    const detectKinds = () => ({
+        console: typeof console !== 'undefined',
+        fetch: typeof globalThis.fetch === 'function',
+        xhr: typeof globalThis.XMLHttpRequest === 'function',
+        websocket: typeof globalThis.WebSocket === 'function',
+        dom_mutation: typeof MutationObserver !== 'undefined' && typeof document !== 'undefined',
+        lifecycle: typeof window !== 'undefined' &&
+            typeof document !== 'undefined' &&
+            typeof history?.pushState === 'function',
+        library_popup: typeof MutationObserver !== 'undefined' &&
+            typeof document !== 'undefined' &&
+            typeof Element !== 'undefined',
+        page_error: typeof window !== 'undefined' && typeof window.addEventListener === 'function',
+        sw_state: typeof navigator !== 'undefined' && navigator.serviceWorker !== undefined,
+    });
+    const installCaptures = (emit, frame) => {
+        const kinds = detectKinds();
         const disposers = [
             installConsoleCapture(emit, frame),
             installFetchCapture(emit, frame),
@@ -12574,7 +12584,61 @@ var PwaDebugPageWorld = (function (exports) {
         };
         return { dispose, kinds };
     };
-    const INSTALL_GUARD = '__pwaDebugPageWorldInstalled';
+    const NOOP = () => undefined;
+    /**
+     * Start the page world. Transport-specific concerns (idempotency guard, how
+     * events leave, how requests arrive) belong to the entry point that calls this.
+     */
+    const bootPageWorld = (opts) => {
+        // Redux store capture is PASSIVE — read-only react-redux fiber-context
+        // discovery (see stores/redux/discover); we do not impersonate
+        // __REDUX_DEVTOOLS_EXTENSION_COMPOSE__ (that broke RTK apps).
+        //
+        // Zustand's devtools middleware calls __REDUX_DEVTOOLS_EXTENSION__.connect(...).
+        // With no real devtools present the shim installs a benign callable carrier
+        // that provides `.connect` (and no-ops if the real Redux DevTools owns it).
+        const zustandShim = installZustandDevtoolsShim(window);
+        setZustandShim(zustandShim);
+        opts.installRequestChannel();
+        const frame = computeFrameMeta();
+        const installed = opts.captures === false ? null : installCaptures(opts.emit, frame);
+        console.log('[pwa-debug/page] captures', installed ? 'installed' : 'skipped', {
+            frame,
+            kinds: installed?.kinds ?? null,
+        });
+        const early = probeGlobals();
+        console.log('[pwa-debug/page] world=MAIN, hooks(early)=', early);
+        const reportLate = () => {
+            console.log('[pwa-debug/page] hooks(post-load)=', merge(early, probeDom()));
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', reportLate, { once: true });
+        }
+        else {
+            setTimeout(reportLate, 0);
+        }
+        return Object.freeze({
+            kinds: installed?.kinds ?? null,
+            dispose: installed?.dispose ?? NOOP,
+        });
+    };
+
+    // Extension transport: requests arrive from the content script as postMessage
+    // envelopes, and captured events leave the same way.
+    const installBridgeListener = () => {
+        window.addEventListener('message', (event) => {
+            if (!isInboundCsToPage(event))
+                return;
+            dispatchPageRequest(event.data).then((response) => {
+                window.postMessage(response, window.location.origin);
+            }, (err) => {
+                console.warn('[pwa-debug/page] dispatchPageRequest rejected (should not happen):', err.message);
+            });
+        });
+    };
+    const emit = (event) => {
+        window.postMessage(encodeEvent(event), window.location.origin);
+    };
     const bootstrap = () => {
         // Idempotency guard. page-world.js can run more than once in the same MAIN
         // world: the manifest injects it at document_start, and the SW self-heal
@@ -12587,40 +12651,13 @@ var PwaDebugPageWorld = (function (exports) {
         // on `window` and persists across the reload, so the re-injection no-ops here
         // and the (orphaned-but-functional) original listener stays the sole handler.
         const w = window;
-        if (w[INSTALL_GUARD])
+        if (w[EXTENSION_PAGE_WORLD_GUARD])
             return;
-        Object.defineProperty(window, INSTALL_GUARD, {
+        Object.defineProperty(window, EXTENSION_PAGE_WORLD_GUARD, {
             value: true,
             configurable: true,
         });
-        // Redux store capture is PASSIVE now — read-only react-redux fiber-context
-        // discovery (see stores/redux/discover). We no longer impersonate
-        // __REDUX_DEVTOOLS_EXTENSION_COMPOSE__, which used to break RTK apps by
-        // sitting in their store-creation path.
-        //
-        // Install the Zustand devtools-connect shim: zustand's devtools middleware
-        // calls __REDUX_DEVTOOLS_EXTENSION__.connect(...). With no real devtools and
-        // no Redux stub present, the shim installs a benign callable carrier that
-        // also provides `.connect` (and no-ops if the real Redux DevTools owns the
-        // hook).
-        const zustandShim = installZustandDevtoolsShim(window);
-        setZustandShim(zustandShim);
-        installBridgeListener();
-        const frame = computeFrameMeta();
-        const { kinds } = installCaptures(frame);
-        console.log('[pwa-debug/page] captures installed', { frame, kinds });
-        const early = probeGlobals();
-        console.log('[pwa-debug/page] world=MAIN, hooks(early)=', early);
-        const reportLate = () => {
-            const merged = merge(early, probeDom());
-            console.log('[pwa-debug/page] hooks(post-load)=', merged);
-        };
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', reportLate, { once: true });
-        }
-        else {
-            setTimeout(reportLate, 0);
-        }
+        bootPageWorld({ emit, installRequestChannel: installBridgeListener });
     };
     bootstrap();
 

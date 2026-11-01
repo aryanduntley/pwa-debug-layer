@@ -26,6 +26,7 @@ The goal is to eliminate the "user is the AI's eyes and hands" loop. Today, debu
 > - **Library-popup capture/replay** — WalletConnect / SDK modals: record, replay, tail, failure correlation.
 > - **Replay & source maps** — rrweb `session_record`/`session_replay`, `source_map_resolve`.
 > - **Browser launcher** — one-call `pdl_launch_browser` with `chrome-devtools-mcp` coexistence.
+> - **Android phones** — the same tools drive Android Chrome tabs and installed PWAs over adb (`pdl_android_attach`), no desktop browser in the loop.
 > - **PWA Runtime Diagnostics** — service-worker lifecycle + versions, CacheStorage contents + age, installability gaps, a live capability matrix, IndexedDB/web-storage inspection, update-propagation / version-skew analysis, and a one-shot runtime-state snapshot.
 >
 > **Verified on Linux** (the full suite live-tested against a real PWA). macOS/Windows code paths are implemented with unit coverage but still need real-machine retest ([help wanted](#help-wanted-macos--windows-verification)). Firefox is not supported (it doesn't speak CDP).
@@ -239,6 +240,35 @@ restart / reconnect chrome-devtools-mcp  → it attaches to the SAME browser
 
 Now `chrome-devtools-mcp` (CDP) and pwa-debug (extension → page-world) drive the same tab simultaneously — independent, non-contending channels (the extension uses page-world injection, **not** `chrome.debugger`, so there's no CDP-attacher contention).
 
+## Android phones
+
+The extension cannot run in Android Chrome, so pwa-debug reaches phones over **adb + the Chrome DevTools Protocol** instead. The host injects the same page-world code the extension uses, so once attached **every tool works on the phone tab** — framework and store introspection, PWA diagnostics, interaction and touch gestures, navigation, and console / network / error capture — and you watch it happen on the phone.
+
+**One-time phone setup:** Developer options → **USB debugging** on, connect by USB, accept **"Allow USB debugging?"**, and have Chrome open. You need `adb` ([Android platform-tools](https://developer.android.com/tools/releases/platform-tools)) on PATH or in the Android SDK (`ANDROID_HOME`, `~/Android/Sdk`).
+
+**Then the AI does the rest in one call:**
+
+```text
+pdl_android_devices()                       → phones, authorization state, debuggable browsers/WebViews
+pdl_android_attach({
+  open_url: "http://localhost:5173",        → opens your app in a new phone tab, bridge in place before it loads
+  reverse_ports: [5173]                      → adb reverse, so the phone's localhost:5173 is your dev server
+})                                          → { connectionId: "cdp:127.0.0.1:<port>:<tab>" }
+react_tree({ extension_id: "<connectionId>" }), pdl_tap(...), store_get_state(...), console_tail(...), ...
+```
+
+Pass `url_contains` instead of `open_url` to attach to a tab that is already open (add `reload: true` when a framework or store hook must exist before the app starts), or `socket: "webview"` / an app package for a debuggable app WebView. `pdl_cdp_targets` / `pdl_cdp_attach` / `pdl_cdp_detach` are the lower-level equivalents for any CDP endpoint (`adb forward tcp:9223 localabstract:chrome_devtools_remote`, then `browser_url: "9223"`).
+
+pwa-debug only removes the adb forwards and reverses **it created**, when the host shuts down. Your capture settings (site allow/block lists, read controls, enabled kinds, filters) apply to phone connections exactly as they do to the extension. When something is missing — adb not installed, phone unauthorized or offline, Chrome not running — the tools' `next_steps` say exactly what to do, and `pdl_check_setup` reports phone readiness alongside the desktop checks.
+
+| On a phone connection | |
+|---|---|
+| **Works** | Every page tool: capture tails, `evaluate`, React/Vue/Svelte/Solid, all stores, SW / cache / installability / storage / IndexedDB / update analysis / snapshot, popups, `session_record`/`replay`, `source_map_resolve`, every `pdl_*` interaction and gesture, `pdl_navigate`, `pdl_new_tab` (each new tab is its own connection), `session_ping`. |
+| **Not available** | `recent_events` (reads the extension service worker's buffer) — use `console_tail` / `network_tail` / `error_tail`. |
+| **Connection-independent** | Setup, launcher, settings, help and the `pdl_cdp_*` / `pdl_android_*` tools themselves. |
+
+Desktop browsers are driven through the extension; the CDP path is for phones.
+
 ## Profile modes
 
 `pdl_launch_browser` takes `mode` (default `existing`), `browser` (defaults to your system-default Chromium browser), and `port` (default `9222`).
@@ -341,6 +371,14 @@ To confirm the content script attached after a successful round-trip, open the p
 
 Every tool returns a structured response of the form `{ ok, data, error?, next_steps[] }`. The `next_steps` array encodes the rules of engagement for the AI — what to call next based on the actual response shape — mirroring the AIMFP `return_statements` pattern. The canonical list lives in `packages/host/src/mcp/tools/index.ts`.
 
+The server also sends MCP `instructions` on connect: a short orientation the client places in the AI's system prompt (you can drive the page yourself, read state as data rather than screenshots, the startup sequence, the phone workflow). For anything deeper the AI calls `pdl_help`.
+
+### Help
+
+| Tool | Purpose |
+|---|---|
+| `pdl_help({ topic?, tool? })` | Usage guide as data. No args: capabilities, startup workflow and the topic list. `topic` (`getting_started`, `control`, `reading_state`, `frameworks`, `stores`, `pwa`, `popups`, `recording`, `browser`, `chrome_devtools`, `mobile`, `targeting`, `settings`, `setup`, `troubleshooting`): a how-to. `tool`: that tool's description and parameters, read from the live registry. |
+
 ### Host management & setup
 
 | Tool | Purpose |
@@ -415,6 +453,14 @@ Framework-agnostic native-event sequences dispatched so React/Vue/etc. delegated
 | `pdl_focus` / `pdl_blur` / `pdl_key_press` / `pdl_type_sequence` | Focus + keyboard. |
 | `pdl_drag` / `pdl_scroll` / `pdl_swipe` / `pdl_tap` / `pdl_double_tap` / `pdl_long_press` / `pdl_pinch` | Touch/gesture primitives (direction/distance/duration/steps model — no hand-built coordinates). |
 
+### Android phones (adb + CDP)
+
+| Tool | Purpose |
+|---|---|
+| `pdl_android_devices` | Phones over adb with authorization state, model, and DevTools sockets (Chrome, other Chromium browsers, debuggable WebViews by package). |
+| `pdl_android_attach({ open_url?, url_contains?, target_id?, reload?, reverse_ports?, serial?, socket? })` | One call: find the phone, map dev-server ports, forward the browser socket, attach or open a tab. Returns the connection id to pass as `extension_id`. |
+| `pdl_cdp_targets` / `pdl_cdp_attach` / `pdl_cdp_detach` | The same over any CDP endpoint you have forwarded yourself. |
+
 ### Library popups
 
 | Tool | Purpose |
@@ -435,8 +481,9 @@ Framework-agnostic native-event sequences dispatched so React/Vue/etc. delegated
 - **Settings** ✅ — typed schema store (allowlist/blocklist, per-kind capture filters, per-site read controls, disk-spill).
 - **Browser launcher** ✅ — `pdl_launch_browser` (existing + sandbox-persistent + sandbox-temp), `pdl_check_setup`, `pdl_browser_status`, `pdl_close_browser`, `pdl_install_extension`, `pdl_register_chrome_devtools`, and `chrome-devtools-mcp` coexistence.
 - **PWA Runtime Diagnostics** ✅ — the namesake suite, live-verified against a real PWA. Service-worker introspection (`sw_status` + `sw_lifecycle_tail`: installing/waiting/active versions, `updateViaCache`, skipWaiting/claim/controllerchange); CacheStorage inspection (`cache_list` / `cache_inspect` / `cache_match` with size/age + match-by-URL); `pwa_status` (display mode, controller, permissions, live capability matrix — Push/Background Sync/Periodic Sync/Badging/File System Access/Window Controls Overlay); installability diagnostics (`pwa_installability` → structured `{gaps[], fixes[]}`); IndexedDB/web-storage inspection (`idb_list` / `idb_query` / `storage_get`); update-propagation / version-skew analysis (`pwa_update_analyze`); and a one-shot runtime-state snapshot (`pwa_snapshot`). Closes the stale-cache / "SW won't update" / install-failure / version-skew pain cluster against your real profile.
+- **Android phones** ✅ — `pdl_android_devices` / `pdl_android_attach` drive Android Chrome tabs and installed PWAs over adb + CDP with the full tool surface (only `recent_events` is extension-only); same capture settings; adb mappings cleaned up on shutdown. Live-verified on a Galaxy S24 Ultra (Android 16, Chrome 156).
 - **Later** — DevTools panel for human observation of an AI session; multi-tab routing model; event-causality graph (click → action → request → SW → cache → re-render); production-safe diagnostic mode for real-user failure capture.
-- **Deferred** — Firefox port (needs WebDriver BiDi, not CDP); macOS/Windows live verification ([help wanted](#help-wanted-macos--windows-verification)); mobile; hosted/team mode.
+- **Deferred** — Firefox port (needs WebDriver BiDi, not CDP); macOS/Windows live verification ([help wanted](#help-wanted-macos--windows-verification)); iOS Safari; hosted/team mode.
 - **Intentionally not pursued** — **Chrome Web Store distribution.** The extension grants broad page access (DOM, framework state, stores, network) and is only meaningful alongside its MCP host. It ships **bundled with the MCP only** and is installed via a manual, dev-mode "Load unpacked" (`pdl_install_extension` hands you the path + steps) — so every user knows exactly what they're running and why. Disabling Chrome Developer mode auto-disables it.
 
 ## Code style

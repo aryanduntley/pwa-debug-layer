@@ -1,14 +1,26 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { IpcServer } from './ipc/ipc_server.js';
+import type { TransportRouter } from '../transport/types.js';
+import type { CdpTransport } from '../transport/cdp_transport.js';
+import type { AndroidBridge } from '../android_adb/bridge.js';
+
 import type { CapturesRegistry } from '../captures_in/captures_in.js';
 import type { SettingsStore } from '../host_settings/host_settings.js';
 
+/** Attach/detach/list control over CDP page connections (absent in tests that do not need it). */
+export type CdpControl = Pick<CdpTransport, 'attach' | 'detach' | 'targets'>;
+
+/** Phone discovery + attach over adb (absent in tests that do not need it). */
+export type AndroidControl = Pick<AndroidBridge, 'devices' | 'attach'>;
+
 export type ToolContext = Readonly<{
-  ipcServer: IpcServer;
+  /** Every live connection (extension NMH + CDP); IpcServer-shaped. */
+  ipcServer: TransportRouter;
   hostVersion: string;
   capturesRegistry: CapturesRegistry;
   settingsStore: SettingsStore;
+  cdp?: CdpControl;
+  android?: AndroidControl;
 }>;
 
 export type ToolResponse = Readonly<{

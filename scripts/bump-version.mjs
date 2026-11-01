@@ -3,7 +3,10 @@
  * Interactive version bump — prints the current version, asks for the new one,
  * and sets it in lockstep across EVERY manifest (the npm packages, the MCP
  * registry server.json + its nested package entry, and the Claude Code
- * plugin/marketplace files), then syncs the pnpm lockfile.
+ * plugin/marketplace files) after a y/N confirmation, then syncs the pnpm
+ * lockfile and, unless you decline at the [Y/n] prompt, rebuilds every package
+ * (pnpm -r build) so the committed build output matches. Same flow as
+ * aimfp's dev/bump-version.py.
  *
  * No git operations — pair it with gitpush.sh, which handles commit + tag +
  * push. Typical release:  node scripts/bump-version.mjs  →  gitpush.sh
@@ -44,19 +47,34 @@ if (drift.length) {
   for (const [f, v] of drift) console.log(`    ${f} = ${v}`);
 }
 
-const rl = createInterface({ input, output });
-const answer = (await rl.question('Enter new version (blank = cancel): ')).trim();
-rl.close();
+// One line iterator for every prompt: rl.question() can drop lines that arrive
+// before it is called (piped input), which hangs the second prompt.
+const rl = createInterface({ input, output, terminal: input.isTTY === true });
+const lines = rl[Symbol.asyncIterator]();
+const ask = async (q) => {
+  output.write(q);
+  const next = await lines.next();
+  if (!input.isTTY) output.write('\n');
+  return next.done ? '' : String(next.value).trim();
+};
+const quit = (msg, code = 0) => {
+  rl.close();
+  if (code === 0) console.log(msg);
+  else console.error(msg);
+  process.exit(code);
+};
 
-if (!answer) {
-  console.log('Cancelled — nothing changed.');
-  process.exit(0);
-}
+const answer = await ask('Enter new version (blank = cancel): ');
+if (!answer) quit('Cancelled — nothing changed.');
 if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(answer)) {
-  console.error(`✗ "${answer}" is not a valid semver version (expected e.g. 0.1.2).`);
-  process.exit(1);
+  quit(`✗ "${answer}" is not a valid semver version (expected e.g. 0.1.2).`, 1);
 }
 
+console.log(`\nWill set every manifest to: ${answer}`);
+const confirm = (await ask('Proceed? [y/N]: ')).toLowerCase();
+if (confirm !== 'y' && confirm !== 'yes') quit('Aborted — nothing changed.');
+
+console.log();
 for (const [rel, mutate] of FILES) {
   const abs = join(root, rel);
   const j = JSON.parse(readFileSync(abs, 'utf8'));
@@ -72,8 +90,27 @@ try {
   console.warn('! pnpm install --lockfile-only failed — sync the lockfile manually if needed.');
 }
 
+// Rebuild so the committed build output (packages/host/dist, packages/host/extension)
+// matches the source and carries the new version before gitpush commits it.
+const build = (await ask('\nRun build? [Y/n]: ')).toLowerCase();
+rl.close();
+let built = false;
+if (build === '' || build === 'y' || build === 'yes') {
+  console.log('\nBuilding (pnpm -r build)…');
+  try {
+    execFileSync('pnpm', ['-r', 'build'], { cwd: root, stdio: 'inherit' });
+    console.log('✓ build complete');
+    built = true;
+  } catch {
+    console.error(`✗ Build failed. Versions are set to ${answer}, but fix the build and run \`pnpm -r build\` before gitpush.`);
+    process.exit(1);
+  }
+} else {
+  console.log('Skipped build — run `pnpm -r build` before gitpush so the committed build output matches.');
+}
+
 console.log(`
-✓ All manifests set to ${answer}.
+✓ All manifests set to ${answer}${built ? ' and rebuilt' : ' (not rebuilt)'}.
 
 Next steps:
   1. Release to npm:

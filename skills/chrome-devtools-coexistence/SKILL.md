@@ -96,6 +96,14 @@ loaded in that same browser. How it gets there depends on the browser:
 
 **Canonical both-tools profile:** `pdl_launch_browser({ browser: "brave", mode: "sandbox-persistent" })` → extension preloaded + debug port live + manifest auto-written, then pin chrome-devtools to that port. Verified live.
 
+## Phones (Android)
+
+pwa-debug drives Android phones itself, over adb + CDP: `pdl_android_attach({ open_url, reverse_ports })`
+(or `url_contains` for an open tab) and pass the returned connection id as `extension_id`. chrome-devtools-mcp
+stays pinned to the **desktop** browser; it is not needed for phone work, and re-pinning it to a phone forward is
+untested. Use pwa-debug's tools for the phone page (state, capture, interaction, navigation); if the user wants
+to *see* the phone screen, `chrome://inspect/#devices` → Inspect mirrors it on the desktop.
+
 ## Hard limits (state these plainly to the user)
 
 - chrome-devtools-mcp is a separate server — a second registration is unavoidable

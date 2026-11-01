@@ -26,6 +26,15 @@ import {
 } from '../host_settings/host_settings.js';
 import { findLingeringTempProfiles } from '../browser_launch/node_deps.js';
 import { tmpdir } from 'node:os';
+import { SERVER_INSTRUCTIONS } from '../help/instructions.js';
+import { shouldCaptureEvent } from '@pwa-debug/shared';
+import { fromIpcServer } from '../transport/extension_transport.js';
+import { createTransportRouter } from '../transport/router.js';
+import { createCdpTransport } from '../transport/cdp_transport.js';
+import { createAndroidBridge } from '../android_adb/bridge.js';
+import { defaultAdbDeps } from '../android_adb/node_deps.js';
+import { resolveExtensionPath } from '../browser_launch/node_deps.js';
+import type { TransportRouter } from '../transport/types.js';
 
 const snapshotEvent = (store: SettingsStore): IpcEventEnvelope => ({
   type: 'event',
@@ -40,13 +49,13 @@ const changedEvent = (change: SettingChange): IpcEventEnvelope => ({
 });
 
 const broadcastChange = (
-  ipcServer: IpcServer,
+  router: TransportRouter,
   store: SettingsStore,
   change: SettingChange,
 ): void => {
   const env = changedEvent(change);
-  for (const conn of ipcServer.listConnections()) {
-    ipcServer.sendTo(conn.extensionId, env);
+  for (const conn of router.listConnections()) {
+    router.sendTo(conn.extensionId, env);
   }
   void store; // store kept in scope; receivers re-read by id, not by closure
 };
@@ -161,18 +170,48 @@ export const runMcpMode = async (): Promise<void> => {
   });
   ipcServerRef = ipcServer;
 
+  // CDP transport: pages the extension cannot reach (Android Chrome, browsers
+  // without the extension). Its captures feed the same intake as the NMH.
+  // Read on every attach (~0.5MB, once per page) so a rebuilt bundle applies
+  // without restarting the host.
+  const loadCdpBundle = async (): Promise<string> => {
+    const dir = resolveExtensionPath(process.env);
+    if (dir === null) {
+      throw new Error('pwa-debug extension build not found; cannot load page-world-cdp.js (build the extension and host)');
+    }
+    return readFile(join(dir, 'page-world-cdp.js'), 'utf8');
+  };
+  const cdpTransport = createCdpTransport({
+    loadBundle: loadCdpBundle,
+    // Same gate the extension SW applies, read live so settings_set applies at once.
+    shouldCapture: (event) =>
+      shouldCaptureEvent(
+        { ...event, frameUrl: typeof event['frameUrl'] === 'string' ? (event['frameUrl'] as string) : '' },
+        settingsStore.getAll(),
+      ),
+    onEvent: (connectionId, env) =>
+      dispatchCapturesEvent(capturesRegistry, connectionId, env, {
+        onMismatch: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
+        onInvalid: (msg) => stderr.write(`[pwa-debug-host mcp] ${msg}\n`),
+      }),
+  });
+  const router = createTransportRouter([fromIpcServer(ipcServer), cdpTransport]);
+  const android = createAndroidBridge({ adb: defaultAdbDeps(), cdp: cdpTransport });
+
   const unsubscribeSettings = settingsStore.subscribe((change) => {
-    broadcastChange(ipcServer, settingsStore, change);
+    broadcastChange(router, settingsStore, change);
   });
 
   try {
-    const server = new McpServer({
-      name: 'pwa-debug',
-      version: '0.0.0-m4',
-    });
+    const server = new McpServer(
+      { name: 'pwa-debug', version: hostVersion },
+      { instructions: SERVER_INSTRUCTIONS },
+    );
 
     registerTools(server, TOOLS, {
-      ipcServer,
+      ipcServer: router,
+      cdp: cdpTransport,
+      android,
       hostVersion,
       capturesRegistry,
       settingsStore,
@@ -189,7 +228,9 @@ export const runMcpMode = async (): Promise<void> => {
     stderr.write(`[pwa-debug-host mcp] ${reason}; shutting down\n`);
   } finally {
     unsubscribeSettings();
-    await ipcServer.close();
+    await router.close();
+    // Remove only the adb forwards/reverses this host created.
+    await android.cleanup().catch(() => undefined);
     settingsStore.dispose();
     stderr.write('[pwa-debug-host mcp] ipc server closed\n');
   }

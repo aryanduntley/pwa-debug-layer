@@ -54,6 +54,39 @@ export type CheckSetupDeps = {
   readonly listManagedPorts: () => readonly ManagedPort[];
   /** Extension ids of loaded service-worker targets on a debug port. */
   readonly fetchLoadedExtensionIds: (port: number) => Promise<readonly string[]>;
+  /** Optional phone check (adb + devices); informational, never a gap. */
+  readonly probeAndroid?: () => Promise<AndroidSetupView>;
+};
+
+/** What check_setup reports about phone support. */
+export type AndroidSetupView = {
+  readonly adbPath: string | null;
+  readonly devices: readonly {
+    readonly serial: string;
+    readonly state: string;
+    readonly model?: string;
+    readonly chromeDebuggable: boolean;
+  }[];
+};
+
+/** Phone hints for next_steps. Phones are optional, so these are never gaps. */
+const androidHints = (a: AndroidSetupView | undefined): readonly string[] => {
+  if (a === undefined) return [];
+  if (a.adbPath === null) {
+    return ['Phones (optional): adb is not installed, so Android phones cannot be driven. To test on a phone, install Android platform-tools.'];
+  }
+  if (a.devices.length === 0) {
+    return ['Phones (optional): adb is installed but no phone is connected. To test on a phone: enable USB debugging, connect by USB, then pdl_android_devices.'];
+  }
+  return a.devices.map((d) =>
+    d.state === 'unauthorized'
+      ? `Phone ${d.model ?? d.serial}: waiting for the user to tap "Allow" on the "Allow USB debugging?" prompt.`
+      : d.state !== 'device'
+        ? `Phone ${d.model ?? d.serial}: ${d.state}; ask the user to replug it.`
+        : d.chromeDebuggable
+          ? `Phone ${d.model ?? d.serial}: ready. pdl_android_attach({ open_url, reverse_ports }) drives it.`
+          : `Phone ${d.model ?? d.serial}: connected, but Chrome is not running on it; ask the user to open Chrome, then pdl_android_attach.`,
+  );
 };
 
 export const checkSetupCore = async (
@@ -223,6 +256,7 @@ export const checkSetupCore = async (
     );
   }
 
+  const android = deps.probeAndroid !== undefined ? await deps.probeAndroid().catch(() => undefined) : undefined;
   const ok = gaps.length === 0;
   const data = {
     ok,
@@ -242,14 +276,16 @@ export const checkSetupCore = async (
       activeConnections: connections.length,
       bundledExtensionId: bundledId,
       loadedExtensionIds,
+      ...(android !== undefined ? { android } : {}),
     },
   };
 
-  const next_steps = ok
-    ? [
-        'Setup looks complete. Launch a browser with pdl_launch_browser, then call session_ping to confirm the page-world round-trip.',
-      ]
-    : recommendations;
+  const next_steps = [
+    ...(ok
+      ? ['Setup looks complete. Launch a browser with pdl_launch_browser, then call session_ping to confirm the page-world round-trip.']
+      : recommendations),
+    ...androidHints(android),
+  ];
 
   return okResponse(data, next_steps);
 };
@@ -278,7 +314,9 @@ export const checkSetupHandler = async (
       const state = await loadHostState(defaultStatePath());
       return { extensionIds: state.extensionIds };
     },
-    listConnections: () => ctx.ipcServer.listConnections(),
+    // NMH health checks: CDP connections never involve the native host.
+    listConnections: () =>
+      ctx.ipcServer.listConnections().filter((c) => c.kind !== 'cdp'),
     deriveBundledExtensionId: async () => {
       const dir = resolveExtensionPath(process.env);
       if (!dir) return null;
@@ -286,6 +324,23 @@ export const checkSetupHandler = async (
         readFile(p, 'utf8'),
       );
     },
+    ...(ctx.android !== undefined
+      ? {
+          probeAndroid: async (): Promise<AndroidSetupView> => {
+            const r = await ctx.android!.devices();
+            if (!r.ok) return { adbPath: null, devices: [] };
+            return {
+              adbPath: r.adbPath,
+              devices: r.devices.map((d) => ({
+                serial: d.serial,
+                state: d.rawState,
+                ...(d.model !== undefined ? { model: d.model } : {}),
+                chromeDebuggable: (d.sockets ?? []).some((s) => s.kind === 'chrome'),
+              })),
+            };
+          },
+        }
+      : {}),
     listManagedPorts: () =>
       getLaunchRegistry()
         .list()
@@ -302,7 +357,7 @@ export const checkSetupHandler = async (
 export const checkSetupTool: ToolDef<Record<string, never>> = Object.freeze({
   name: 'pdl_check_setup',
   description:
-    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
+    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Also reports phone readiness as information (never a gap): adb installed, connected Android devices, their authorization state and whether Chrome is debuggable, with what to ask the user. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
   inputSchema,
   handler: checkSetupHandler,
 });

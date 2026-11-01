@@ -87,6 +87,8 @@ export const hostStatusHandler = async (
     const launcherOnDisk = launcherPath !== null && (await fileExists(launcherPath));
 
     const activeConnections = ctx.ipcServer.listConnections();
+    const extensionConnections = activeConnections.filter((c) => c.kind !== 'cdp');
+    const cdpConnections = activeConnections.filter((c) => c.kind === 'cdp');
 
     const data = {
       hostBinaryPath: process.argv[1] ?? '',
@@ -113,13 +115,17 @@ export const hostStatusHandler = async (
       next_steps.push(
         'Manifest exists on disk but the launcher script is missing. Re-run host_register_extension with an existing ID to refresh the launcher.',
       );
-    } else if (activeConnections.length === 0) {
+    } else if (extensionConnections.length === 0 && cdpConnections.length > 0) {
       next_steps.push(
-        'Manifest is installed and at least one extension ID is registered, but no NMH instance is currently connected. Ask the user to reload the extension at chrome://extensions so Chrome respawns the NMH; activeConnections will populate once the SW reconnects.',
+        `${cdpConnections.length} CDP connection(s) live (no extension needed for those): ${cdpConnections.map((c) => c.extensionId).join(', ')}. Pass one as extension_id to the other tools. No extension connection is live; only call pdl_launch_browser if you also need a desktop browser with the extension.`,
+      );
+    } else if (extensionConnections.length === 0) {
+      next_steps.push(
+        'Manifest is installed and at least one extension ID is registered, but no browser with the extension is connected. Call pdl_launch_browser yourself (mode "sandbox-persistent" preloads the extension; connection takes a second or two), then session_ping. Only if a browser with the extension is already open and still not connecting: ask the user to reload the extension at chrome://extensions so Chrome respawns the NMH.',
       );
     } else {
       next_steps.push(
-        `Manifest is installed, launcher is present, and ${activeConnections.length} NMH connection(s) are live. Call session_ping (optionally with extension_id) for a full round-trip via the IPC bridge.`,
+        `Manifest is installed, launcher is present, and ${extensionConnections.length} NMH connection(s) are live. Call session_ping (optionally with extension_id) for a full round-trip via the IPC bridge.`,
       );
     }
     for (const r of installReports) {
@@ -135,6 +141,9 @@ export const hostStatusHandler = async (
     if (state.extensionIds.length > 0 && manifestPathsOnDisk.length === 0) {
       next_steps.push('To uninstall cleanly, call host_reset.');
     }
+    next_steps.push(
+      'You can navigate (pdl_navigate, pdl_new_tab) and interact (pdl_click, pdl_fill, pdl_tap, ...) yourself, and read page state as data with no screenshots needed. Call pdl_help for the full guide, or pdl_help({ topic: "mobile" }) for phones.',
+    );
 
     return okResponse(data, next_steps);
   } catch (err) {

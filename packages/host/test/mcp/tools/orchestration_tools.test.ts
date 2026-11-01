@@ -193,6 +193,22 @@ describe('checkSetupCore', () => {
     expect(data.gaps).toEqual([]);
   });
 
+  it('reports phones as information only, never as a setup gap', async () => {
+    const view = (devices: { serial: string; state: string; model?: string; chromeDebuggable: boolean }[], adbPath: string | null = '/adb') =>
+      allGood({ probeAndroid: async () => ({ adbPath, devices }) });
+    const noAdb = await checkSetupCore(view([], null));
+    expect((noAdb.data as { ok: boolean }).ok).toBe(true);
+    expect(noAdb.next_steps.join(' ')).toMatch(/adb is not installed/);
+    const ready = await checkSetupCore(view([{ serial: 'R5', state: 'device', model: 'SM_S928U1', chromeDebuggable: true }]));
+    expect((ready.data as { detail: { android: unknown } }).detail.android).toMatchObject({ adbPath: '/adb' });
+    expect(ready.next_steps.join(' ')).toMatch(/SM_S928U1: ready/);
+    const pending = await checkSetupCore(view([{ serial: 'R5', state: 'unauthorized', chromeDebuggable: false }]));
+    expect((pending.data as { ok: boolean; gaps: string[] }).gaps).toEqual([]);
+    expect(pending.next_steps.join(' ')).toMatch(/Allow USB debugging/);
+    const noChrome = await checkSetupCore(view([{ serial: 'R5', state: 'device', chromeDebuggable: false }]));
+    expect(noChrome.next_steps.join(' ')).toMatch(/Chrome is not running/);
+  });
+
   it('flags an unregistered chrome-devtools-mcp with the port-correct add snippet', async () => {
     const res = await checkSetupCore(
       allGood({

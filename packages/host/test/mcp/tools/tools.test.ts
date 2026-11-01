@@ -106,6 +106,17 @@ describe('host_status', () => {
     expect(r.next_steps.join(' ')).toMatch(/1 NMH connection/);
   });
 
+  it('points at live CDP connections instead of pdl_launch_browser when only CDP is connected', async () => {
+    await hostRegisterExtensionHandler({ extension_id: 'aaa' });
+    const cdp = { extensionId: 'cdp:127.0.0.1:9223:2F5A0D34', connectedAt: 1, lastSeenAt: 2, kind: 'cdp' } as unknown as IpcConnectionInfo;
+    const { ctx } = buildFakeCtx({ connections: [cdp] });
+    const r = await hostStatusHandler({}, ctx);
+    const steps = r.next_steps.join(' ');
+    expect(steps).toMatch(/1 CDP connection\(s\) live/);
+    expect(steps).toContain('cdp:127.0.0.1:9223:2F5A0D34');
+    expect(steps).not.toMatch(/Call pdl_launch_browser yourself/);
+  });
+
   it('hints to reload the extension when registered but no NMH connected', async () => {
     await hostRegisterExtensionHandler({ extension_id: 'aaa' });
     const { ctx } = buildFakeCtx({ connections: [] });

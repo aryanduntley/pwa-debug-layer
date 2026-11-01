@@ -9,6 +9,7 @@ import {
 } from '../tool_registry.js';
 import type { IpcRequestEnvelope } from '../ipc/envelope.js';
 import { resolveTarget } from './target_resolution.js';
+import { isCdpConnectionId } from '../../cdp_session/protocol.js';
 
 const SESSION_PING_TIMEOUT_MS = 5000;
 
@@ -205,7 +206,13 @@ export const sessionPingHandler = async (
     ...(pageWorldSelfHealed ? { pageWorldSelfHealed: true } : {}),
   };
 
-  const nextSteps = buildNextSteps(pageWorld, pageWorldError, pageWorldSelfHealed);
+  const nextSteps = isCdpConnectionId(target.extensionId)
+    ? [
+        pageWorld !== null
+          ? 'Round-trip MCP -> host -> CDP -> page-world bridge completed (CDP connection, no extension involved). pageWorld carries url/title/readyState of this connection\'s tab.'
+          : 'The CDP connection answered but the page-world bridge did not. See pageWorldErrorMessage; retry after the page loads, or pdl_cdp_detach then pdl_cdp_attach with reload:true.',
+      ]
+    : buildNextSteps(pageWorld, pageWorldError, pageWorldSelfHealed);
 
   return okResponse(data, nextSteps);
 };

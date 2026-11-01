@@ -3,7 +3,7 @@
 // so touch-driven handlers fire. longPress is async because it must hold
 // between touchstart and touchend long enough for the page's long-press timer.
 
-import { makeTouch, makeTouchEvent, makeMouseEvent, dispatchAll } from './events.js';
+import { makeTouch, makeTouchEvent, makeMouseEvent, makePointerEvent, dispatchAll } from './events.js';
 import { centerOf, interpolatePoints, type Point } from './geometry.js';
 import { type ActionResult, actionOk, actionFail } from './types.js';
 
@@ -42,26 +42,46 @@ export const swipeElement = (
   return actionOk('swipe', { defaultPrevented, detail: { direction: opts.direction, distance, steps } });
 };
 
-/** One touchstart/touchend pair at a point; returns defaultPrevented. */
-const tapOnce = (el: Element, c: Point): boolean => {
-  dispatchAll(el, [makeTouchEvent('touchstart', [makeTouch(el, c.x, c.y)])]);
-  return dispatchAll(el, [makeTouchEvent('touchend', [], [makeTouch(el, c.x, c.y)])]).defaultPrevented;
+/**
+ * One tap at a point, in the order a phone browser produces it: pointer and
+ * touch phases, then the compatibility mouse events and `click` (which is what
+ * onClick handlers listen for). Synthetic touch events never make the browser
+ * emit that click itself, so we do. A page that calls preventDefault() on
+ * touchend is suppressing the click on purpose, so it is skipped then.
+ */
+const tapOnce = (el: Element, c: Point): { readonly defaultPrevented: boolean; readonly clicked: boolean } => {
+  const at = { clientX: c.x, clientY: c.y };
+  const touch = { ...at, pointerType: 'touch' };
+  dispatchAll(el, [makePointerEvent('pointerdown', touch), makeTouchEvent('touchstart', [makeTouch(el, c.x, c.y)])]);
+  dispatchAll(el, [makePointerEvent('pointerup', touch)]);
+  const end = dispatchAll(el, [makeTouchEvent('touchend', [], [makeTouch(el, c.x, c.y)])]);
+  if (end.defaultPrevented) return { defaultPrevented: true, clicked: false };
+  const clicked = dispatchAll(el, [
+    makeMouseEvent('mousedown', at),
+    makeMouseEvent('mouseup', at),
+    makeMouseEvent('click', at),
+  ]);
+  return { defaultPrevented: clicked.defaultPrevented, clicked: true };
 };
 
-/** Tap an element (single touchstart/touchend at its center). */
+/** Tap an element at its center: touch phases plus the click a real tap yields. */
 export const tapElement = (el: Element): ActionResult => {
   if (!isElement(el)) return actionFail('tap', 'target is not an element');
-  const defaultPrevented = tapOnce(el, centerOf(el));
-  return actionOk('tap', { defaultPrevented });
+  el.focus?.();
+  const r = tapOnce(el, centerOf(el));
+  return actionOk('tap', { defaultPrevented: r.defaultPrevented, detail: { clicked: r.clicked } });
 };
 
-/** Double-tap an element (two touchstart/touchend pairs). */
+/** Double-tap an element: two taps (each with its click) then dblclick. */
 export const doubleTapElement = (el: Element): ActionResult => {
   if (!isElement(el)) return actionFail('doubleTap', 'target is not an element');
+  el.focus?.();
   const c = centerOf(el);
-  tapOnce(el, c);
-  const defaultPrevented = tapOnce(el, c);
-  return actionOk('doubleTap', { defaultPrevented });
+  const first = tapOnce(el, c);
+  const second = tapOnce(el, c);
+  const clicked = first.clicked && second.clicked;
+  const dbl = clicked ? dispatchAll(el, [makeMouseEvent('dblclick', { clientX: c.x, clientY: c.y })]).defaultPrevented : false;
+  return actionOk('doubleTap', { defaultPrevented: second.defaultPrevented || dbl, detail: { clicked } });
 };
 
 /**

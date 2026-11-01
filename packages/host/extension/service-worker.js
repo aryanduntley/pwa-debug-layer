@@ -176,110 +176,6 @@ const dispatchToTabClassified = async (tabId, req, opts = {}) => {
     return { ok: true, response };
 };
 
-// SW-side navigation primitives — wraps chrome.tabs URL navigation so the request
-// router stays a thin orchestrator. SW-handled (NOT page-world): chrome.tabs is
-// only reachable in the extension service worker, and driving the tab to a new URL
-// is a browser action, not an in-page read. This is the pwa-debug counterpart to
-// chrome-devtools-mcp's navigate_page/new_page — it works through the loaded
-// extension on the user's real profile, with no CDP attach required.
-const DEFAULT_LOAD_TIMEOUT_MS = 10_000;
-// A bare javascript: URL would run script in the target page context on navigate;
-// reject it. Everything else (http(s), file:, about:, data:, chrome:, localhost
-// shorthand) is allowed — this is a debugging driver, not a sandbox.
-const JAVASCRIPT_SCHEME = /^javascript:/i;
-const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-/**
- * Normalize a caller-supplied URL: trim, reject empty / javascript:, and assume
- * https:// when no scheme is given (so `example.com` works). Returns null when the
- * input is unusable so the caller can surface a clear error.
- */
-const normalizeUrl = (raw) => {
-    const trimmed = raw.trim();
-    if (trimmed.length === 0)
-        return null;
-    if (JAVASCRIPT_SCHEME.test(trimmed))
-        return null;
-    return HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
-};
-/** Active tab id in the last-focused window, or undefined when there is none. */
-const activeTabId = async () => {
-    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    return tabs[0]?.id;
-};
-/**
- * Resolve once the tab reports document 'complete', or 'timeout' after timeoutMs.
- * The onUpdated listener is added BEFORE the caller triggers the load so the
- * 'complete' event can't be missed; it is always removed and the timer cleared.
- */
-const waitForComplete = (tabId, timeoutMs) => new Promise((resolve) => {
-    let settled = false;
-    const settle = (outcome) => {
-        if (settled)
-            return;
-        settled = true;
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        clearTimeout(timer);
-        resolve(outcome);
-    };
-    const onUpdated = (id, info) => {
-        if (id === tabId && info.status === 'complete')
-            settle('complete');
-    };
-    const timer = setTimeout(() => settle('timeout'), timeoutMs);
-    chrome.tabs.onUpdated.addListener(onUpdated);
-});
-/**
- * Navigate the active (or given) tab to url and wait for it to finish loading.
- * Throws on an invalid url or when no tab can be resolved. The listener is armed
- * before chrome.tabs.update so the fresh load's 'complete' is observed.
- */
-const navigateTab = async (input) => {
-    const url = normalizeUrl(input.url);
-    if (url === null) {
-        throw new Error(`navigate: invalid or unsupported url: ${JSON.stringify(input.url)}`);
-    }
-    const tabId = input.tabId ?? (await activeTabId());
-    if (tabId === undefined) {
-        throw new Error('navigate: no active tab (open a tab or pass tab_id)');
-    }
-    const pending = waitForComplete(tabId, input.timeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS);
-    const tab = await chrome.tabs.update(tabId, { url });
-    const outcome = await pending;
-    return {
-        tabId,
-        url,
-        ...(tab?.windowId !== undefined ? { windowId: tab.windowId } : {}),
-        status: outcome === 'complete' ? 'complete' : 'loading',
-    };
-};
-/**
- * Open a new tab at url and wait for it to finish loading. active defaults to
- * Chrome's behavior (foreground). Throws on an invalid url or when Chrome returns
- * no tab id.
- */
-const openNewTab = async (input) => {
-    const url = normalizeUrl(input.url);
-    if (url === null) {
-        throw new Error(`new_tab: invalid or unsupported url: ${JSON.stringify(input.url)}`);
-    }
-    const tab = await chrome.tabs.create({
-        url,
-        ...(input.active !== undefined ? { active: input.active } : {}),
-    });
-    const tabId = tab.id;
-    if (tabId === undefined) {
-        throw new Error('new_tab: chrome did not return a tab id');
-    }
-    const outcome = await waitForComplete(tabId, input.timeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS);
-    return {
-        tabId,
-        url,
-        ...(tab.windowId !== undefined ? { windowId: tab.windowId } : {}),
-        status: outcome === 'complete' ? 'complete' : 'loading',
-        created: true,
-    };
-};
-
 const compilePatternList = (sources, fieldPathPrefix) => {
     if (sources === undefined || sources.length === 0) {
         return { ok: true, value: [] };
@@ -664,6 +560,206 @@ const ACTION_TOOL_SPECS = Object.freeze([
     { tool: 'pdl_long_press', action: 'longPress', params: [N('duration', false, 'hold ms before release (default 500)')], summary: 'Long-press the located element (holds, then releases + contextmenu).' },
     { tool: 'pdl_pinch', action: 'pinch', params: [N('scale', true, 'target scale: >1 zoom in, <1 zoom out'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Pinch-zoom on the located element with two touches.' },
 ]);
+
+// A bare javascript: URL would run script in the target page context on navigate;
+// reject it. Everything else (http(s), file:, about:, data:, chrome:, localhost
+// shorthand) is allowed — this is a debugging driver, not a sandbox.
+const JAVASCRIPT_SCHEME = /^javascript:/i;
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+/**
+ * Normalize a caller-supplied navigation URL: trim, reject empty / javascript:,
+ * and assume https:// when no scheme is given (so `example.com` works). Returns
+ * null when the input is unusable so the caller can surface a clear error.
+ * Shared by the extension (chrome.tabs) and the host (CDP Page.navigate) so both
+ * navigation paths accept exactly the same URLs.
+ */
+const normalizeUrl = (raw) => {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0)
+        return null;
+    if (JAVASCRIPT_SCHEME.test(trimmed))
+        return null;
+    return HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+
+const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
+const globToRegex = (pattern) => {
+    const escaped = pattern.replace(REGEX_SPECIALS, '\\$&').replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+};
+const matchesAnyGlob = (value, patterns) => patterns.some((p) => globToRegex(p).test(value));
+/**
+ * Raw captured-event kinds (6) -> M7 capture categories (4).
+ * The union side reflects the captured_event.ts kind discriminants.
+ */
+const KIND_MAP = Object.freeze({
+    console: 'console',
+    fetch: 'network',
+    xhr: 'network',
+    websocket: 'network',
+    dom_mutation: 'dom_mutations',
+    lifecycle: 'lifecycle',
+    // App service-worker lifecycle: its own capture category + host buffer.
+    sw_state: 'sw_state',
+    store_change: 'store_change',
+    replay: 'replay',
+    library_popup: 'library_popup',
+});
+const eventKindToCaptureKind = (rawKind) => KIND_MAP[rawKind] ?? null;
+const isKindEnabled = (rawKind, enabledKinds) => {
+    const ck = eventKindToCaptureKind(rawKind);
+    if (ck === null)
+        return true; // unknown raw kinds default-allow (future-compat)
+    return enabledKinds.includes(ck);
+};
+const isUrlAllowed = (url, allowlist, blocklist) => {
+    if (matchesAnyGlob(url, blocklist))
+        return false; // blocklist wins
+    if (allowlist.length === 0)
+        return false; // explicit opt-in model
+    return matchesAnyGlob(url, allowlist);
+};
+/**
+ * Pick the most-specific readControls entry whose glob pattern matches `url`.
+ * Specificity = longest pattern string; ties broken by lexicographic order of
+ * the pattern so the choice is deterministic. Returns undefined when no
+ * pattern matches (caller treats as no restriction).
+ */
+const pickMostSpecificReadControl = (url, controls) => {
+    let winnerPattern;
+    let winnerValue;
+    for (const [pattern, value] of Object.entries(controls)) {
+        if (!matchesAnyGlob(url, [pattern]))
+            continue;
+        if (winnerPattern === undefined) {
+            winnerPattern = pattern;
+            winnerValue = value;
+            continue;
+        }
+        if (pattern.length > winnerPattern.length ||
+            (pattern.length === winnerPattern.length && pattern < winnerPattern)) {
+            winnerPattern = pattern;
+            winnerValue = value;
+        }
+    }
+    return winnerValue;
+};
+/**
+ * True iff the resolved readControls entry permits the given CaptureKind.
+ * Missing flag = allowed (no restriction); explicit `false` denies. Undefined
+ * control (no matching readControls entry) = allowed.
+ */
+const isKindAllowedByReadControls = (kind, control) => control?.[kind] !== false;
+/**
+ * True iff the per-kind capture.filters predicate (if configured) accepts the
+ * event. No filter for the resolved kind => allow. compileSourceFilter ok:false
+ * (malformed regex despite the schema validator) => fail-open (allow) so a
+ * single bad filter cannot suppress all events of a kind.
+ */
+const passesCaptureFilter = (event, captureKind, filters) => {
+    const spec = filters[captureKind];
+    if (spec === undefined)
+        return true;
+    const compiled = compileSourceFilter(spec);
+    if (!compiled.ok)
+        return true;
+    return compiled.predicate(event);
+};
+const shouldCaptureEvent = (event, settings) => {
+    if (!isKindEnabled(event.kind, settings['capture.enabledKinds'])) {
+        return false;
+    }
+    if (!isUrlAllowed(event.frameUrl, settings['sites.allowlist'], settings['sites.blocklist'])) {
+        return false;
+    }
+    const captureKind = eventKindToCaptureKind(event.kind);
+    if (captureKind === null)
+        return true; // unknown raw kinds default-allow
+    const control = pickMostSpecificReadControl(event.frameUrl, settings['sites.readControls']);
+    if (!isKindAllowedByReadControls(captureKind, control))
+        return false;
+    return passesCaptureFilter(event, captureKind, settings['capture.filters']);
+};
+
+const DEFAULT_LOAD_TIMEOUT_MS = 10_000;
+/** Active tab id in the last-focused window, or undefined when there is none. */
+const activeTabId = async () => {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return tabs[0]?.id;
+};
+/**
+ * Resolve once the tab reports document 'complete', or 'timeout' after timeoutMs.
+ * The onUpdated listener is added BEFORE the caller triggers the load so the
+ * 'complete' event can't be missed; it is always removed and the timer cleared.
+ */
+const waitForComplete = (tabId, timeoutMs) => new Promise((resolve) => {
+    let settled = false;
+    const settle = (outcome) => {
+        if (settled)
+            return;
+        settled = true;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        clearTimeout(timer);
+        resolve(outcome);
+    };
+    const onUpdated = (id, info) => {
+        if (id === tabId && info.status === 'complete')
+            settle('complete');
+    };
+    const timer = setTimeout(() => settle('timeout'), timeoutMs);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+});
+/**
+ * Navigate the active (or given) tab to url and wait for it to finish loading.
+ * Throws on an invalid url or when no tab can be resolved. The listener is armed
+ * before chrome.tabs.update so the fresh load's 'complete' is observed.
+ */
+const navigateTab = async (input) => {
+    const url = normalizeUrl(input.url);
+    if (url === null) {
+        throw new Error(`navigate: invalid or unsupported url: ${JSON.stringify(input.url)}`);
+    }
+    const tabId = input.tabId ?? (await activeTabId());
+    if (tabId === undefined) {
+        throw new Error('navigate: no active tab (open a tab or pass tab_id)');
+    }
+    const pending = waitForComplete(tabId, input.timeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS);
+    const tab = await chrome.tabs.update(tabId, { url });
+    const outcome = await pending;
+    return {
+        tabId,
+        url,
+        ...(tab?.windowId !== undefined ? { windowId: tab.windowId } : {}),
+        status: outcome === 'complete' ? 'complete' : 'loading',
+    };
+};
+/**
+ * Open a new tab at url and wait for it to finish loading. active defaults to
+ * Chrome's behavior (foreground). Throws on an invalid url or when Chrome returns
+ * no tab id.
+ */
+const openNewTab = async (input) => {
+    const url = normalizeUrl(input.url);
+    if (url === null) {
+        throw new Error(`new_tab: invalid or unsupported url: ${JSON.stringify(input.url)}`);
+    }
+    const tab = await chrome.tabs.create({
+        url,
+        ...(input.active !== undefined ? { active: input.active } : {}),
+    });
+    const tabId = tab.id;
+    if (tabId === undefined) {
+        throw new Error('new_tab: chrome did not return a tab id');
+    }
+    const outcome = await waitForComplete(tabId, input.timeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS);
+    return {
+        tabId,
+        url,
+        ...(tab.windowId !== undefined ? { windowId: tab.windowId } : {}),
+        status: outcome === 'complete' ? 'complete' : 'loading',
+        created: true,
+    };
+};
 
 const isSwRequestEnvelope = (m) => {
     if (m === null || typeof m !== 'object')
@@ -2173,105 +2269,6 @@ const createSettingsCache = () => {
         return { applied: true };
     };
     return { getSetting, getAll, applySnapshot, applyChange };
-};
-
-const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
-const globToRegex = (pattern) => {
-    const escaped = pattern.replace(REGEX_SPECIALS, '\\$&').replace(/\*/g, '.*');
-    return new RegExp(`^${escaped}$`);
-};
-const matchesAnyGlob = (value, patterns) => patterns.some((p) => globToRegex(p).test(value));
-/**
- * Raw captured-event kinds (6) -> M7 capture categories (4).
- * The union side reflects the captured_event.ts kind discriminants.
- */
-const KIND_MAP = Object.freeze({
-    console: 'console',
-    fetch: 'network',
-    xhr: 'network',
-    websocket: 'network',
-    dom_mutation: 'dom_mutations',
-    lifecycle: 'lifecycle',
-    // App service-worker lifecycle: its own capture category + host buffer.
-    sw_state: 'sw_state',
-    store_change: 'store_change',
-    replay: 'replay',
-    library_popup: 'library_popup',
-});
-const eventKindToCaptureKind = (rawKind) => KIND_MAP[rawKind] ?? null;
-const isKindEnabled = (rawKind, enabledKinds) => {
-    const ck = eventKindToCaptureKind(rawKind);
-    if (ck === null)
-        return true; // unknown raw kinds default-allow (future-compat)
-    return enabledKinds.includes(ck);
-};
-const isUrlAllowed = (url, allowlist, blocklist) => {
-    if (matchesAnyGlob(url, blocklist))
-        return false; // blocklist wins
-    if (allowlist.length === 0)
-        return false; // explicit opt-in model
-    return matchesAnyGlob(url, allowlist);
-};
-/**
- * Pick the most-specific readControls entry whose glob pattern matches `url`.
- * Specificity = longest pattern string; ties broken by lexicographic order of
- * the pattern so the choice is deterministic. Returns undefined when no
- * pattern matches (caller treats as no restriction).
- */
-const pickMostSpecificReadControl = (url, controls) => {
-    let winnerPattern;
-    let winnerValue;
-    for (const [pattern, value] of Object.entries(controls)) {
-        if (!matchesAnyGlob(url, [pattern]))
-            continue;
-        if (winnerPattern === undefined) {
-            winnerPattern = pattern;
-            winnerValue = value;
-            continue;
-        }
-        if (pattern.length > winnerPattern.length ||
-            (pattern.length === winnerPattern.length && pattern < winnerPattern)) {
-            winnerPattern = pattern;
-            winnerValue = value;
-        }
-    }
-    return winnerValue;
-};
-/**
- * True iff the resolved readControls entry permits the given CaptureKind.
- * Missing flag = allowed (no restriction); explicit `false` denies. Undefined
- * control (no matching readControls entry) = allowed.
- */
-const isKindAllowedByReadControls = (kind, control) => control?.[kind] !== false;
-/**
- * True iff the per-kind capture.filters predicate (if configured) accepts the
- * event. No filter for the resolved kind => allow. compileSourceFilter ok:false
- * (malformed regex despite the schema validator) => fail-open (allow) so a
- * single bad filter cannot suppress all events of a kind.
- */
-const passesCaptureFilter = (event, captureKind, filters) => {
-    const spec = filters[captureKind];
-    if (spec === undefined)
-        return true;
-    const compiled = compileSourceFilter(spec);
-    if (!compiled.ok)
-        return true;
-    return compiled.predicate(event);
-};
-const shouldCaptureEvent = (event, settings) => {
-    if (!isKindEnabled(event.kind, settings['capture.enabledKinds'])) {
-        return false;
-    }
-    if (!isUrlAllowed(event.frameUrl, settings['sites.allowlist'], settings['sites.blocklist'])) {
-        return false;
-    }
-    const captureKind = eventKindToCaptureKind(event.kind);
-    if (captureKind === null)
-        return true; // unknown raw kinds default-allow
-    const control = pickMostSpecificReadControl(event.frameUrl, settings['sites.readControls']);
-    if (!isKindAllowedByReadControls(captureKind, control))
-        return false;
-    return passesCaptureFilter(event, captureKind, settings['capture.filters']);
 };
 
 const isSettingsEventMessage = (msg) => {

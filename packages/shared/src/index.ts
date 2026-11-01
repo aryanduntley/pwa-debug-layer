@@ -167,3 +167,24 @@ export type {
   ManifestSummary,
   InstallabilityResult,
 } from './types/installability.js';
+
+export {
+  CDP_BRIDGE_VERSION,
+  CDP_EMIT_BINDING,
+  CDP_GLOBAL,
+} from './types/cdp_bridge.js';
+export type { CdpEmitPayload, CdpDispatchRequest } from './types/cdp_bridge.js';
+
+export { normalizeUrl } from './types/navigation_url.js';
+
+export {
+  matchesAnyGlob,
+  eventKindToCaptureKind,
+  isKindEnabled,
+  isUrlAllowed,
+  pickMostSpecificReadControl,
+  isKindAllowedByReadControls,
+  passesCaptureFilter,
+  shouldCaptureEvent,
+} from './capture_gate.js';
+export type { CaptureGateSettings } from './capture_gate.js';

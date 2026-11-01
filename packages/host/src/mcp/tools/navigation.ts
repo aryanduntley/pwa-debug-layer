@@ -7,6 +7,7 @@ import {
   type ToolDef,
   type ToolResponse,
 } from '../tool_registry.js';
+import { isCdpConnectionId } from '../../cdp_session/protocol.js';
 import type { IpcRequestEnvelope } from '../ipc/envelope.js';
 import { resolveTarget } from './target_resolution.js';
 
@@ -40,6 +41,7 @@ const sendNavRequest = async (
   tool: 'pdl_navigate' | 'pdl_new_tab',
   payload: Record<string, unknown>,
   nextSteps: readonly string[],
+  cdpNextSteps?: (payload: Record<string, unknown>) => readonly string[],
 ): Promise<ToolResponse> => {
   const target = resolveTarget(ctx, extensionId);
   if (!target.ok) {
@@ -77,7 +79,11 @@ const sendNavRequest = async (
     extensionId: target.extensionId,
     ...(response.payload as object),
   };
-  return okResponse(data, [...nextSteps]);
+  const steps =
+    cdpNextSteps !== undefined && isCdpConnectionId(target.extensionId)
+      ? cdpNextSteps((response.payload ?? {}) as Record<string, unknown>)
+      : nextSteps;
+  return okResponse(data, [...steps]);
 };
 
 export const navigateHandler = async (
@@ -113,6 +119,9 @@ export const newTabHandler = async (
     },
     [
       'Opened a new tab. Returns { tabId, url, status, created:true }. Pass the returned tabId to other pwa-debug tools (react_tree, console_tail, pdl_click, …) to target this tab; without tab_id they use the active tab.',
+    ],
+    (payload) => [
+      `Opened a new tab as its own CDP connection "${String(payload['connectionId'])}" (tabId is null over CDP). Pass extension_id: "${String(payload['connectionId'])}" to the other pwa-debug tools to target it; the connection you called this on still targets the original tab.`,
     ],
   );
 

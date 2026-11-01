@@ -92,7 +92,9 @@ export const browserStatusHandler = async (
   return browserStatusCore({
     listLaunches: () => getLaunchRegistry().list(),
     probePort: probeDebugPort,
-    listConnections: () => ctx.ipcServer.listConnections(),
+    // activeExtensions = extension SW heartbeats; CDP connections are not extensions.
+    listConnections: () =>
+      ctx.ipcServer.listConnections().filter((c) => c.kind !== 'cdp'),
     now: Date.now,
   });
 };
