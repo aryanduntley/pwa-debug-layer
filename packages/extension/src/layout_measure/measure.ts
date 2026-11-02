@@ -1,6 +1,8 @@
 import {
   resolveChecksConfig,
+  resolveCustomChecks,
   type ChecksConfig,
+  type CustomCheck,
   type ChecksInput,
   type LayoutFinding,
   type LayoutMeasureResult,
@@ -12,6 +14,8 @@ import {
   checkPageOverflow,
   checkPinnedVisible,
 } from './checks_box.js';
+import { checkRingClipped } from './checks_ring.js';
+import { runCustomChecks } from './checks_custom.js';
 import { checkTapTargets } from './checks_tap.js';
 import { checkContrast, checkTextClipped, checkTextPatterns, renderedText } from './checks_text.js';
 import { freezeAnimations, unfreezeAnimations } from './freeze.js';
@@ -24,6 +28,8 @@ export type LayoutMeasureInput = {
   readonly root_selector?: string;
   readonly exempt_selectors: readonly string[];
   readonly checks: ChecksConfig;
+  readonly custom: readonly CustomCheck[];
+  readonly view: Readonly<Record<string, string>>;
 };
 
 type Fail = { readonly error: { readonly message: string } };
@@ -51,6 +57,12 @@ export const readLayoutMeasureInput = (
   }
   const checks = resolveChecksConfig(r['checks'] as ChecksInput | undefined);
   if (!checks.ok) return { ok: false, error: `layout_measure: ${checks.error}` };
+  const custom = resolveCustomChecks(r['custom']);
+  if (!custom.ok) return { ok: false, error: `layout_measure: ${custom.error}` };
+  const view = r['view'] ?? {};
+  if (view === null || typeof view !== 'object' || Array.isArray(view) || !Object.values(view).every((v) => typeof v === 'string')) {
+    return { ok: false, error: 'layout_measure: view must be an object of string values' };
+  }
   return {
     ok: true,
     input: {
@@ -58,6 +70,8 @@ export const readLayoutMeasureInput = (
       ...(root !== undefined ? { root_selector: root } : {}),
       exempt_selectors: exempt,
       checks: checks.config,
+      custom: custom.checks,
+      view: view as Readonly<Record<string, string>>,
     },
   };
 };
@@ -108,15 +122,20 @@ export const measureLayout = (
     ...(checks.tap_target.enabled ? checkTapTargets(ctx, elements, checks.tap_target) : []),
     ...(checks.text_clipped.enabled ? checkTextClipped(ctx, elements) : []),
     ...(checks.edge_contact.enabled ? checkEdgeContact(ctx, elements, checks.edge_contact) : []),
+    ...(checks.ring_clipped.enabled ? checkRingClipped(ctx, elements, checks.ring_clipped) : []),
     ...(checks.text_patterns.enabled ? checkTextPatterns(renderedText(root), checks.text_patterns) : []),
     ...(checks.contrast.enabled ? checkContrast(ctx, elements) : []),
   ];
+  // Custom checks run last, so a busy one can't crowd built-in findings out of the cap.
+  const custom = runCustomChecks(ctx, input.custom, input.view);
+  const findings = [...all, ...custom.findings];
   return {
     url: doc.location?.href ?? '',
     viewport: ctx.viewport,
     scroll: geometry.scrollOffset(),
-    findings: all.slice(0, FINDINGS_CAP),
-    truncated: all.length > FINDINGS_CAP,
+    findings: findings.slice(0, FINDINGS_CAP),
+    truncated: findings.length > FINDINGS_CAP,
+    ...(custom.errors.length > 0 ? { custom_errors: custom.errors } : {}),
   };
 };
 

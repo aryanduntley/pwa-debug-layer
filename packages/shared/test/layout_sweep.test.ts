@@ -10,6 +10,8 @@ import {
   planPageViews,
   planSweep,
   resolveChecksConfig,
+  resolveCustomChecks,
+  customCheckId,
   resolvePageUrl,
   summarizeFindings,
   viewVars,
@@ -35,6 +37,8 @@ describe('resolveChecksConfig', () => {
   it('rejects out-of-range knobs and bad regexes', () => {
     expect(resolveChecksConfig({ tap_target: { min: 0 } }).ok).toBe(false);
     expect(resolveChecksConfig({ edge_contact: { min_inset: 100 } }).ok).toBe(false);
+    expect(resolveChecksConfig({ ring_clipped: { min_px: 0 } }).ok).toBe(false);
+    expect(resolveChecksConfig({ ring_clipped: { min_px: 2 } })).toMatchObject({ ok: true, config: { ring_clipped: { enabled: true, min_px: 2 } } });
     const bad = resolveChecksConfig({ text_patterns: { extra: ['(unclosed'] } });
     expect(bad).toEqual({ ok: false, error: expect.stringContaining('(unclosed') });
   });
@@ -196,5 +200,26 @@ describe('planPageViews / labels / templates', () => {
       '#state=create&lang=en&theme=dark&x={missing}',
     );
     expect(expandTemplate('{state}', { state: 'a b&c' })).toBe('a%20b%26c');
+  });
+});
+
+describe('resolveCustomChecks', () => {
+  it('accepts nothing, and valid checks', () => {
+    expect(resolveCustomChecks(undefined)).toEqual({ ok: true, checks: [] });
+    expect(resolveCustomChecks([{ name: 'price_wraps', expression: "pdl.elements('.price')" }])).toEqual({
+      ok: true,
+      checks: [{ name: 'price_wraps', expression: "pdl.elements('.price')" }],
+    });
+    expect(customCheckId('price_wraps')).toBe('custom:price_wraps');
+  });
+
+  it('rejects bad shapes, names, empty or huge expressions, duplicates and too many checks', () => {
+    expect(resolveCustomChecks({})).toMatchObject({ ok: false });
+    expect(resolveCustomChecks([{ name: 'Bad-Name', expression: '1' }])).toMatchObject({ ok: false, error: expect.stringContaining('name') });
+    expect(resolveCustomChecks([{ name: 'ok', expression: '  ' }])).toMatchObject({ ok: false, error: expect.stringContaining('non-empty') });
+    expect(resolveCustomChecks([{ name: 'ok', expression: 'x'.repeat(10_001) }])).toMatchObject({ ok: false, error: expect.stringContaining('longer') });
+    expect(resolveCustomChecks([{ name: 'a', expression: '1' }, { name: 'a', expression: '2' }])).toEqual({ ok: false, error: 'custom_checks: duplicate name "a"' });
+    const many = Array.from({ length: 21 }, (_, i) => ({ name: `c${i}`, expression: '1' }));
+    expect(resolveCustomChecks(many)).toMatchObject({ ok: false, error: expect.stringContaining('at most 20') });
   });
 });

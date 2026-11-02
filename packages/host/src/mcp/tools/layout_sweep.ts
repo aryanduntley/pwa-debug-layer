@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   planSweep,
   resolveChecksConfig,
+  resolveCustomChecks,
   type ChecksInput,
   type LayoutColorScheme,
   type LayoutStateDriver,
@@ -49,6 +50,7 @@ const checksSchema = z
     pinned_visible: toggle({ pinned_selectors: z.array(z.string()).optional() }),
     text_clipped: toggle({}),
     edge_contact: toggle({ min_inset: z.number().optional() }),
+    ring_clipped: toggle({ min_px: z.number().optional() }),
     text_patterns: toggle({ extra: z.array(z.string()).optional() }),
     errors: toggle({}),
     contrast: toggle({}),
@@ -92,6 +94,9 @@ const sweepSchema = {
     })
     .optional(),
   checks: checksSchema,
+  custom_checks: z
+    .array(z.object({ name: z.string(), expression: z.string() }))
+    .optional(),
   exempt_selectors: z.array(z.string().min(1)).optional(),
   max_views: z.number().int().optional(),
   screenshots: z.enum(['none', 'first_per_group']).optional(),
@@ -206,7 +211,8 @@ const resultNextSteps = (r: SweepResult): readonly string[] => {
     ...(first === undefined
       ? [r.views > 0 && r.failed_views === r.views ? 'No view was measured, so there are no results yet; fix the view errors above and re-run.' : 'No problems found in the swept views.']
       : [
-          `Fix first: [${first.check}] ${first.message} (${first.count}× on ${first.pages.length} page(s)).`,
+          'Findings are heuristics and can be false positives (intentional full-bleed designs, unusual widgets). Verify each group before fixing it: look at its screenshot (screenshots: "first_per_group"), inspect the element with evaluate, or check on the device; tell the user which groups you confirmed and which you dismissed.',
+          `Start with: [${first.check}] ${first.message} (${first.count}× on ${first.pages.length} page(s)).`,
           ...(r.groups.some((g) => g.check === 'page_overflow_x')
             ? ['Page overflow is listed first: on a phone it widens the layout viewport, so offscreen / pinned findings on those views may be symptoms. Fix it and re-run.']
             : []),
@@ -241,6 +247,8 @@ export const layoutSweepStart = async (
 
   const checks = resolveChecksConfig(args.checks as ChecksInput | undefined);
   if (!checks.ok) return errorResponse(checks.error, ['Fix the checks argument; pdl_help({ topic: "layout" }) shows the knobs.']);
+  const custom = resolveCustomChecks(args.custom_checks);
+  if (!custom.ok) return errorResponse(custom.error, ['Fix custom_checks; pdl_help({ topic: "layout" }) has an example.']);
   const planned = planSweep({
     target,
     pages: args.pages,
@@ -348,6 +356,7 @@ export const layoutSweepStart = async (
       job_id: jobId,
       plan,
       checks: checks.config,
+      custom_checks: custom.checks,
       exempt_selectors: args.exempt_selectors ?? [],
       ...(args.root_selector !== undefined ? { root_selector: args.root_selector } : {}),
       settle: {
@@ -402,7 +411,7 @@ export const layoutSweepCancel = (
 export const layoutSweepTool: ToolDef<typeof sweepSchema> = Object.freeze({
   name: 'layout_sweep',
   description:
-    "Responsive layout audit across a view matrix: pages × viewport widths × color schemes × app states. For every view it emulates the viewport and prefers-color-scheme over CDP on the real top-level page, applies the app state, settles, and measures in the page: sideways page overflow, elements off screen (scroll rows and carousels skipped automatically), tap targets under the minimum (WCAG 2.2 default 24px; set checks.tap_target.min 44/48 for platform guidelines), fixed bars not fully on screen, cut-off text, text or fields touching their box's edge, unresolved copy ({{x}}, undefined, NaN, [object Object], plus checks.text_patterns.extra), page errors, and optionally contrast. Results are grouped into distinct problems, not raw rows. Runs in the background: returns { job_id, planned_views, target } at once; poll layout_sweep_status. TARGETS: phones (pdl_android_attach connection) and browsers started by pdl_launch_browser (extension connection; the host uses the launch's debug port). Other connections are refused. Args: { extension_id?, tab_id?, pages: absolute URLs or paths with base_url, base_url?, viewports?: [{ width, height?=800, dpr?=2, mobile?=true }] (default 360/390/430; phones also check their own size first), color_schemes?: ['light','dark'] default, states?: { discover?: expression → string[] of state keys, apply?: expression with `view` bound ({ state, scheme, width, height, page, ...dimensions }), hash_template?: '#state={state}&lang={lang}', dimensions?: { lang: ['en','es'] }, reload?: reload after applying }, root_selector?, settle?: { wait_ms?=80, wait_for?: expression, freeze_animations?=true }, checks?: each check true/false or its knobs, exempt_selectors?, max_views?=2000 (≤10000), screenshots?: 'none' | 'first_per_group', view_timeout_ms?=5000, report_path? }. pdl_help({ topic: 'layout' }) has a worked example.",
+    "Responsive layout audit across a view matrix: pages × viewport widths × color schemes × app states. For every view it emulates the viewport and prefers-color-scheme over CDP on the real top-level page, applies the app state, settles, and measures in the page: sideways page overflow, elements off screen (scroll rows and carousels skipped automatically), tap targets under the minimum (WCAG 2.2 default 24px; set checks.tap_target.min 44/48 for platform guidelines), fixed bars not fully on screen, cut-off text, text or fields touching a visible edge of their box, outline/shadow rings cut off by a scrolling or clipping parent, unresolved copy ({{x}}, undefined, NaN, [object Object], plus checks.text_patterns.extra), page errors, and optionally contrast. Results are grouped into distinct problems, not raw rows. Runs in the background: returns { job_id, planned_views, target } at once; poll layout_sweep_status. TARGETS: phones (pdl_android_attach connection) and browsers started by pdl_launch_browser (extension connection; the host uses the launch's debug port). Other connections are refused. Args: { extension_id?, tab_id?, pages: absolute URLs or paths with base_url, base_url?, viewports?: [{ width, height?=800, dpr?=2, mobile?=true }] (default 360/390/430; phones also check their own size first), color_schemes?: ['light','dark'] default, states?: { discover?: expression → string[] of state keys, apply?: expression with `view` bound ({ state, scheme, width, height, page, ...dimensions }), hash_template?: '#state={state}&lang={lang}', dimensions?: { lang: ['en','es'] }, reload?: reload after applying }, root_selector?, settle?: { wait_ms?=80, wait_for?: expression, freeze_animations?=true }, checks?: each check true/false or its knobs, custom_checks?: [{ name: snake_case, expression }] (up to 20; your own checks, run in the page after the built-ins for every view with `view` (page, width, height, scheme, state, dimensions) and `pdl` helpers (elements(selector?) visible non-exempt elements, isVisible, rect, style, px, name, signature, edges, ink, background) bound; return elements, strings or { element?, message, signature? }, alone or as a list; findings are named custom:<name> and grouped like the rest; must be synchronous; a throw becomes a job warning), exempt_selectors?, max_views?=2000 (≤10000), screenshots?: 'none' | 'first_per_group', view_timeout_ms?=5000, report_path? }. pdl_help({ topic: 'layout' }) has a worked example.",
   inputSchema: sweepSchema,
   handler: (args, ctx) => layoutSweepStart(args, ctx, defaultLayoutSweepDeps()),
 });

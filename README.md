@@ -13,6 +13,7 @@ The PWA failures developers actually search for, read straight from your live ru
 - **Why won't my PWA install?** — structured installability diagnostics with per-gap remediation, not just "manifest invalid."
 - **What's actually in IndexedDB / localStorage right now?** — live storage inspection (*inspect IndexedDB live*).
 - **What can this browser actually do?** — a live capability matrix (Push / Background Sync / Periodic Sync / Badging / File System Access / Window Controls Overlay).
+- **Does anything break at 360 px, in Spanish, in dark mode, in this app state?** — one `layout_sweep` call checks every page × width × color scheme × state and returns a short list of distinct problems.
 
 All read from your real, logged-in profile — service-worker, cache, and extension state included — which `chrome-devtools-mcp`'s sterile automated Chrome can't see.
 
@@ -27,6 +28,7 @@ The goal is to eliminate the "user is the AI's eyes and hands" loop. Today, debu
 > - **Replay & source maps** — rrweb `session_record`/`session_replay`, `source_map_resolve`.
 > - **Browser launcher** — one-call `pdl_launch_browser` with `chrome-devtools-mcp` coexistence.
 > - **Android phones** — the same tools drive Android Chrome tabs and installed PWAs over adb (`pdl_android_attach`), no desktop browser in the loop.
+> - **Responsive layout sweep** — `layout_sweep` emulates widths and color schemes over CDP, walks app states and languages, measures overflow, off-screen elements, tap targets, pinned bars, cut-off text, edge contact, clipped focus/selection rings and unresolved copy, runs your own `custom_checks`, and groups the results into distinct problems.
 > - **PWA Runtime Diagnostics** — service-worker lifecycle + versions, CacheStorage contents + age, installability gaps, a live capability matrix, IndexedDB/web-storage inspection, update-propagation / version-skew analysis, and a one-shot runtime-state snapshot.
 >
 > **Verified on Linux** (the full suite live-tested against a real PWA). macOS/Windows code paths are implemented with unit coverage but still need real-machine retest ([help wanted](#help-wanted-macos--windows-verification)). Firefox is not supported (it doesn't speak CDP).
@@ -263,7 +265,7 @@ pwa-debug only removes the adb forwards and reverses **it created**, when the ho
 
 | On a phone connection | |
 |---|---|
-| **Works** | Every page tool: capture tails, `evaluate`, React/Vue/Svelte/Solid, all stores, SW / cache / installability / storage / IndexedDB / update analysis / snapshot, popups, `session_record`/`replay`, `source_map_resolve`, every `pdl_*` interaction and gesture, `pdl_navigate`, `pdl_new_tab` (each new tab is its own connection), `session_ping`. |
+| **Works** | Every page tool: capture tails, `evaluate`, React/Vue/Svelte/Solid, all stores, SW / cache / installability / storage / IndexedDB / update analysis / snapshot, popups, `session_record`/`replay`, `source_map_resolve`, every `pdl_*` interaction and gesture, `pdl_navigate`, `pdl_new_tab` (each new tab is its own connection), `session_ping`, and `layout_sweep` (the phone checks its own size first, then the requested widths). |
 | **Not available** | `recent_events` (reads the extension service worker's buffer) — use `console_tail` / `network_tail` / `error_tail`. |
 | **Connection-independent** | Setup, launcher, settings, help and the `pdl_cdp_*` / `pdl_android_*` tools themselves. |
 
@@ -377,7 +379,7 @@ The server also sends MCP `instructions` on connect: a short orientation the cli
 
 | Tool | Purpose |
 |---|---|
-| `pdl_help({ topic?, tool? })` | Usage guide as data. No args: capabilities, startup workflow and the topic list. `topic` (`getting_started`, `control`, `reading_state`, `frameworks`, `stores`, `pwa`, `popups`, `recording`, `browser`, `chrome_devtools`, `mobile`, `targeting`, `settings`, `setup`, `troubleshooting`): a how-to. `tool`: that tool's description and parameters, read from the live registry. |
+| `pdl_help({ topic?, tool? })` | Usage guide as data. No args: capabilities, startup workflow and the topic list. `topic` (`getting_started`, `control`, `reading_state`, `frameworks`, `stores`, `pwa`, `layout`, `popups`, `recording`, `browser`, `chrome_devtools`, `mobile`, `targeting`, `settings`, `setup`, `troubleshooting`): a how-to. `tool`: that tool's description and parameters, read from the live registry. |
 
 ### Host management & setup
 
@@ -423,6 +425,33 @@ The namesake suite — read the debugged PWA's service-worker, cache, installabi
 | `idb_list` / `idb_query` | IndexedDB databases + object-store schema, then a read-only capped slice of records — *inspect IndexedDB live*. |
 | `pwa_update_analyze` | Correlates SW status + cache ages + recent 404s into a verdict: waiting-update-on-active-client, cached-HTML-older-than-JS version skew, chunk 404s — *why are some users on old code?* |
 | `pwa_snapshot` | One capped runtime-state blob (SW + store + web storage + IndexedDB + cache names) for deterministic bug-repro / hand-off. |
+
+### Responsive layout sweep
+
+One call audits a view matrix: **pages × viewport widths × color schemes × app states** (plus any crossed dimensions such as language). For each view the host emulates the viewport and `prefers-color-scheme` over CDP on the real top-level page, applies the app state (a hash template or your own `apply` expression), settles, and measures in the page. The results are grouped into distinct problems, so 150 raw findings that are really two problems come back as two groups, with screenshots on request. Targets: a phone (`pdl_android_attach`) or a browser started by `pdl_launch_browser`. A browser you started yourself is refused, because the host needs its debug port.
+
+| Tool | Purpose |
+|---|---|
+| `layout_sweep({ pages, base_url?, viewports?, color_schemes?, states?, root_selector?, checks?, custom_checks?, exempt_selectors?, screenshots?, … })` | Start a background sweep → `{ job_id, planned_views, target }`. |
+| `layout_sweep_status({ job_id? })` | Progress, then groups (most frequent first, page overflow first), warnings, failed views and the on-disk report path. |
+| `layout_sweep_cancel({ job_id? })` | Stop after the current view. Emulation and the starting URL are always restored. |
+
+| Check | Default | Finds |
+|---|---|---|
+| `page_overflow_x` | on | The page scrolls sideways. |
+| `offscreen` | on | Elements past the left/right viewport edge (scroll rows, carousels and parked drawers skipped). |
+| `tap_target` | on, `min: 24` | Interactive elements under the minimum (WCAG 2.2; set `44`/`48` for platform guidelines). Inline links are exempt. |
+| `pinned_visible` | on | Fixed bars not fully on screen. |
+| `text_clipped` | on | Ellipsized or clipped text that needs more room (e.g. a longer language). |
+| `edge_contact` | on, `min_inset: 4` | Text or controls touching an edge you can see (a padding that a parent rule zeroed). |
+| `ring_clipped` | on, `min_px: 1` | Outline / box-shadow rings (focus, selection, card shadows) cut off by a scrolling or clipping parent. |
+| `text_patterns` | on | Unresolved copy: `{{x}}`, `undefined`, `NaN`, `[object Object]`, plus your own patterns (e.g. raw i18n keys). |
+| `errors` | on | Page errors and unhandled rejections during the view. |
+| `contrast` | off | WCAG AA text contrast (approximate under gradients and images). |
+
+Hidden content (`display: none`, closed `<details>`, collapsed wrappers, screen-reader-only text) is skipped by every check. **Your own checks:** `custom_checks: [{ name, expression }]` (up to 20) run in the page after the built-ins for every view. Each one gets `view` (page, width, scheme, state, dimensions) and a `pdl` helper object (`pdl.elements(selector)` for visible elements, plus `rect`, `style`, `px`, `name`, `edges`, `ink`, `background`). It returns elements, strings or `{ element, message }` items, which become `custom:<name>` findings, grouped and reported like the built-in ones. `pdl_help({ topic: "layout" })` has worked examples.
+
+> **Verify findings before you fix them.** The checks are geometric heuristics over computed styles and rects. They don't see the page the way a person does, so a finding can be a false positive (an intentional full-bleed design, an unusual widget, a state the page never shows a user). Confirm each group before changing code: use `screenshots: "first_per_group"`, look at the element with `evaluate`, or check it on the device. Then re-run the sweep on the affected pages. Desktop emulation of a phone width also uses the desktop browser's fonts and scrollbars, so confirm important findings on a real phone.
 
 ### Framework introspection
 
@@ -482,6 +511,7 @@ Framework-agnostic native-event sequences dispatched so React/Vue/etc. delegated
 - **Browser launcher** ✅ — `pdl_launch_browser` (existing + sandbox-persistent + sandbox-temp), `pdl_check_setup`, `pdl_browser_status`, `pdl_close_browser`, `pdl_install_extension`, `pdl_register_chrome_devtools`, and `chrome-devtools-mcp` coexistence.
 - **PWA Runtime Diagnostics** ✅ — the namesake suite, live-verified against a real PWA. Service-worker introspection (`sw_status` + `sw_lifecycle_tail`: installing/waiting/active versions, `updateViaCache`, skipWaiting/claim/controllerchange); CacheStorage inspection (`cache_list` / `cache_inspect` / `cache_match` with size/age + match-by-URL); `pwa_status` (display mode, controller, permissions, live capability matrix — Push/Background Sync/Periodic Sync/Badging/File System Access/Window Controls Overlay); installability diagnostics (`pwa_installability` → structured `{gaps[], fixes[]}`); IndexedDB/web-storage inspection (`idb_list` / `idb_query` / `storage_get`); update-propagation / version-skew analysis (`pwa_update_analyze`); and a one-shot runtime-state snapshot (`pwa_snapshot`). Closes the stale-cache / "SW won't update" / install-failure / version-skew pain cluster against your real profile.
 - **Android phones** ✅ — `pdl_android_devices` / `pdl_android_attach` drive Android Chrome tabs and installed PWAs over adb + CDP with the full tool surface (only `recent_events` is extension-only); same capture settings; adb mappings cleaned up on shutdown. Live-verified on a Galaxy S24 Ultra (Android 16, Chrome 156).
+- **Responsive layout sweep** ✅ — `layout_sweep` / `layout_sweep_status` / `layout_sweep_cancel` over phones and launched browsers: CDP viewport + color-scheme emulation, app-state and language matrices, ten built-in checks, caller `custom_checks`, grouping, per-group screenshots and an on-disk report. Live-verified on a Galaxy S24 Ultra and a launched Brave across an 83-page prototype (4812 views).
 - **Later** — DevTools panel for human observation of an AI session; multi-tab routing model; event-causality graph (click → action → request → SW → cache → re-render); production-safe diagnostic mode for real-user failure capture.
 - **Deferred** — Firefox port (needs WebDriver BiDi, not CDP); macOS/Windows live verification ([help wanted](#help-wanted-macos--windows-verification)); iOS Safari; hosted/team mode.
 - **Intentionally not pursued** — **Chrome Web Store distribution.** The extension grants broad page access (DOM, framework state, stores, network) and is only meaningful alongside its MCP host. It ships **bundled with the MCP only** and is installed via a manual, dev-mode "Load unpacked" (`pdl_install_extension` hands you the path + steps) — so every user knows exactly what they're running and why. Disabling Chrome Developer mode auto-disables it.

@@ -16,7 +16,7 @@ export const HELP_CAPABILITIES: readonly string[] = Object.freeze([
   'Capture library popups such as wallet modals, including shadow DOM, and correlate their failures (topic "popups").',
   "Work on the user's real logged-in profile, or a sandbox profile with the extension preloaded (topic \"browser\").",
   'Drive Android phones (Chrome tabs and installed PWAs) with the same tools: pdl_android_attach finds the phone over adb and attaches in one call (topic "mobile").',
-  'Audit responsive layout across pages × widths × color schemes × app states in one call, grouped into distinct problems (topic "layout").',
+  'Audit responsive layout across pages × widths × color schemes × app states in one call, with your own custom checks, grouped into distinct problems to verify (topic "layout").',
 ]);
 
 /** The standard startup sequence, shown in the pdl_help overview. */
@@ -89,7 +89,7 @@ export const HELP_TOPICS: readonly HelpTopic[] = Object.freeze([
       'error_tail includes uncaught errors and unhandled promise rejections with stacks. Resolve minified frames with source_map_resolve.',
       'evaluate runs one JavaScript expression in the page and returns a serialized value (16KB cap). Use it for anything the dedicated tools do not cover.',
       'recent_events is a quick, unfiltered look at the latest captured events of any kind.',
-      'Prefer these over screenshots: they give exact text, values and errors. Take a screenshot (chrome-devtools-mcp) only to judge visual layout.',
+      'Prefer these over screenshots: they give exact text, values and errors. Take a screenshot (chrome-devtools-mcp) only to judge visual layout. To check layout across widths, color schemes or app states, use layout_sweep (topic "layout") instead of resizing and measuring by hand.',
     ],
     tools: ['console_tail', 'network_tail', 'error_tail', 'evaluate', 'recent_events', 'source_map_resolve'],
   }),
@@ -148,7 +148,7 @@ export const HELP_TOPICS: readonly HelpTopic[] = Object.freeze([
   topic({
     id: 'layout',
     title: 'Responsive layout sweep',
-    summary: 'One call checks many pages, widths, color schemes and app states for overflow, cut-off text, small tap targets, off-screen bars, edge contact and unresolved copy.',
+    summary: 'One call checks many pages, widths, color schemes and app states for overflow, cut-off text, small tap targets, off-screen bars, edge contact, clipped rings, unresolved copy, plus your own custom checks. Findings are heuristics: verify each group before fixing.',
     guide: [
       'Use layout_sweep instead of writing your own resize-and-measure scripts. It runs in the background: it returns a job_id, then poll layout_sweep_status until status is done.',
       'Targets: a phone (pdl_android_attach, then pass its connection id as extension_id) or a browser started by pdl_launch_browser with the extension. A browser the user started themselves is refused, because the host needs its debug port to emulate the viewport.',
@@ -156,6 +156,12 @@ export const HELP_TOPICS: readonly HelpTopic[] = Object.freeze([
       'App states the URL cannot reach: states.discover (expression returning state keys), then states.hash_template (e.g. "#state={state}&lang={lang}&theme={scheme}") or states.apply (expression with `view` bound). states.dimensions adds crossed axes such as { lang: ["en","es"] }; states.reload reloads after applying for apps that read their hash only on load.',
       'Example: layout_sweep({ extension_id: "<phone connection>", base_url: "http://localhost:8080/pages/", pages: ["customer/4.01-search.html", "all/4.10-chat.html"], viewports: [{ width: 360 }, { width: 411 }, { width: 430 }], root_selector: ".phone", states: { discover: "[...document.querySelectorAll(\'[data-tool=state]\')].map(b => b.dataset.value)", hash_template: "#state={state}&lang={lang}&theme={scheme}", dimensions: { lang: ["en", "es"] } }, checks: { tap_target: { min: 44 }, text_patterns: { extra: ["\\[[a-z-]+:[\\w.]+\\]"] } } }). For a desktop dev server reached from a phone, attach with reverse_ports.',
       'Reading results: groups are distinct problems (numbers in element names ignored), most frequent first, page overflow always first because it makes other geometry findings unreliable. Fix the first group, then re-run on groups[].pages only. report_path has every finding.',
+      'Serve pages over http(s) from a root that contains every asset they load: a page whose relative ../ scripts or styles 404 renders blank, and the sweep then reports "root_selector matched nothing" or page errors instead of layout. Pass full URLs, or base_url plus paths.',
+      'What is not measured: hidden content (display:none, closed <details>, collapsed height:0 wrappers, screen-reader-only text) is skipped by every check.',
+      'edge_contact: each side is measured against the nearest box that shows an edge there (a border on that side, a shadow, a background image, or a background that differs from the surface behind it), so divider rows and same-color rows are judged by their card. Text is measured by its drawn lines, not its block box. A control with no edge of its own (transparent input, text or icon button) is measured by what it draws; a control that shows its own edge fails only when it touches, and one spanning the whole box width (a banner or footer action) is treated as full-bleed by design.',
+      'ring_clipped (knob min_px, default 1): outline / box-shadow ink cut off for good by the nearest scrolling or clipping ancestor on that axis (ink past what it can scroll to). Full-width panels are skipped on their flush sides. It only sees rings present while measuring: a :focus-visible or :hover ring needs states.apply to focus or hover the element first.',
+      'Your own checks: custom_checks: [{ name, expression }] runs each expression in the page after the built-in checks, for every view. It sees `view` (page, width, height, scheme, state and your dimensions) and `pdl`: pdl.elements(selector?) gives visible, non-exempt elements under the root, plus pdl.isVisible, rect, style, px, name, signature, edges (visible box edges), ink (outline/shadow reach) and background. Return elements, strings, or { element?, message, signature? } items (one or a list; null/false = nothing found). Findings are named custom:<name> and group, screenshot and report like built-in ones. Example: custom_checks: [{ name: "price_wraps", expression: "pdl.elements(\'.price\').filter(e => e.getClientRects().length > 1)" }, { name: "tiny_text", expression: "pdl.elements(\'p,span,a,button,label\').filter(e => pdl.px(e, \'font-size\') < 12).map(e => ({ element: e, message: `${pdl.px(e, \'font-size\')}px text \"${pdl.name(e)}\"` }))" }]. Expressions must be synchronous; one that throws or returns something unusable becomes a job warning and the view still counts. Like evaluate, they need a page whose CSP allows eval.',
+      'Verify before fixing: the checks are geometric heuristics over computed styles and rects, so a group can be a false positive (an intentional full-bleed design, an unusual widget, a state users never see). Before changing code or reporting a group as a bug, confirm it: look at its screenshot (screenshots: "first_per_group"), inspect the element with evaluate, or check it on the device. Tell the user which groups you confirmed and which you dismissed, and why. Desktop emulation of a phone width uses desktop fonts and scrollbars, so confirm important findings on a real phone.',
       'Noise control: exempt_selectors skips elements and their subtrees; checks.<name>: false turns a check off; contrast is off by default (approximate). screenshots: "first_per_group" saves one clipped PNG per group as evidence.',
       'layout_sweep_cancel stops after the current view; emulation and the starting URL are always restored.',
     ],
@@ -205,7 +211,7 @@ export const HELP_TOPICS: readonly HelpTopic[] = Object.freeze([
     guide: [
       'pwa-debug and chrome-devtools-mcp are separate MCP servers that share one browser. pdl_launch_browser opens it with a debug port; chrome-devtools-mcp attaches to that port via --browserUrl.',
       'Use pwa-debug for app state (framework, stores, SW, cache, storage), persistent console/network/error capture, navigation and interaction on the real profile.',
-      'Use chrome-devtools-mcp for screenshots, performance traces, Lighthouse, device/network emulation and accessibility snapshots.',
+      'Use chrome-devtools-mcp for screenshots, performance traces, Lighthouse, device/network emulation and accessibility snapshots. For responsive layout audits use pwa-debug\'s layout_sweep, which does its own viewport and color-scheme emulation (topic "layout").',
       'pdl_register_chrome_devtools registers it pinned to the right port. It changes the user\'s global MCP config, so ask first. pdl_check_setup flags it if it is unregistered or pinned to the wrong port.',
     ],
     tools: ['pdl_register_chrome_devtools', 'pdl_check_setup'],
@@ -224,6 +230,7 @@ export const HELP_TOPICS: readonly HelpTopic[] = Object.freeze([
       '   - an app WebView: socket: "webview" or the app package (the app must enable WebView debugging).',
       '3. Pass the returned connection id ("cdp:127.0.0.1:<port>:<tab>") as extension_id to every other tool: pdl_navigate, pdl_click, pdl_tap, pdl_swipe, react_tree, store_get_state, console_tail, network_tail, sw_status, ...',
       'pdl_new_tab with that extension_id opens further phone tabs (each its own connection). pdl_cdp_detach drops a connection. adb forwards/reverses pwa-debug created are removed when the host shuts down.',
+      'layout_sweep works on a phone connection: it checks the phone\'s own size first, then the requested widths (topic "layout").',
       'Everything works on the phone except recent_events (use the tail tools instead). Capture settings (sites.allowlist / blocklist / readControls, capture.enabledKinds, capture.filters) apply to phone connections exactly as to the extension. If the tab crashes, calls say so; pdl_navigate reloads it.',
       'Manual fallback without the Android tools: `adb forward tcp:9223 localabstract:chrome_devtools_remote`, then pdl_cdp_targets / pdl_cdp_attach with browser_url "9223".',
       'The user can mirror the phone screen on the desktop at chrome://inspect/#devices (Inspect); pwa-debug does not need it.',

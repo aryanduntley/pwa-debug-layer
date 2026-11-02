@@ -1,7 +1,8 @@
 import { DEFAULT_TEXT_PATTERNS, type ChecksConfig, type LayoutFinding } from '@pwa-debug/shared';
 import type { MeasureContext } from './geometry.js';
 import { accessibleName, elementFinding, hasOwnText } from './element_info.js';
-import { blendOver, contrastRatio, parseCssColor, type Rgba } from './color.js';
+import { blendOver, contrastRatio, parseCssColor } from './color.js';
+import { effectiveBackground } from './paint.js';
 
 const SLACK = 1;
 
@@ -74,29 +75,6 @@ export const checkTextPatterns = (
       message: `unresolved text ${JSON.stringify(match)} (pattern /${source}/)`,
     })),
   );
-
-const WHITE: Rgba = { r: 255, g: 255, b: 255, a: 1 };
-
-/**
- * Effective background behind el: background colors from el outwards,
- * composited until opaque (white canvas at the top). Null when an ancestor
- * paints a background image or a color this parser can't read.
- */
-export const effectiveBackground = (ctx: MeasureContext, el: Element): Rgba | null => {
-  const layers = (node: Element | null, acc: readonly Rgba[]): readonly Rgba[] | null => {
-    if (node === null) return acc;
-    const img = ctx.style(node, 'background-image');
-    if (img !== '' && img !== 'none') return null;
-    const raw = ctx.style(node, 'background-color');
-    const c = raw === '' ? { r: 0, g: 0, b: 0, a: 0 } : parseCssColor(raw);
-    if (c === null) return null;
-    const next = c.a > 0 ? [...acc, c] : acc;
-    return c.a >= 1 ? next : layers(node.parentElement, next);
-  };
-  const stack = layers(el, []);
-  if (stack === null) return null;
-  return [...stack].reverse().reduce<Rgba>((under, top) => blendOver(top, under), WHITE);
-};
 
 const isLargeText = (ctx: MeasureContext, el: Element): boolean => {
   const size = ctx.px(el, 'font-size');

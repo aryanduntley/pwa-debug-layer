@@ -1,5 +1,6 @@
 import type { ChecksConfig, LayoutFinding, LayoutRect } from '@pwa-debug/shared';
-import { ancestorsWithin, type MeasureContext } from './geometry.js';
+import { ancestorsWithin, memo1, type MeasureContext } from './geometry.js';
+import { SIDES, axisOf, visibleEdges, type Side, type Sides } from './paint.js';
 import { accessibleName, elementFinding, hasOwnText, isFormControl } from './element_info.js';
 
 const SLACK = 1;
@@ -37,7 +38,7 @@ const crossesX = (ctx: MeasureContext, r: LayoutRect): boolean =>
 const fullyOutsideX = (ctx: MeasureContext, r: LayoutRect): boolean =>
   r.x + r.width <= 0 || r.x >= ctx.viewport.width;
 
-const isOutOfFlow = (ctx: MeasureContext, el: Element): boolean => {
+export const isOutOfFlow = (ctx: MeasureContext, el: Element): boolean => {
   const p = ctx.style(el, 'position');
   return p === 'fixed' || p === 'absolute';
 };
@@ -111,81 +112,151 @@ export const checkPinnedVisible = (
       return [elementFinding(ctx, 'pinned_visible', el, `pinned element not fully on screen: ${edgeText(ctx, r)}`)];
     });
 
-const TRANSPARENT = /^(transparent|rgba\(\s*0,\s*0,\s*0,\s*0\s*\)|rgb\(\s*0\s+0\s+0\s*\/\s*0\s*\))$/;
-
-const hasBorder = (ctx: MeasureContext, el: Element): boolean =>
-  (['top', 'right', 'bottom', 'left'] as const).some(
-    (s) => ctx.px(el, `border-${s}-width`) > 0 && !/^(none|hidden|)$/.test(ctx.style(el, `border-${s}-style`)),
-  );
-
-/** A visible box of its own: border, background or shadow (a card, a field, a sheet). */
-export const isBoxed = (ctx: MeasureContext, el: Element): boolean => {
-  const bg = ctx.style(el, 'background-color');
-  const img = ctx.style(el, 'background-image');
-  const shadow = ctx.style(el, 'box-shadow');
-  return (
-    hasBorder(ctx, el) ||
-    (bg !== '' && !TRANSPARENT.test(bg)) ||
-    (img !== '' && img !== 'none') ||
-    (shadow !== '' && shadow !== 'none')
-  );
-};
-
-/** Content of a box: text-bearing elements and form controls, not crossing into nested boxes. */
-const contentLeaves = (ctx: MeasureContext, box: Element): readonly Element[] =>
-  [...box.children].flatMap((child) => {
-    if (!ctx.isVisible(child) || ctx.isExempt(child) || isOutOfFlow(ctx, child)) return [];
-    if (isFormControl(child)) return [child];
-    if (isBoxed(ctx, child)) return [];
-    return [...(hasOwnText(child) ? [child] : []), ...contentLeaves(ctx, child)];
-  });
-
-type Inset = { readonly side: string; readonly px: number; readonly leaf: Element };
-
-const leafInsets = (ctx: MeasureContext, box: Element, leaf: Element): readonly Inset[] => {
-  const b = ctx.rect(box);
-  const inner = {
-    l: b.x + ctx.px(box, 'border-left-width'),
-    r: b.x + b.width - ctx.px(box, 'border-right-width'),
-    t: b.y + ctx.px(box, 'border-top-width'),
-    b: b.y + b.height - ctx.px(box, 'border-bottom-width'),
-  };
-  const control = isFormControl(leaf);
-  const lr = ctx.rect(leaf);
-  // Text sits inside the leaf's own padding; a control's edge is its border box.
-  const pad = (s: string): number => (control ? 0 : ctx.px(leaf, `padding-${s}`));
-  const clipsX = ctx.style(box, 'overflow-x') !== 'visible';
-  const clipsY = ctx.style(box, 'overflow-y') !== 'visible';
-  const horizontal: readonly Inset[] = clipsX
-    ? []
-    : [
-        { side: 'left', px: lr.x + pad('left') - inner.l, leaf },
-        { side: 'right', px: inner.r - (lr.x + lr.width - pad('right')), leaf },
-      ];
-  const vertical: readonly Inset[] = clipsY
-    ? []
-    : [
-        { side: 'top', px: lr.y + pad('top') - inner.t, leaf },
-        { side: 'bottom', px: inner.b - (lr.y + lr.height - pad('bottom')), leaf },
-      ];
-  return [...horizontal, ...vertical];
-};
-
-/** Text: left/right closer than min, or crossing any edge. Controls: any side closer than min. */
-const violates = (i: Inset, min: number): boolean =>
-  i.px < 0 || ((i.side === 'left' || i.side === 'right' || isFormControl(i.leaf)) && i.px < min);
+/** Overflow on one axis hides (or scrolls) content: anything but visible. */
+export const clipsAxis = (ctx: MeasureContext, el: Element, axis: 'x' | 'y'): boolean =>
+  ctx.style(el, `overflow-${axis}`) !== 'visible' && ctx.style(el, `overflow-${axis}`) !== '';
 
 /**
- * edge_contact: inside a visible box, text or a control touching or crossing
- * the box's inner edge (padding a parent rule zeroed). One finding per box,
- * naming the worst side.
+ * Content of a box for one side: text-bearing elements and form controls,
+ * not crossing into a nested element that shows its own edge on that side,
+ * and not into a scroller or clipper on that side's axis (its content can be
+ * scrolled or clipped away from where it sits).
+ */
+const sideLeaves = (
+  ctx: MeasureContext,
+  edges: (el: Element) => Sides<boolean>,
+  parent: Element,
+  side: Side,
+): readonly Element[] =>
+  [...parent.children].flatMap((child) => {
+    if (!ctx.isVisible(child) || ctx.isExempt(child) || isOutOfFlow(ctx, child)) return [];
+    if (isFormControl(child)) return [child];
+    if (edges(child)[side]) return [];
+    const own = hasOwnText(child) ? [child] : [];
+    return clipsAxis(ctx, child, axisOf(side)) ? own : [...own, ...sideLeaves(ctx, edges, child, side)];
+  });
+
+/**
+ * How a leaf is judged. `edged`: a control that shows its own edge (fails
+ * only when it touches or crosses: two visible edges a few px apart, like a
+ * segmented control's pill, read as a deliberate inset). `text`: text, and
+ * controls with no edge of their own, measured by what they draw (fails on
+ * left/right under min, or crossing any edge).
+ */
+type LeafKind = 'edged' | 'text';
+type LeafShape = { readonly rect: LayoutRect; readonly kind: LeafKind; readonly padded: boolean };
+
+const union = (rs: readonly LayoutRect[]): LayoutRect | null => {
+  if (rs.length === 0) return null;
+  const x = Math.min(...rs.map((r) => r.x));
+  const y = Math.min(...rs.map((r) => r.y));
+  return {
+    x,
+    y,
+    width: Math.max(...rs.map((r) => r.x + r.width)) - x,
+    height: Math.max(...rs.map((r) => r.y + r.height)) - y,
+  };
+};
+
+const DRAWN_MEDIA = new Set(['svg', 'img', 'canvas', 'video', 'picture']);
+
+/** What an edge-less control draws: its text line boxes and icons/images, itself included. */
+const controlInk = (ctx: MeasureContext, control: Element): LayoutRect | null =>
+  union(
+    [control, ...control.querySelectorAll('*')]
+      .filter((el) => el === control || ctx.isVisible(el))
+      .flatMap((el) => {
+        if (DRAWN_MEDIA.has(el.tagName.toLowerCase())) return [ctx.rect(el)];
+        const ink = ctx.textInk(el);
+        return ink !== null ? [ink] : [];
+      }),
+  );
+
+const TEXT_ENTRY = /^(INPUT|TEXTAREA|SELECT)$/;
+
+/**
+ * The part of a leaf that can touch an edge. Text: its line boxes (else its
+ * rect inside its padding). A control showing an edge: its border box. A
+ * control with no edge: what it draws, or for a text field its padding box;
+ * null when it draws nothing measurable.
+ */
+const leafShape = (ctx: MeasureContext, edges: (el: Element) => Sides<boolean>, leaf: Element): LeafShape | null => {
+  if (isFormControl(leaf)) {
+    if (SIDES.some((s) => edges(leaf)[s])) return { rect: ctx.rect(leaf), kind: 'edged', padded: false };
+    const ink = controlInk(ctx, leaf);
+    if (ink !== null) return { rect: ink, kind: 'text', padded: false };
+    return TEXT_ENTRY.test(leaf.tagName) ? { rect: ctx.rect(leaf), kind: 'text', padded: true } : null;
+  }
+  const ink = ctx.textInk(leaf);
+  return ink !== null ? { rect: ink, kind: 'text', padded: false } : { rect: ctx.rect(leaf), kind: 'text', padded: true };
+};
+
+type Inset = { readonly side: Side; readonly px: number; readonly leaf: Element; readonly kind: LeafKind };
+
+const innerEdges = (ctx: MeasureContext, box: Element) => {
+  const b = ctx.rect(box);
+  return {
+    left: b.x + ctx.px(box, 'border-left-width'),
+    right: b.x + b.width - ctx.px(box, 'border-right-width'),
+    top: b.y + ctx.px(box, 'border-top-width'),
+    bottom: b.y + b.height - ctx.px(box, 'border-bottom-width'),
+  };
+};
+
+/** Distance from the leaf's shape to the box's inner edge on one side. */
+const sideInset = (ctx: MeasureContext, box: Element, leaf: Element, shape: LeafShape, side: Side): Inset => {
+  const inner = innerEdges(ctx, box);
+  const r = shape.rect;
+  const pad = shape.padded ? ctx.px(leaf, `padding-${side}`) : 0;
+  const px =
+    side === 'left'
+      ? r.x + pad - inner.left
+      : side === 'right'
+        ? inner.right - (r.x + r.width - pad)
+        : side === 'top'
+          ? r.y + pad - inner.top
+          : inner.bottom - (r.y + r.height - pad);
+  return { side, px, leaf, kind: shape.kind };
+};
+
+/**
+ * A control that shows its edge and spans the box's full inner width is
+ * full-bleed by design (a banner button, a card's footer action), not
+ * content missing its padding.
+ */
+const fullBleed = (ctx: MeasureContext, box: Element, shape: LeafShape): boolean => {
+  if (shape.kind !== 'edged') return false;
+  const inner = innerEdges(ctx, box);
+  return shape.rect.x <= inner.left + 0.5 && shape.rect.x + shape.rect.width >= inner.right - 0.5;
+};
+
+/**
+ * Compared in whole CSS px, as reported, so sub-pixel layout never yields
+ * "4px (min 4)". Text: left/right under min, or crossing any edge. Edged
+ * controls: touching or crossing.
+ */
+const violates = (i: Inset, min: number): boolean => {
+  const px = Math.round(i.px);
+  if (px < 0) return true;
+  return i.kind === 'edged' ? px < 1 : axisOf(i.side) === 'x' && px < min;
+};
+
+/**
+ * edge_contact: inside a box with a visible edge, text or a control touching
+ * or crossing that edge (padding a parent rule zeroed). Text and edge-less
+ * controls are measured by what they draw; controls with their own edge
+ * fail only when touching, and full-width ones are skipped. Each side is measured
+ * against the nearest box that shows an edge there, so a divider-only or
+ * same-color row inside a padded card is judged by the card. One finding per
+ * box, naming the worst side.
  */
 export const checkEdgeContact = (
   ctx: MeasureContext,
   elements: readonly Element[],
   cfg: ChecksConfig['edge_contact'],
-): readonly LayoutFinding[] =>
-  elements
+): readonly LayoutFinding[] => {
+  const edges = memo1((el: Element) => visibleEdges(ctx, el));
+  return elements
     .filter(
       (el) =>
         el !== ctx.root &&
@@ -194,11 +265,17 @@ export const checkEdgeContact = (
         ctx.isVisible(el) &&
         !ctx.isExempt(el) &&
         !ctx.isAriaHidden(el) &&
-        isBoxed(ctx, el),
+        SIDES.some((s) => edges(el)[s]),
     )
     .flatMap((box) => {
-      const bad = contentLeaves(ctx, box)
-        .flatMap((leaf) => leafInsets(ctx, box, leaf))
+      const shape = memo1((leaf: Element) => leafShape(ctx, edges, leaf));
+      const bad = SIDES.filter((s) => edges(box)[s] && !clipsAxis(ctx, box, axisOf(s)))
+        .flatMap((s) =>
+          sideLeaves(ctx, edges, box, s).flatMap((leaf) => {
+            const sh = shape(leaf);
+            return sh === null || fullBleed(ctx, box, sh) ? [] : [sideInset(ctx, box, leaf, sh, s)];
+          }),
+        )
         .filter((i) => violates(i, cfg.min_inset))
         .sort((a, b) => a.px - b.px);
       const worst = bad[0];
@@ -213,3 +290,4 @@ export const checkEdgeContact = (
         ),
       ];
     });
+};

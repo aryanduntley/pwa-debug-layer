@@ -226,6 +226,39 @@ describe('runSweep', () => {
     expect(writeReport).toHaveBeenCalled();
   });
 
+  it('sends custom checks with each view\'s variables and keeps the first error per check as a warning', async () => {
+    const plan = planFor();
+    const reqs: LayoutMeasureRequest[] = [];
+    const custom = [{ name: 'price_wraps', expression: "pdl.elements('.price')" }];
+    const { job } = await runWith(
+      {
+        measure: async (req) => {
+          reqs.push(req);
+          return {
+            ...measured([{ check: 'custom:price_wraps', signature: 'span.price "$12"', message: 'wraps' }]),
+            custom_errors: [{ name: 'price_wraps', error: 'TypeError: x is undefined' }],
+          };
+        },
+      },
+      plan,
+      { custom_checks: custom },
+    );
+    expect(reqs.map((r) => [r.custom, r.view?.['width'], r.view?.['scheme']])).toEqual([
+      [custom, '360', 'light'],
+      [custom, '430', 'light'],
+    ]);
+    expect(job.findings.map((f) => f.check)).toEqual(['custom:price_wraps', 'custom:price_wraps']);
+    expect(job.warnings).toEqual([
+      expect.stringMatching(/^custom check "price_wraps" failed \(first in a\.html@360 light\): TypeError: x is undefined$/),
+    ]);
+  });
+
+  it('sends no custom payload when there are no custom checks', async () => {
+    const reqs: LayoutMeasureRequest[] = [];
+    await runWith({ measure: async (req) => (reqs.push(req), measured([])) }, planFor());
+    expect(reqs.every((r) => r.custom === undefined && r.view === undefined)).toBe(true);
+  });
+
   it('warns when the hash does not take (opaque URLs)', async () => {
     const plan = planFor({ states: { discover: "[...document.querySelectorAll('[data-state]')]", hash_template: '#s={state}' } });
     const { job } = await runWith(

@@ -12,10 +12,26 @@ export type LayoutCheckName =
   | 'pinned_visible'
   | 'text_clipped'
   | 'edge_contact'
+  | 'ring_clipped'
   | 'text_patterns'
   | 'errors'
   | 'contrast'
   | 'timeout';
+
+/** A finding's check: a built-in name, or custom:<name> for a caller's custom check. */
+export type LayoutCheckId = LayoutCheckName | `custom:${string}`;
+
+/** A caller-defined check (layout_sweep custom_checks): a page expression run per view. */
+export type CustomCheck = {
+  readonly name: string;
+  readonly expression: string;
+};
+
+/** A custom check that threw, returned a promise or returned something unusable in one view. */
+export type CustomCheckError = {
+  readonly name: string;
+  readonly error: string;
+};
 
 export type LayoutRect = {
   readonly x: number;
@@ -35,6 +51,8 @@ export type ChecksConfig = {
   };
   readonly text_clipped: { readonly enabled: boolean };
   readonly edge_contact: { readonly enabled: boolean; readonly min_inset: number };
+  /** Outline / outer box-shadow ink cut off by a clipping or scrolling ancestor. */
+  readonly ring_clipped: { readonly enabled: boolean; readonly min_px: number };
   readonly text_patterns: { readonly enabled: boolean; readonly extra: readonly string[] };
   readonly errors: { readonly enabled: boolean };
   readonly contrast: { readonly enabled: boolean };
@@ -42,7 +60,7 @@ export type ChecksConfig = {
 
 /** One problem seen in one view, as the page world reports it. */
 export type LayoutFinding = {
-  readonly check: LayoutCheckName;
+  readonly check: LayoutCheckId;
   /** Element signature: tag#id.classes "accessible name" (or a pattern key). */
   readonly signature: string;
   readonly message: string;
@@ -56,6 +74,10 @@ export type LayoutMeasureRequest = {
   readonly root_selector?: string;
   readonly exempt_selectors?: readonly string[];
   readonly checks?: ChecksConfig;
+  /** Caller checks to run after the built-ins (already validated by resolveCustomChecks). */
+  readonly custom?: readonly CustomCheck[];
+  /** The view's variables, bound as `view` in custom check expressions. */
+  readonly view?: Readonly<Record<string, string>>;
 };
 
 export type LayoutMeasureResult = {
@@ -66,6 +88,8 @@ export type LayoutMeasureResult = {
   readonly findings: readonly LayoutFinding[];
   /** True when the per-view finding cap cut the list short. */
   readonly truncated: boolean;
+  /** Custom checks that failed in this view (their other findings still count). */
+  readonly custom_errors?: readonly CustomCheckError[];
 };
 
 export type LayoutColorScheme = 'light' | 'dark' | 'no-preference';
@@ -106,7 +130,7 @@ export type LocatedFinding = LayoutFinding & {
 
 /** Distinct problem across views (spec §6.2). */
 export type LayoutGroup = {
-  readonly check: LayoutCheckName;
+  readonly check: LayoutCheckId;
   readonly signature: string;
   readonly message: string;
   readonly count: number;
@@ -118,5 +142,5 @@ export type LayoutGroup = {
 export type LayoutSummary = {
   readonly problems: number;
   readonly groups: number;
-  readonly by_check: Readonly<Partial<Record<LayoutCheckName, number>>>;
+  readonly by_check: Readonly<Partial<Record<LayoutCheckId, number>>>;
 };

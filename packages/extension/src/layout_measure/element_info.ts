@@ -1,5 +1,5 @@
 /** Element description helpers shared by the layout checks. Read-only. */
-import type { LayoutCheckName, LayoutFinding } from '@pwa-debug/shared';
+import type { LayoutCheckId, LayoutFinding } from '@pwa-debug/shared';
 import type { MeasureContext } from './geometry.js';
 
 const collapse = (s: string, max: number): string => {
@@ -78,7 +78,7 @@ const roundRect = (r: { x: number; y: number; width: number; height: number }) =
 /** A finding about one element: its signature, the message, its rounded rect. */
 export const elementFinding = (
   ctx: MeasureContext,
-  check: LayoutCheckName,
+  check: LayoutCheckId,
   el: Element,
   message: string,
 ): LayoutFinding => ({

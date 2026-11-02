@@ -65,15 +65,15 @@ const createFrameReader = () => {
     };
 };
 
-const isRecord$1 = (v) => v !== null && typeof v === 'object';
+const isRecord$2 = (v) => v !== null && typeof v === 'object';
 const isOptionalString = (v) => v === undefined || typeof v === 'string';
 const isErrorField = (v) => {
     if (v === undefined)
         return true;
-    return isRecord$1(v) && typeof v['message'] === 'string';
+    return isRecord$2(v) && typeof v['message'] === 'string';
 };
 const parseIpcEnvelope = (value) => {
-    if (!isRecord$1(value)) {
+    if (!isRecord$2(value)) {
         throw new Error('ipc envelope: root is not an object');
     }
     const type = value['type'];
@@ -5340,6 +5340,56 @@ const shouldCaptureEvent = (event, settings) => {
     return passesCaptureFilter(event, captureKind, settings['capture.filters']);
 };
 
+/** Limits for caller-defined checks (layout_sweep custom_checks). */
+const CUSTOM_CHECK_LIMITS = Object.freeze({
+    max_checks: 20,
+    max_expression: 10_000,
+    /** Findings kept per check per view. */
+    max_findings: 100,
+});
+const NAME = /^[a-z][a-z0-9_]{0,39}$/;
+const isRecord$1 = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+/**
+ * Validate caller checks: an array of { name, expression }, names lowercase
+ * snake_case (1-40 chars, starting with a letter) and unique, expressions
+ * non-empty and at most max_expression chars, at most max_checks entries.
+ * Pure. Whether an expression compiles is only known in the page.
+ */
+const resolveCustomChecks = (input) => {
+    if (input === undefined)
+        return { ok: true, checks: [] };
+    if (!Array.isArray(input))
+        return { ok: false, error: 'custom_checks must be an array of { name, expression }' };
+    if (input.length > CUSTOM_CHECK_LIMITS.max_checks) {
+        return { ok: false, error: `custom_checks: at most ${CUSTOM_CHECK_LIMITS.max_checks} checks` };
+    }
+    const bad = input
+        .map((c, i) => {
+        if (!isRecord$1(c))
+            return `custom_checks[${i}] must be an object { name, expression }`;
+        const { name, expression } = c;
+        if (typeof name !== 'string' || !NAME.test(name)) {
+            return `custom_checks[${i}].name must be lowercase letters, digits and _ (1-40 chars, starting with a letter)`;
+        }
+        if (typeof expression !== 'string' || expression.trim() === '') {
+            return `custom_checks[${i}].expression (${name}) must be a non-empty string`;
+        }
+        if (expression.length > CUSTOM_CHECK_LIMITS.max_expression) {
+            return `custom_checks[${i}].expression (${name}) is longer than ${CUSTOM_CHECK_LIMITS.max_expression} characters`;
+        }
+        return null;
+    })
+        .find((e) => e !== null);
+    if (bad !== undefined && bad !== null)
+        return { ok: false, error: bad };
+    const checks = input.map((c) => Object.freeze({ name: c['name'], expression: c['expression'] }));
+    const names = checks.map((c) => c.name);
+    const dup = names.find((n, i) => names.indexOf(n) !== i);
+    if (dup !== undefined)
+        return { ok: false, error: `custom_checks: duplicate name "${dup}"` };
+    return { ok: true, checks: Object.freeze(checks) };
+};
+
 /** Built-in unresolved-copy patterns (spec §6.1 text_patterns). */
 const DEFAULT_CHECKS = Object.freeze({
     page_overflow_x: { enabled: true },
@@ -5349,6 +5399,7 @@ const DEFAULT_CHECKS = Object.freeze({
     pinned_visible: { enabled: true, pinned_selectors: [] },
     text_clipped: { enabled: true },
     edge_contact: { enabled: true, min_inset: 4 },
+    ring_clipped: { enabled: true, min_px: 1 },
     text_patterns: { enabled: true, extra: [] },
     errors: { enabled: true },
     // Off: gradients and images make the effective background approximate.
@@ -5377,7 +5428,7 @@ const findInvalidPattern = (sources) => sources.find((s) => !compiles(s)) ?? nul
 const inRange = (n, lo, hi) => typeof n === 'number' && Number.isFinite(n) && n >= lo && n <= hi;
 /**
  * Merge a caller's partial check config over DEFAULT_CHECKS and validate the
- * knobs (tap min 1..200 px, edge inset 0..64 px, extra patterns compile,
+ * knobs (tap min 1..200 px, edge inset 0..64 px, ring cut 1..64 px, extra patterns compile,
  * pinned selectors are strings). Pure: same input, same result.
  */
 const resolveChecksConfig = (input) => {
@@ -5389,6 +5440,7 @@ const resolveChecksConfig = (input) => {
         pinned_visible: mergeCheck('pinned_visible', src),
         text_clipped: mergeCheck('text_clipped', src),
         edge_contact: mergeCheck('edge_contact', src),
+        ring_clipped: mergeCheck('ring_clipped', src),
         text_patterns: mergeCheck('text_patterns', src),
         errors: mergeCheck('errors', src),
         contrast: mergeCheck('contrast', src),
@@ -5398,6 +5450,9 @@ const resolveChecksConfig = (input) => {
     }
     if (!inRange(config.edge_contact.min_inset, 0, 64)) {
         return { ok: false, error: 'checks.edge_contact.min_inset must be a number from 0 to 64 (CSS px)' };
+    }
+    if (!inRange(config.ring_clipped.min_px, 1, 64)) {
+        return { ok: false, error: 'checks.ring_clipped.min_px must be a number from 1 to 64 (CSS px)' };
     }
     const extra = config.text_patterns.extra;
     if (!Array.isArray(extra) || extra.some((p) => typeof p !== 'string')) {
@@ -7667,11 +7722,13 @@ const errorFindings = (errors) => errors.map((e) => ({
     signature: `error "${e.message.slice(0, 80)}"`,
     message: `page error during the view: ${e.message.slice(0, 300)}`,
 }));
-const measureOnce = async (deps, input) => {
+const measureOnce = async (deps, input, view) => {
+    const custom = input.custom_checks ?? [];
     const req = {
         checks: input.checks,
         exempt_selectors: input.exempt_selectors,
         ...(input.root_selector !== undefined ? { root_selector: input.root_selector } : {}),
+        ...(custom.length > 0 ? { custom, view: viewVars(view, input.device) } : {}),
     };
     try {
         return await deps.page.measure(req);
@@ -7690,13 +7747,24 @@ const runView = async (deps, input, view) => {
     if (input.settle.freeze_animations)
         await deps.page.freeze().catch(() => undefined);
     const warning = stateWarning ?? (await settleView(deps, input.settle));
-    const measured = await measureOnce(deps, input);
+    const measured = await measureOnce(deps, input, view);
     const errors = input.checks.errors.enabled ? errorFindings(deps.errorsSince(started)) : [];
     return {
         findings: [...measured.findings, ...errors],
         measured,
         ...(warning !== null ? { warning } : {}),
     };
+};
+/**
+ * Job warning for a failing custom check: the first failure per check only
+ * (the same broken expression usually fails in every view), with the view it
+ * was first seen in.
+ */
+const withCustomCheckWarning = (job, e, view) => {
+    const prefix = `custom check "${e.name}" failed`;
+    return job.warnings.some((w) => w.startsWith(prefix))
+        ? job
+        : withWarning(job, `${prefix} (first in ${view.label}): ${e.error}`);
 };
 const viewportKey = (v) => (v === null ? 'device' : `${v.width}x${v.height}@${v.dpr}${v.mobile ? 'm' : ''}`);
 /** First-per-group screenshots for groups this view introduces. */
@@ -7786,6 +7854,7 @@ const runSweep = async (deps, input) => {
                     const out = timed.value;
                     if (out.warning !== undefined)
                         update((j) => withWarning(j, out.warning));
+                    (out.measured?.custom_errors ?? []).forEach((e) => update((j) => withCustomCheckWarning(j, e, view)));
                     update((j) => recordView(j, view, out.findings, { duration_ms: deps.now() - started }));
                     if (input.screenshots === 'first_per_group' && out.measured !== undefined) {
                         await shootNewGroups(deps, id, out.findings, out.measured.scroll);
@@ -7823,6 +7892,7 @@ const checksSchema = objectType({
     pinned_visible: toggle({ pinned_selectors: arrayType(stringType()).optional() }),
     text_clipped: toggle({}),
     edge_contact: toggle({ min_inset: numberType().optional() }),
+    ring_clipped: toggle({ min_px: numberType().optional() }),
     text_patterns: toggle({ extra: arrayType(stringType()).optional() }),
     errors: toggle({}),
     contrast: toggle({}),
@@ -7859,6 +7929,8 @@ const sweepSchema = {
     })
         .optional(),
     checks: checksSchema,
+    custom_checks: arrayType(objectType({ name: stringType(), expression: stringType() }))
+        .optional(),
     exempt_selectors: arrayType(stringType().min(1)).optional(),
     max_views: numberType().int().optional(),
     screenshots: enumType(['none', 'first_per_group']).optional(),
@@ -7936,7 +8008,8 @@ const resultNextSteps = (r) => {
         ...(first === undefined
             ? [r.views > 0 && r.failed_views === r.views ? 'No view was measured, so there are no results yet; fix the view errors above and re-run.' : 'No problems found in the swept views.']
             : [
-                `Fix first: [${first.check}] ${first.message} (${first.count}× on ${first.pages.length} page(s)).`,
+                'Findings are heuristics and can be false positives (intentional full-bleed designs, unusual widgets). Verify each group before fixing it: look at its screenshot (screenshots: "first_per_group"), inspect the element with evaluate, or check on the device; tell the user which groups you confirmed and which you dismissed.',
+                `Start with: [${first.check}] ${first.message} (${first.count}× on ${first.pages.length} page(s)).`,
                 ...(r.groups.some((g) => g.check === 'page_overflow_x')
                     ? ['Page overflow is listed first: on a phone it widens the layout viewport, so offscreen / pinned findings on those views may be symptoms. Fix it and re-run.']
                     : []),
@@ -7967,6 +8040,9 @@ const layoutSweepStart = async (args, ctx, deps) => {
     const checks = resolveChecksConfig(args.checks);
     if (!checks.ok)
         return errorResponse$1(checks.error, ['Fix the checks argument; pdl_help({ topic: "layout" }) shows the knobs.']);
+    const custom = resolveCustomChecks(args.custom_checks);
+    if (!custom.ok)
+        return errorResponse$1(custom.error, ['Fix custom_checks; pdl_help({ topic: "layout" }) has an example.']);
     const planned = planSweep({
         target,
         pages: args.pages,
@@ -8060,6 +8136,7 @@ const layoutSweepStart = async (args, ctx, deps) => {
         job_id: jobId,
         plan,
         checks: checks.config,
+        custom_checks: custom.checks,
         exempt_selectors: args.exempt_selectors ?? [],
         ...(args.root_selector !== undefined ? { root_selector: args.root_selector } : {}),
         settle: {
@@ -8100,7 +8177,7 @@ const layoutSweepCancel = (args, deps) => {
 };
 const layoutSweepTool = Object.freeze({
     name: 'layout_sweep',
-    description: "Responsive layout audit across a view matrix: pages × viewport widths × color schemes × app states. For every view it emulates the viewport and prefers-color-scheme over CDP on the real top-level page, applies the app state, settles, and measures in the page: sideways page overflow, elements off screen (scroll rows and carousels skipped automatically), tap targets under the minimum (WCAG 2.2 default 24px; set checks.tap_target.min 44/48 for platform guidelines), fixed bars not fully on screen, cut-off text, text or fields touching their box's edge, unresolved copy ({{x}}, undefined, NaN, [object Object], plus checks.text_patterns.extra), page errors, and optionally contrast. Results are grouped into distinct problems, not raw rows. Runs in the background: returns { job_id, planned_views, target } at once; poll layout_sweep_status. TARGETS: phones (pdl_android_attach connection) and browsers started by pdl_launch_browser (extension connection; the host uses the launch's debug port). Other connections are refused. Args: { extension_id?, tab_id?, pages: absolute URLs or paths with base_url, base_url?, viewports?: [{ width, height?=800, dpr?=2, mobile?=true }] (default 360/390/430; phones also check their own size first), color_schemes?: ['light','dark'] default, states?: { discover?: expression → string[] of state keys, apply?: expression with `view` bound ({ state, scheme, width, height, page, ...dimensions }), hash_template?: '#state={state}&lang={lang}', dimensions?: { lang: ['en','es'] }, reload?: reload after applying }, root_selector?, settle?: { wait_ms?=80, wait_for?: expression, freeze_animations?=true }, checks?: each check true/false or its knobs, exempt_selectors?, max_views?=2000 (≤10000), screenshots?: 'none' | 'first_per_group', view_timeout_ms?=5000, report_path? }. pdl_help({ topic: 'layout' }) has a worked example.",
+    description: "Responsive layout audit across a view matrix: pages × viewport widths × color schemes × app states. For every view it emulates the viewport and prefers-color-scheme over CDP on the real top-level page, applies the app state, settles, and measures in the page: sideways page overflow, elements off screen (scroll rows and carousels skipped automatically), tap targets under the minimum (WCAG 2.2 default 24px; set checks.tap_target.min 44/48 for platform guidelines), fixed bars not fully on screen, cut-off text, text or fields touching a visible edge of their box, outline/shadow rings cut off by a scrolling or clipping parent, unresolved copy ({{x}}, undefined, NaN, [object Object], plus checks.text_patterns.extra), page errors, and optionally contrast. Results are grouped into distinct problems, not raw rows. Runs in the background: returns { job_id, planned_views, target } at once; poll layout_sweep_status. TARGETS: phones (pdl_android_attach connection) and browsers started by pdl_launch_browser (extension connection; the host uses the launch's debug port). Other connections are refused. Args: { extension_id?, tab_id?, pages: absolute URLs or paths with base_url, base_url?, viewports?: [{ width, height?=800, dpr?=2, mobile?=true }] (default 360/390/430; phones also check their own size first), color_schemes?: ['light','dark'] default, states?: { discover?: expression → string[] of state keys, apply?: expression with `view` bound ({ state, scheme, width, height, page, ...dimensions }), hash_template?: '#state={state}&lang={lang}', dimensions?: { lang: ['en','es'] }, reload?: reload after applying }, root_selector?, settle?: { wait_ms?=80, wait_for?: expression, freeze_animations?=true }, checks?: each check true/false or its knobs, custom_checks?: [{ name: snake_case, expression }] (up to 20; your own checks, run in the page after the built-ins for every view with `view` (page, width, height, scheme, state, dimensions) and `pdl` helpers (elements(selector?) visible non-exempt elements, isVisible, rect, style, px, name, signature, edges, ink, background) bound; return elements, strings or { element?, message, signature? }, alone or as a list; findings are named custom:<name> and grouped like the rest; must be synchronous; a throw becomes a job warning), exempt_selectors?, max_views?=2000 (≤10000), screenshots?: 'none' | 'first_per_group', view_timeout_ms?=5000, report_path? }. pdl_help({ topic: 'layout' }) has a worked example.",
     inputSchema: sweepSchema,
     handler: (args, ctx) => layoutSweepStart(args, ctx, defaultLayoutSweepDeps()),
 });
@@ -17127,7 +17204,7 @@ const HELP_CAPABILITIES = Object.freeze([
     'Capture library popups such as wallet modals, including shadow DOM, and correlate their failures (topic "popups").',
     "Work on the user's real logged-in profile, or a sandbox profile with the extension preloaded (topic \"browser\").",
     'Drive Android phones (Chrome tabs and installed PWAs) with the same tools: pdl_android_attach finds the phone over adb and attaches in one call (topic "mobile").',
-    'Audit responsive layout across pages × widths × color schemes × app states in one call, grouped into distinct problems (topic "layout").',
+    'Audit responsive layout across pages × widths × color schemes × app states in one call, with your own custom checks, grouped into distinct problems to verify (topic "layout").',
 ]);
 /** The standard startup sequence, shown in the pdl_help overview. */
 const HELP_WORKFLOW = Object.freeze([
@@ -17198,7 +17275,7 @@ const HELP_TOPICS = Object.freeze([
             'error_tail includes uncaught errors and unhandled promise rejections with stacks. Resolve minified frames with source_map_resolve.',
             'evaluate runs one JavaScript expression in the page and returns a serialized value (16KB cap). Use it for anything the dedicated tools do not cover.',
             'recent_events is a quick, unfiltered look at the latest captured events of any kind.',
-            'Prefer these over screenshots: they give exact text, values and errors. Take a screenshot (chrome-devtools-mcp) only to judge visual layout.',
+            'Prefer these over screenshots: they give exact text, values and errors. Take a screenshot (chrome-devtools-mcp) only to judge visual layout. To check layout across widths, color schemes or app states, use layout_sweep (topic "layout") instead of resizing and measuring by hand.',
         ],
         tools: ['console_tail', 'network_tail', 'error_tail', 'evaluate', 'recent_events', 'source_map_resolve'],
     }),
@@ -17257,7 +17334,7 @@ const HELP_TOPICS = Object.freeze([
     topic({
         id: 'layout',
         title: 'Responsive layout sweep',
-        summary: 'One call checks many pages, widths, color schemes and app states for overflow, cut-off text, small tap targets, off-screen bars, edge contact and unresolved copy.',
+        summary: 'One call checks many pages, widths, color schemes and app states for overflow, cut-off text, small tap targets, off-screen bars, edge contact, clipped rings, unresolved copy, plus your own custom checks. Findings are heuristics: verify each group before fixing.',
         guide: [
             'Use layout_sweep instead of writing your own resize-and-measure scripts. It runs in the background: it returns a job_id, then poll layout_sweep_status until status is done.',
             'Targets: a phone (pdl_android_attach, then pass its connection id as extension_id) or a browser started by pdl_launch_browser with the extension. A browser the user started themselves is refused, because the host needs its debug port to emulate the viewport.',
@@ -17265,6 +17342,12 @@ const HELP_TOPICS = Object.freeze([
             'App states the URL cannot reach: states.discover (expression returning state keys), then states.hash_template (e.g. "#state={state}&lang={lang}&theme={scheme}") or states.apply (expression with `view` bound). states.dimensions adds crossed axes such as { lang: ["en","es"] }; states.reload reloads after applying for apps that read their hash only on load.',
             'Example: layout_sweep({ extension_id: "<phone connection>", base_url: "http://localhost:8080/pages/", pages: ["customer/4.01-search.html", "all/4.10-chat.html"], viewports: [{ width: 360 }, { width: 411 }, { width: 430 }], root_selector: ".phone", states: { discover: "[...document.querySelectorAll(\'[data-tool=state]\')].map(b => b.dataset.value)", hash_template: "#state={state}&lang={lang}&theme={scheme}", dimensions: { lang: ["en", "es"] } }, checks: { tap_target: { min: 44 }, text_patterns: { extra: ["\\[[a-z-]+:[\\w.]+\\]"] } } }). For a desktop dev server reached from a phone, attach with reverse_ports.',
             'Reading results: groups are distinct problems (numbers in element names ignored), most frequent first, page overflow always first because it makes other geometry findings unreliable. Fix the first group, then re-run on groups[].pages only. report_path has every finding.',
+            'Serve pages over http(s) from a root that contains every asset they load: a page whose relative ../ scripts or styles 404 renders blank, and the sweep then reports "root_selector matched nothing" or page errors instead of layout. Pass full URLs, or base_url plus paths.',
+            'What is not measured: hidden content (display:none, closed <details>, collapsed height:0 wrappers, screen-reader-only text) is skipped by every check.',
+            'edge_contact: each side is measured against the nearest box that shows an edge there (a border on that side, a shadow, a background image, or a background that differs from the surface behind it), so divider rows and same-color rows are judged by their card. Text is measured by its drawn lines, not its block box. A control with no edge of its own (transparent input, text or icon button) is measured by what it draws; a control that shows its own edge fails only when it touches, and one spanning the whole box width (a banner or footer action) is treated as full-bleed by design.',
+            'ring_clipped (knob min_px, default 1): outline / box-shadow ink cut off for good by the nearest scrolling or clipping ancestor on that axis (ink past what it can scroll to). Full-width panels are skipped on their flush sides. It only sees rings present while measuring: a :focus-visible or :hover ring needs states.apply to focus or hover the element first.',
+            'Your own checks: custom_checks: [{ name, expression }] runs each expression in the page after the built-in checks, for every view. It sees `view` (page, width, height, scheme, state and your dimensions) and `pdl`: pdl.elements(selector?) gives visible, non-exempt elements under the root, plus pdl.isVisible, rect, style, px, name, signature, edges (visible box edges), ink (outline/shadow reach) and background. Return elements, strings, or { element?, message, signature? } items (one or a list; null/false = nothing found). Findings are named custom:<name> and group, screenshot and report like built-in ones. Example: custom_checks: [{ name: "price_wraps", expression: "pdl.elements(\'.price\').filter(e => e.getClientRects().length > 1)" }, { name: "tiny_text", expression: "pdl.elements(\'p,span,a,button,label\').filter(e => pdl.px(e, \'font-size\') < 12).map(e => ({ element: e, message: `${pdl.px(e, \'font-size\')}px text \"${pdl.name(e)}\"` }))" }]. Expressions must be synchronous; one that throws or returns something unusable becomes a job warning and the view still counts. Like evaluate, they need a page whose CSP allows eval.',
+            'Verify before fixing: the checks are geometric heuristics over computed styles and rects, so a group can be a false positive (an intentional full-bleed design, an unusual widget, a state users never see). Before changing code or reporting a group as a bug, confirm it: look at its screenshot (screenshots: "first_per_group"), inspect the element with evaluate, or check it on the device. Tell the user which groups you confirmed and which you dismissed, and why. Desktop emulation of a phone width uses desktop fonts and scrollbars, so confirm important findings on a real phone.',
             'Noise control: exempt_selectors skips elements and their subtrees; checks.<name>: false turns a check off; contrast is off by default (approximate). screenshots: "first_per_group" saves one clipped PNG per group as evidence.',
             'layout_sweep_cancel stops after the current view; emulation and the starting URL are always restored.',
         ],
@@ -17314,7 +17397,7 @@ const HELP_TOPICS = Object.freeze([
         guide: [
             'pwa-debug and chrome-devtools-mcp are separate MCP servers that share one browser. pdl_launch_browser opens it with a debug port; chrome-devtools-mcp attaches to that port via --browserUrl.',
             'Use pwa-debug for app state (framework, stores, SW, cache, storage), persistent console/network/error capture, navigation and interaction on the real profile.',
-            'Use chrome-devtools-mcp for screenshots, performance traces, Lighthouse, device/network emulation and accessibility snapshots.',
+            'Use chrome-devtools-mcp for screenshots, performance traces, Lighthouse, device/network emulation and accessibility snapshots. For responsive layout audits use pwa-debug\'s layout_sweep, which does its own viewport and color-scheme emulation (topic "layout").',
             'pdl_register_chrome_devtools registers it pinned to the right port. It changes the user\'s global MCP config, so ask first. pdl_check_setup flags it if it is unregistered or pinned to the wrong port.',
         ],
         tools: ['pdl_register_chrome_devtools', 'pdl_check_setup'],
@@ -17333,6 +17416,7 @@ const HELP_TOPICS = Object.freeze([
             '   - an app WebView: socket: "webview" or the app package (the app must enable WebView debugging).',
             '3. Pass the returned connection id ("cdp:127.0.0.1:<port>:<tab>") as extension_id to every other tool: pdl_navigate, pdl_click, pdl_tap, pdl_swipe, react_tree, store_get_state, console_tail, network_tail, sw_status, ...',
             'pdl_new_tab with that extension_id opens further phone tabs (each its own connection). pdl_cdp_detach drops a connection. adb forwards/reverses pwa-debug created are removed when the host shuts down.',
+            'layout_sweep works on a phone connection: it checks the phone\'s own size first, then the requested widths (topic "layout").',
             'Everything works on the phone except recent_events (use the tail tools instead). Capture settings (sites.allowlist / blocklist / readControls, capture.enabledKinds, capture.filters) apply to phone connections exactly as to the extension. If the tab crashes, calls say so; pdl_navigate reloads it.',
             'Manual fallback without the Android tools: `adb forward tcp:9223 localabstract:chrome_devtools_remote`, then pdl_cdp_targets / pdl_cdp_attach with browser_url "9223".',
             'The user can mirror the phone screen on the desktop at chrome://inspect/#devices (Inspect); pwa-debug does not need it.',
@@ -18324,7 +18408,7 @@ const SERVER_INSTRUCTIONS = [
     'pwa-debug gives you live, structured access to a web app or PWA running in the user\'s real browser, and lets you control it.',
     '',
     '- You drive the page yourself. Use pdl_navigate / pdl_new_tab to open URLs and pdl_click, pdl_fill, pdl_submit, pdl_key_press, pdl_tap, pdl_swipe, pdl_scroll (and the other pdl_* actions) to interact. Do not ask the user to navigate, click or type for you.',
-    '- You read state as data, not pixels. console_tail, network_tail, error_tail, evaluate, the react_/vue_/svelte_/solid_ tools, store_/redux_ tools, sw_status, cache_*, storage_get and idb_* return structured JSON. You do not need screenshots to know what is on the page; take one only to judge visual layout.',
+    '- You read state as data, not pixels. console_tail, network_tail, error_tail, evaluate, the react_/vue_/svelte_/solid_ tools, store_/redux_ tools, sw_status, cache_*, storage_get and idb_* return structured JSON. You do not need screenshots to know what is on the page; take one only to judge visual layout. For layout across widths, color schemes and app states, use layout_sweep (verify its findings before fixing).',
     '- session_record (rrweb) captures a session for later replay or a bug report. It is not needed to watch the page.',
     '- Start with host_status. If nothing is connected: pdl_check_setup, then pdl_launch_browser, then session_ping.',
     '- Phones (Android): the extension cannot run there, so pwa-debug attaches over adb. pdl_android_attach({ open_url, reverse_ports }) (or url_contains for an open tab) does it in one call; pass the returned connection id as extension_id to every tool. pdl_android_devices tells you what to ask the user if the phone is not ready. See pdl_help({ topic: "mobile" }).',

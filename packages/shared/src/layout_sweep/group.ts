@@ -1,5 +1,5 @@
 import type {
-  LayoutCheckName,
+  LayoutCheckId,
   LayoutGroup,
   LayoutSummary,
   LocatedFinding,
@@ -12,7 +12,7 @@ import type {
 export const normalizeSignature = (signature: string): string =>
   signature.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim();
 
-export const groupKey = (f: { readonly check: LayoutCheckName; readonly signature: string }): string =>
+export const groupKey = (f: { readonly check: LayoutCheckId; readonly signature: string }): string =>
   `${f.check}|${normalizeSignature(f.signature)}`;
 
 type Acc = {
@@ -79,7 +79,7 @@ export const summarizeFindings = (
 ): LayoutSummary => ({
   problems: findings.length,
   groups: groups.length,
-  by_check: findings.reduce<Partial<Record<LayoutCheckName, number>>>(
+  by_check: findings.reduce<Partial<Record<LayoutCheckId, number>>>(
     (acc, f) => ({ ...acc, [f.check]: (acc[f.check] ?? 0) + 1 }),
     {},
   ),

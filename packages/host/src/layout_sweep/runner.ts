@@ -4,6 +4,8 @@ import {
   planPageViews,
   viewVars,
   type ChecksConfig,
+  type CustomCheck,
+  type CustomCheckError,
   type LayoutFinding,
   type LayoutMeasureResult,
   type LayoutStateDriver,
@@ -46,6 +48,8 @@ export type SweepRunInput = {
   readonly job_id: string;
   readonly plan: SweepPlan;
   readonly checks: ChecksConfig;
+  /** Caller checks (validated), run in the page after the built-ins with the view's variables. */
+  readonly custom_checks?: readonly CustomCheck[];
   readonly root_selector?: string;
   readonly exempt_selectors: readonly string[];
   readonly settle: SweepSettle;
@@ -170,11 +174,17 @@ type ViewOutcome = {
   readonly warning?: string;
 };
 
-const measureOnce = async (deps: SweepRunnerDeps, input: SweepRunInput): Promise<LayoutMeasureResult> => {
+const measureOnce = async (
+  deps: SweepRunnerDeps,
+  input: SweepRunInput,
+  view: LayoutView,
+): Promise<LayoutMeasureResult> => {
+  const custom = input.custom_checks ?? [];
   const req = {
     checks: input.checks,
     exempt_selectors: input.exempt_selectors,
     ...(input.root_selector !== undefined ? { root_selector: input.root_selector } : {}),
+    ...(custom.length > 0 ? { custom, view: viewVars(view, input.device) } : {}),
   };
   try {
     return await deps.page.measure(req);
@@ -191,13 +201,25 @@ const runView = async (deps: SweepRunnerDeps, input: SweepRunInput, view: Layout
   const stateWarning = await applyState(deps, view, input.plan.states, input.device);
   if (input.settle.freeze_animations) await deps.page.freeze().catch(() => undefined);
   const warning = stateWarning ?? (await settleView(deps, input.settle));
-  const measured = await measureOnce(deps, input);
+  const measured = await measureOnce(deps, input, view);
   const errors = input.checks.errors.enabled ? errorFindings(deps.errorsSince(started)) : [];
   return {
     findings: [...measured.findings, ...errors],
     measured,
     ...(warning !== null ? { warning } : {}),
   };
+};
+
+/**
+ * Job warning for a failing custom check: the first failure per check only
+ * (the same broken expression usually fails in every view), with the view it
+ * was first seen in.
+ */
+export const withCustomCheckWarning = (job: SweepJob, e: CustomCheckError, view: LayoutView): SweepJob => {
+  const prefix = `custom check "${e.name}" failed`;
+  return job.warnings.some((w) => w.startsWith(prefix))
+    ? job
+    : withWarning(job, `${prefix} (first in ${view.label}): ${e.error}`);
 };
 
 const viewportKey = (v: LayoutView['viewport']): string => (v === null ? 'device' : `${v.width}x${v.height}@${v.dpr}${v.mobile ? 'm' : ''}`);
@@ -290,6 +312,7 @@ export const runSweep = async (deps: SweepRunnerDeps, input: SweepRunInput): Pro
           }
           const out = timed.value;
           if (out.warning !== undefined) update((j) => withWarning(j, out.warning!));
+          (out.measured?.custom_errors ?? []).forEach((e) => update((j) => withCustomCheckWarning(j, e, view)));
           update((j) => recordView(j, view, out.findings, { duration_ms: deps.now() - started }));
           if (input.screenshots === 'first_per_group' && out.measured !== undefined) {
             await shootNewGroups(deps, id, out.findings, out.measured.scroll);

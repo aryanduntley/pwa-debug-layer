@@ -807,7 +807,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     };
 
     const HOST_COMPONENT_TAG$1 = 5;
-    const isElement$7 = (node) => node !== null &&
+    const isElement$8 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     /**
@@ -831,7 +831,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
                 if (fiber.tag !== HOST_COMPONENT_TAG$1)
                     return;
                 const node = fiber.stateNode;
-                if (!isElement$7(node))
+                if (!isElement$8(node))
                     return;
                 if (filterFn(fiber, node))
                     matches.push({ fiber, hostNode: node });
@@ -1250,7 +1250,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     // component .svelte FILE (not a single element), so it cannot resolve here —
     // callers should use role/text/selector for svelte.
     const HOST_COMPONENT_TAG = 5;
-    const isElement$6 = (node) => node !== null &&
+    const isElement$7 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     /**
@@ -1258,13 +1258,13 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * is already a host node). Walks the committed subtree via walkFiber.
      */
     const firstReactHostElement = (fiber) => {
-        if (isElement$6(fiber.stateNode))
+        if (isElement$7(fiber.stateNode))
             return fiber.stateNode;
         let found;
         walkFiber(fiber, (f) => {
             if (found !== undefined)
                 return false;
-            if (f.tag === HOST_COMPONENT_TAG && isElement$6(f.stateNode)) {
+            if (f.tag === HOST_COMPONENT_TAG && isElement$7(f.stateNode)) {
                 found = f.stateNode;
                 return false;
             }
@@ -1278,7 +1278,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
             return undefined;
         const el = inst.subTree?.el ??
             inst.vnode?.el;
-        return isElement$6(el) ? el : undefined;
+        return isElement$7(el) ? el : undefined;
     };
     /** Resolve a framework stableId to 0 or 1 host element. */
     const resolveByStableId = (doc, framework, stableId) => {
@@ -1505,7 +1505,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     // mousedown to start selections), so we replay the full chain. React's onClick
     // is delegated at the root and fires from the bubbling 'click' — which the
     // composed+bubbling events from events.ts satisfy.
-    const isElement$5 = (node) => node !== null &&
+    const isElement$6 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     /** The ordered phases of a single pointer+mouse click on `el`. */
@@ -1523,7 +1523,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * real pointer interaction would), so delegated onClick handlers fire.
      */
     const clickElement = (el) => {
-        if (!isElement$5(el))
+        if (!isElement$6(el))
             return actionFail('click', 'target is not an element');
         el.focus?.();
         const { defaultPrevented } = dispatchAll(el, clickSequence());
@@ -1531,7 +1531,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     };
     /** Dispatch two click chains followed by a dblclick on a host Element. */
     const dblclickElement = (el) => {
-        if (!isElement$5(el))
+        if (!isElement$6(el))
             return actionFail('dblclick', 'target is not an element');
         el.focus?.();
         dispatchAll(el, clickSequence());
@@ -1634,12 +1634,12 @@ var PwaDebugPageWorldCdp = (function (exports) {
     // replays those. focus/blur themselves do NOT bubble; their bubbling
     // counterparts focusin/focusout are what delegated handlers listen on, so we
     // dispatch those after calling the native focus()/blur().
-    const isElement$4 = (node) => node !== null &&
+    const isElement$5 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     /** Dispatch a pointer/mouse hover sequence so hover-triggered UI opens. */
     const hoverElement = (el) => {
-        if (!isElement$4(el))
+        if (!isElement$5(el))
             return actionFail('hover', 'target is not an element');
         const { defaultPrevented } = dispatchAll(el, [
             makePointerEvent('pointerover'),
@@ -1656,14 +1656,14 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * itself (we must NOT also dispatch focusin, or delegated handlers fire twice).
      */
     const focusElement = (el) => {
-        if (!isElement$4(el))
+        if (!isElement$5(el))
             return actionFail('focus', 'target is not an element');
         el.focus?.();
         return actionOk('focus');
     };
     /** Blur a host Element. Native blur() dispatches blur + bubbling focusout. */
     const blurElement = (el) => {
-        if (!isElement$4(el))
+        if (!isElement$5(el))
             return actionFail('blur', 'target is not an element');
         el.blur?.();
         return actionOk('blur');
@@ -1745,7 +1745,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
         Home: { code: 'Home', keyCode: 36 },
         End: { code: 'End', keyCode: 35 },
     };
-    const isElement$3 = (node) => node !== null &&
+    const isElement$4 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     const isPrintable = (key) => key.length === 1 && key !== '\n';
@@ -1763,7 +1763,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * need the character committed; typeSequence does this).
      */
     const pressKey = (el, key) => {
-        if (!isElement$3(el))
+        if (!isElement$4(el))
             return actionFail('keyPress', 'target is not an element');
         const { code, keyCode } = specFor(key);
         const init = { key, code, keyCode, which: keyCode };
@@ -1782,7 +1782,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * an input event, ending with a single change event.
      */
     const typeSequence = (el, text) => {
-        if (!isElement$3(el))
+        if (!isElement$4(el))
             return actionFail('typeSequence', 'target is not an element');
         let value = el.value ?? '';
         for (const char of text) {
@@ -1825,7 +1825,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     };
 
     // Pointer-based gestures: drag (pointer + optional HTML5 DnD) and scroll.
-    const isElement$2 = (node) => node !== null &&
+    const isElement$3 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     const newDataTransfer = () => typeof DataTransfer === 'function' ? new DataTransfer() : {};
@@ -1836,7 +1836,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * drop/dragend) sharing one DataTransfer, for libraries using the drag API.
      */
     const dragElement = (source, opts) => {
-        if (!isElement$2(source))
+        if (!isElement$3(source))
             return actionFail('drag', 'source is not an element');
         const start = centerOf(source);
         let targetEl = null;
@@ -1882,7 +1882,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * delta. Returns the resulting scroll position.
      */
     const scrollElement = (el, opts) => {
-        if (!isElement$2(el))
+        if (!isElement$3(el))
             return actionFail('scroll', 'target is not an element');
         if (opts.intoView) {
             el.scrollIntoView?.({ block: 'center', inline: 'center' });
@@ -1903,7 +1903,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     // Each replays a Touch/TouchList sequence (touchstart -> touchmove* -> touchend)
     // so touch-driven handlers fire. longPress is async because it must hold
     // between touchstart and touchend long enough for the page's long-press timer.
-    const isElement$1 = (node) => node !== null &&
+    const isElement$2 = (node) => node !== null &&
         typeof node === 'object' &&
         node.nodeType === 1;
     const DIRECTIONS = {
@@ -1914,7 +1914,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     };
     /** Swipe a touch across an element in a direction by a distance over N steps. */
     const swipeElement = (el, opts) => {
-        if (!isElement$1(el))
+        if (!isElement$2(el))
             return actionFail('swipe', 'target is not an element');
         const dir = DIRECTIONS[opts.direction];
         if (dir === undefined)
@@ -1956,7 +1956,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     };
     /** Tap an element at its center: touch phases plus the click a real tap yields. */
     const tapElement = (el) => {
-        if (!isElement$1(el))
+        if (!isElement$2(el))
             return actionFail('tap', 'target is not an element');
         el.focus?.();
         const r = tapOnce(el, centerOf(el));
@@ -1964,7 +1964,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     };
     /** Double-tap an element: two taps (each with its click) then dblclick. */
     const doubleTapElement = (el) => {
-        if (!isElement$1(el))
+        if (!isElement$2(el))
             return actionFail('doubleTap', 'target is not an element');
         el.focus?.();
         const c = centerOf(el);
@@ -1979,7 +1979,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * long-press timer fires, then touchend + contextmenu.
      */
     const longPressElement = async (el, opts = {}) => {
-        if (!isElement$1(el))
+        if (!isElement$2(el))
             return actionFail('longPress', 'target is not an element');
         const c = centerOf(el);
         const duration = opts.duration ?? 500;
@@ -1996,7 +1996,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
      * diverges (zoom in), scale<1 converges (zoom out), interpolated over N steps.
      */
     const pinchElement = (el, opts) => {
-        if (!isElement$1(el))
+        if (!isElement$2(el))
             return actionFail('pinch', 'target is not an element');
         const steps = opts.steps ?? 10;
         const c = centerOf(el);
@@ -2239,6 +2239,58 @@ var PwaDebugPageWorldCdp = (function (exports) {
     /** Page global the host calls through Runtime.evaluate. */
     const CDP_GLOBAL = '__pwaDebugCdp';
 
+    /** Limits for caller-defined checks (layout_sweep custom_checks). */
+    const CUSTOM_CHECK_LIMITS = Object.freeze({
+        max_checks: 20,
+        max_expression: 10_000,
+        /** Findings kept per check per view. */
+        max_findings: 100,
+    });
+    const NAME = /^[a-z][a-z0-9_]{0,39}$/;
+    /** Finding check id for a custom check: custom:<name>. */
+    const customCheckId = (name) => `custom:${name}`;
+    const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+    /**
+     * Validate caller checks: an array of { name, expression }, names lowercase
+     * snake_case (1-40 chars, starting with a letter) and unique, expressions
+     * non-empty and at most max_expression chars, at most max_checks entries.
+     * Pure. Whether an expression compiles is only known in the page.
+     */
+    const resolveCustomChecks = (input) => {
+        if (input === undefined)
+            return { ok: true, checks: [] };
+        if (!Array.isArray(input))
+            return { ok: false, error: 'custom_checks must be an array of { name, expression }' };
+        if (input.length > CUSTOM_CHECK_LIMITS.max_checks) {
+            return { ok: false, error: `custom_checks: at most ${CUSTOM_CHECK_LIMITS.max_checks} checks` };
+        }
+        const bad = input
+            .map((c, i) => {
+            if (!isRecord(c))
+                return `custom_checks[${i}] must be an object { name, expression }`;
+            const { name, expression } = c;
+            if (typeof name !== 'string' || !NAME.test(name)) {
+                return `custom_checks[${i}].name must be lowercase letters, digits and _ (1-40 chars, starting with a letter)`;
+            }
+            if (typeof expression !== 'string' || expression.trim() === '') {
+                return `custom_checks[${i}].expression (${name}) must be a non-empty string`;
+            }
+            if (expression.length > CUSTOM_CHECK_LIMITS.max_expression) {
+                return `custom_checks[${i}].expression (${name}) is longer than ${CUSTOM_CHECK_LIMITS.max_expression} characters`;
+            }
+            return null;
+        })
+            .find((e) => e !== null);
+        if (bad !== undefined && bad !== null)
+            return { ok: false, error: bad };
+        const checks = input.map((c) => Object.freeze({ name: c['name'], expression: c['expression'] }));
+        const names = checks.map((c) => c.name);
+        const dup = names.find((n, i) => names.indexOf(n) !== i);
+        if (dup !== undefined)
+            return { ok: false, error: `custom_checks: duplicate name "${dup}"` };
+        return { ok: true, checks: Object.freeze(checks) };
+    };
+
     /** Built-in unresolved-copy patterns (spec §6.1 text_patterns). */
     const DEFAULT_TEXT_PATTERNS = Object.freeze([
         '\\{\\{\\s*\\w+\\s*\\}\\}',
@@ -2254,6 +2306,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
         pinned_visible: { enabled: true, pinned_selectors: [] },
         text_clipped: { enabled: true },
         edge_contact: { enabled: true, min_inset: 4 },
+        ring_clipped: { enabled: true, min_px: 1 },
         text_patterns: { enabled: true, extra: [] },
         errors: { enabled: true },
         // Off: gradients and images make the effective background approximate.
@@ -2282,7 +2335,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
     const inRange = (n, lo, hi) => typeof n === 'number' && Number.isFinite(n) && n >= lo && n <= hi;
     /**
      * Merge a caller's partial check config over DEFAULT_CHECKS and validate the
-     * knobs (tap min 1..200 px, edge inset 0..64 px, extra patterns compile,
+     * knobs (tap min 1..200 px, edge inset 0..64 px, ring cut 1..64 px, extra patterns compile,
      * pinned selectors are strings). Pure: same input, same result.
      */
     const resolveChecksConfig = (input) => {
@@ -2294,6 +2347,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
             pinned_visible: mergeCheck('pinned_visible', src),
             text_clipped: mergeCheck('text_clipped', src),
             edge_contact: mergeCheck('edge_contact', src),
+            ring_clipped: mergeCheck('ring_clipped', src),
             text_patterns: mergeCheck('text_patterns', src),
             errors: mergeCheck('errors', src),
             contrast: mergeCheck('contrast', src),
@@ -2303,6 +2357,9 @@ var PwaDebugPageWorldCdp = (function (exports) {
         }
         if (!inRange(config.edge_contact.min_inset, 0, 64)) {
             return { ok: false, error: 'checks.edge_contact.min_inset must be a number from 0 to 64 (CSS px)' };
+        }
+        if (!inRange(config.ring_clipped.min_px, 1, 64)) {
+            return { ok: false, error: 'checks.ring_clipped.min_px must be a number from 1 to 64 (CSS px)' };
         }
         const extra = config.text_patterns.extra;
         if (!Array.isArray(extra) || extra.some((p) => typeof p !== 'string')) {
@@ -4222,7 +4279,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
         NodeType[NodeType["Comment"] = 5] = "Comment";
     })(NodeType || (NodeType = {}));
 
-    function isElement(n) {
+    function isElement$1(n) {
         return n.nodeType === n.ELEMENT_NODE;
     }
     function isShadowRoot(n) {
@@ -5075,7 +5132,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
                     serializedNode.childNodes.push(serializedChildNode);
                 }
             }
-            if (isElement(n) && n.shadowRoot) {
+            if (isElement$1(n) && n.shadowRoot) {
                 for (var _o = 0, _p = Array.from(n.shadowRoot.childNodes); _o < _p.length; _o++) {
                     var childN = _p[_o];
                     var serializedChildNode = serializeNodeWithId(childN, bypassOptions);
@@ -8220,7 +8277,24 @@ var PwaDebugPageWorldCdp = (function (exports) {
             return { x: r.left, y: r.top, width: r.width, height: r.height };
         },
         styleOf: (el, prop) => win.getComputedStyle(el).getPropertyValue(prop),
-        scrollOf: (el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }),
+        scrollOf: (el) => ({
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+            scrollLeft: el.scrollLeft,
+            scrollTop: el.scrollTop,
+        }),
+        isRendered: (el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true),
+        textRectsOf: (el) => [...el.childNodes]
+            .filter((n) => n.nodeType === 3 && (n.textContent ?? '').trim().length > 0)
+            .flatMap((n) => {
+            const range = win.document.createRange();
+            range.selectNodeContents(n);
+            return [...range.getClientRects()]
+                .filter((r) => r.width > 0 && r.height > 0)
+                .map((r) => ({ x: r.left, y: r.top, width: r.width, height: r.height }));
+        }),
         viewport: () => {
             const de = win.document.documentElement;
             return {
@@ -8231,6 +8305,50 @@ var PwaDebugPageWorldCdp = (function (exports) {
         docScrollWidth: () => win.document.documentElement.scrollWidth,
         scrollOffset: () => ({ x: win.scrollX, y: win.scrollY }),
     });
+    const LENGTH = /-?\d*\.?\d+/g;
+    /** clip: rect(top, right, bottom, left) with no area (auto edges keep their side). */
+    const zeroAreaClip = (clip) => {
+        const m = /^rect\((.*)\)$/.exec(clip);
+        if (m === null)
+            return false;
+        const parts = (m[1] ?? '').split(/[\s,]+/).filter(Boolean);
+        if (parts.length !== 4 || parts.includes('auto'))
+            return false;
+        const [t, r, b, l] = parts.map(parseFloat);
+        return r - l <= 1 || b - t <= 1;
+    };
+    /** clip-path that removes the whole box: inset(50%) and friends, circle(0) / ellipse(0 0). */
+    const fullClipPath = (cp) => {
+        const inset = /^inset\(([^)]*)\)/.exec(cp);
+        if (inset !== null) {
+            const parts = (inset[1] ?? '').split(/\s+round\s+/)[0]?.split(/\s+/).filter(Boolean) ?? [];
+            const pct = parts.map((p) => (p.endsWith('%') ? parseFloat(p) : NaN));
+            const [t = NaN, r = t, b = t, l = r] = pct;
+            return t + b >= 100 || l + r >= 100;
+        }
+        const shape = /^(circle|ellipse)\(([^)]*)\)/.exec(cp);
+        if (shape === null)
+            return false;
+        const radii = (shape[2] ?? '').split(/\s+at\s+/)[0] ?? '';
+        const nums = radii.match(LENGTH) ?? [];
+        return nums.length > 0 && nums.every((n) => parseFloat(n) === 0);
+    };
+    /**
+     * Visually hidden on purpose (the sr-only / visually-hidden pattern): a 1×1
+     * box that hides its overflow, a zero-area clip on a positioned box, or a
+     * clip-path that removes the whole box. Screen readers still read it.
+     */
+    const isVisuallyHidden = (ctx, el) => {
+        const r = ctx.rect(el);
+        const hidesOverflow = /^(hidden|clip)$/.test(ctx.style(el, 'overflow-x')) || /^(hidden|clip)$/.test(ctx.style(el, 'overflow-y'));
+        if (r.width <= 1 && r.height <= 1 && hidesOverflow)
+            return true;
+        const positioned = /^(absolute|fixed)$/.test(ctx.style(el, 'position'));
+        if (positioned && zeroAreaClip(ctx.style(el, 'clip')))
+            return true;
+        return fullClipPath(ctx.style(el, 'clip-path'));
+    };
+    /** Memoize a one-argument read for the duration of one measurement. */
     const memo1 = (fn) => {
         const cache = new WeakMap();
         return (k) => {
@@ -8261,17 +8379,45 @@ var PwaDebugPageWorldCdp = (function (exports) {
         };
         const rect = memo1((el) => geometry.rectOf(el));
         const scroll = memo1((el) => geometry.scrollOf(el));
+        const textInk = memo1((el) => {
+            const rs = geometry.textRectsOf(el);
+            if (rs.length === 0)
+                return null;
+            const x = Math.min(...rs.map((r) => r.x));
+            const y = Math.min(...rs.map((r) => r.y));
+            const right = Math.max(...rs.map((r) => r.x + r.width));
+            const bottom = Math.max(...rs.map((r) => r.y + r.height));
+            return { x, y, width: right - x, height: bottom - y };
+        });
         const px = (el, prop) => {
             const n = parseFloat(style(el, prop));
             return Number.isFinite(n) ? n : 0;
         };
+        // Closed <details>: everything but its summary is hidden, at any depth.
+        const inClosedDetails = memo1((el) => {
+            const parent = el.parentElement;
+            if (parent === null)
+                return false;
+            const closed = parent.tagName === 'DETAILS' && !parent.hasAttribute('open');
+            return (closed && el.tagName !== 'SUMMARY') || inClosedDetails(parent);
+        });
+        const ctxForHidden = { rect, style, px };
+        const inVisuallyHidden = memo1((el) => {
+            if (isVisuallyHidden(ctxForHidden, el))
+                return true;
+            const parent = el.parentElement;
+            return parent !== null && inVisuallyHidden(parent);
+        });
         const isVisible = memo1((el) => {
             const r = rect(el);
             return (r.width > 0 &&
                 r.height > 0 &&
                 style(el, 'display') !== 'none' &&
                 style(el, 'visibility') !== 'hidden' &&
-                style(el, 'opacity') !== '0');
+                style(el, 'opacity') !== '0' &&
+                geometry.isRendered(el) &&
+                !inClosedDetails(el) &&
+                !inVisuallyHidden(el));
         });
         const isExempt = memo1((el) => exemptSelectors.some((sel) => el.closest(sel) !== null));
         const isAriaHidden = memo1((el) => el.closest('[aria-hidden="true"],[inert]') !== null);
@@ -8281,6 +8427,7 @@ var PwaDebugPageWorldCdp = (function (exports) {
             rect,
             style,
             scroll,
+            textInk,
             px,
             isVisible,
             isExempt,
@@ -8291,6 +8438,190 @@ var PwaDebugPageWorldCdp = (function (exports) {
     const ancestorsWithin = (el, stop) => {
         const up = (node, acc) => node === null ? acc : node === stop ? [...acc, node] : up(node.parentElement, [...acc, node]);
         return el === stop ? [] : up(el.parentElement, []);
+    };
+
+    /** CSS color parsing and WCAG contrast math. Pure. */
+    const clamp01 = (n) => Math.min(1, Math.max(0, n));
+    const parseChannel = (s) => s.endsWith('%') ? (parseFloat(s) / 100) * 255 : parseFloat(s);
+    const parseAlpha = (s) => s === undefined ? 1 : s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s);
+    const fromHex = (hex) => {
+        const h = hex.length <= 4 ? [...hex].map((c) => c + c).join('') : hex;
+        if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h))
+            return null;
+        const n = (i) => parseInt(h.slice(i, i + 2), 16);
+        return { r: n(0), g: n(2), b: n(4), a: h.length === 8 ? n(6) / 255 : 1 };
+    };
+    /**
+     * Parse rgb()/rgba() (comma or space syntax, optional / alpha), #rgb[a] /
+     * #rrggbb[aa] and `transparent`. Anything else (color(), oklch(), named
+     * colors) returns null so callers can skip rather than guess.
+     */
+    const parseCssColor = (input) => {
+        const s = input.trim().toLowerCase();
+        if (s === 'transparent')
+            return { r: 0, g: 0, b: 0, a: 0 };
+        if (s.startsWith('#'))
+            return fromHex(s.slice(1));
+        const m = /^rgba?\(([^)]*)\)$/.exec(s);
+        if (m === null)
+            return null;
+        const parts = (m[1] ?? '').split(/[\s,/]+/).filter(Boolean);
+        if (parts.length < 3 || parts.length > 4)
+            return null;
+        const [r, g, b, a] = parts;
+        const out = {
+            r: parseChannel(r),
+            g: parseChannel(g),
+            b: parseChannel(b),
+            a: clamp01(parseAlpha(a)),
+        };
+        return [out.r, out.g, out.b, out.a].every(Number.isFinite) ? out : null;
+    };
+    /** Source-over composite of `top` onto an opaque-or-not `bottom`. */
+    const blendOver = (top, bottom) => {
+        const a = top.a + bottom.a * (1 - top.a);
+        if (a === 0)
+            return { r: 0, g: 0, b: 0, a: 0 };
+        const mix = (t, b) => (t * top.a + b * bottom.a * (1 - top.a)) / a;
+        return { r: mix(top.r, bottom.r), g: mix(top.g, bottom.g), b: mix(top.b, bottom.b), a };
+    };
+    const linear = (c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    /** WCAG relative luminance of an opaque color. */
+    const relativeLuminance = (c) => 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
+    /** WCAG contrast ratio (1..21) between two opaque colors. */
+    const contrastRatio = (a, b) => {
+        const la = relativeLuminance(a);
+        const lb = relativeLuminance(b);
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    };
+
+    /** Reading order: on a tie the left/right finding is the one reported. */
+    const SIDES = Object.freeze(['left', 'right', 'top', 'bottom']);
+    const axisOf = (side) => (side === 'left' || side === 'right' ? 'x' : 'y');
+    const WHITE = { r: 255, g: 255, b: 255, a: 1 };
+    /**
+     * Effective background behind el: background colors from el outwards,
+     * composited until opaque (white canvas at the top). Null when an ancestor
+     * paints a background image or a color this parser can't read.
+     */
+    const effectiveBackground = (ctx, el) => {
+        const layers = (node, acc) => {
+            if (node === null)
+                return acc;
+            const img = ctx.style(node, 'background-image');
+            if (img !== '' && img !== 'none')
+                return null;
+            const raw = ctx.style(node, 'background-color');
+            const c = raw === '' ? { r: 0, g: 0, b: 0, a: 0 } : parseCssColor(raw);
+            if (c === null)
+                return null;
+            const next = c.a > 0 ? [...acc, c] : acc;
+            return c.a >= 1 ? next : layers(node.parentElement, next);
+        };
+        const stack = layers(el, []);
+        if (stack === null)
+            return null;
+        return [...stack].reverse().reduce((under, top) => blendOver(top, under), WHITE);
+    };
+    /** A color a viewer can see: unparseable colors count as visible, alpha 0 does not. */
+    const colorShows = (raw) => {
+        if (raw === '')
+            return true;
+        const c = parseCssColor(raw);
+        return c === null || c.a > 0;
+    };
+    /** Smallest per-channel difference (0..255) that reads as a separate surface. */
+    const SURFACE_DELTA = 3;
+    /**
+     * True when el's background color stands out from what is behind it. Unknown
+     * colors or an image behind count as standing out (can't prove otherwise).
+     */
+    const backgroundStandsOut = (ctx, el) => {
+        const raw = ctx.style(el, 'background-color');
+        if (raw === '')
+            return false;
+        const bg = parseCssColor(raw);
+        if (bg === null)
+            return true;
+        if (bg.a === 0)
+            return false;
+        const under = effectiveBackground(ctx, el.parentElement);
+        if (under === null)
+            return true;
+        const seen = blendOver(bg, under);
+        return Math.max(Math.abs(seen.r - under.r), Math.abs(seen.g - under.g), Math.abs(seen.b - under.b)) > SURFACE_DELTA;
+    };
+    /** Split on commas outside parentheses (colors carry their own commas). */
+    const splitTopLevel = (s) => {
+        const end = [...s].reduce((st, ch) => ch === ',' && st.depth === 0
+            ? { parts: [...st.parts, st.cur], cur: '', depth: 0 }
+            : {
+                parts: st.parts,
+                cur: st.cur + ch,
+                depth: ch === '(' ? st.depth + 1 : ch === ')' ? Math.max(0, st.depth - 1) : st.depth,
+            }, { parts: [], cur: '', depth: 0 });
+        return [...end.parts, end.cur].map((p) => p.trim()).filter(Boolean);
+    };
+    const COLOR_TOKEN = /(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^)]*\)|#[0-9a-f]{3,8}\b|\btransparent\b|\bcurrentcolor\b/i;
+    /** Parse a computed box-shadow list. `none` and unparseable layers give []. */
+    const parseBoxShadows = (value) => {
+        if (value === '' || value === 'none')
+            return [];
+        return splitTopLevel(value).flatMap((layer) => {
+            const color = COLOR_TOKEN.exec(layer)?.[0] ?? '';
+            const rest = layer.replace(color, ' ').replace(/\binset\b/i, ' ');
+            const lengths = (rest.match(/-?\d*\.?\d+(?:px)?/g) ?? []).map(parseFloat);
+            if (lengths.length < 2 || !lengths.every(Number.isFinite))
+                return [];
+            const [x = 0, y = 0, blur = 0, spread = 0] = lengths;
+            return [{ inset: /\binset\b/i.test(layer), x, y, blur, spread, visible: colorShows(color) }];
+        });
+    };
+    const hasShadow = (ctx, el) => parseBoxShadows(ctx.style(el, 'box-shadow')).some((s) => s.visible);
+    const borderShows = (ctx, el, side) => ctx.px(el, `border-${side}-width`) > 0 &&
+        !/^(none|hidden|)$/.test(ctx.style(el, `border-${side}-style`)) &&
+        colorShows(ctx.style(el, `border-${side}-color`));
+    /**
+     * Which edges of el a viewer can see: a border on that side, or (all sides) a
+     * visible shadow, a background image, or a background color that differs
+     * from the surface behind it. A same-color row or a divider-only row has no
+     * visible left/right edge, so its content's room comes from an outer box.
+     */
+    const visibleEdges = (ctx, el) => {
+        const img = ctx.style(el, 'background-image');
+        const whole = (img !== '' && img !== 'none') || hasShadow(ctx, el) || backgroundStandsOut(ctx, el);
+        return {
+            top: whole || borderShows(ctx, el, 'top'),
+            right: whole || borderShows(ctx, el, 'right'),
+            bottom: whole || borderShows(ctx, el, 'bottom'),
+            left: whole || borderShows(ctx, el, 'left'),
+        };
+    };
+    const NO_INK = { px: 0, source: 'box-shadow' };
+    const larger = (a, b) => (b.px > a.px ? b : a);
+    /**
+     * How far el's outline and outer (non-inset, visible) shadows reach past its
+     * border box on each side. A blur counts for half its radius (where the
+     * shadow is still clearly visible); offsets push one side out and pull the
+     * other in.
+     */
+    const inkExtents = (ctx, el) => {
+        const os = ctx.style(el, 'outline-style');
+        const outlinePx = os !== '' && os !== 'none' && colorShows(ctx.style(el, 'outline-color'))
+            ? Math.max(0, ctx.px(el, 'outline-width') + ctx.px(el, 'outline-offset'))
+            : 0;
+        const outline = { px: outlinePx, source: 'outline' };
+        const shadows = parseBoxShadows(ctx.style(el, 'box-shadow')).filter((s) => !s.inset && s.visible);
+        const reach = (pick) => shadows.reduce((best, s) => larger(best, { px: Math.max(0, s.spread + s.blur / 2 + pick(s)), source: 'box-shadow' }), NO_INK);
+        return {
+            top: larger(outline, reach((s) => -s.y)),
+            right: larger(outline, reach((s) => s.x)),
+            bottom: larger(outline, reach((s) => s.y)),
+            left: larger(outline, reach((s) => -s.x)),
+        };
     };
 
     const collapse = (s, max) => {
@@ -8448,84 +8779,364 @@ var PwaDebugPageWorldCdp = (function (exports) {
             return [];
         return [elementFinding(ctx, 'pinned_visible', el, `pinned element not fully on screen: ${edgeText(ctx, r)}`)];
     });
-    const TRANSPARENT = /^(transparent|rgba\(\s*0,\s*0,\s*0,\s*0\s*\)|rgb\(\s*0\s+0\s+0\s*\/\s*0\s*\))$/;
-    const hasBorder = (ctx, el) => ['top', 'right', 'bottom', 'left'].some((s) => ctx.px(el, `border-${s}-width`) > 0 && !/^(none|hidden|)$/.test(ctx.style(el, `border-${s}-style`)));
-    /** A visible box of its own: border, background or shadow (a card, a field, a sheet). */
-    const isBoxed = (ctx, el) => {
-        const bg = ctx.style(el, 'background-color');
-        const img = ctx.style(el, 'background-image');
-        const shadow = ctx.style(el, 'box-shadow');
-        return (hasBorder(ctx, el) ||
-            (bg !== '' && !TRANSPARENT.test(bg)) ||
-            (img !== '' && img !== 'none') ||
-            (shadow !== '' && shadow !== 'none'));
-    };
-    /** Content of a box: text-bearing elements and form controls, not crossing into nested boxes. */
-    const contentLeaves = (ctx, box) => [...box.children].flatMap((child) => {
+    /** Overflow on one axis hides (or scrolls) content: anything but visible. */
+    const clipsAxis = (ctx, el, axis) => ctx.style(el, `overflow-${axis}`) !== 'visible' && ctx.style(el, `overflow-${axis}`) !== '';
+    /**
+     * Content of a box for one side: text-bearing elements and form controls,
+     * not crossing into a nested element that shows its own edge on that side,
+     * and not into a scroller or clipper on that side's axis (its content can be
+     * scrolled or clipped away from where it sits).
+     */
+    const sideLeaves = (ctx, edges, parent, side) => [...parent.children].flatMap((child) => {
         if (!ctx.isVisible(child) || ctx.isExempt(child) || isOutOfFlow(ctx, child))
             return [];
         if (isFormControl(child))
             return [child];
-        if (isBoxed(ctx, child))
+        if (edges(child)[side])
             return [];
-        return [...(hasOwnText(child) ? [child] : []), ...contentLeaves(ctx, child)];
+        const own = hasOwnText(child) ? [child] : [];
+        return clipsAxis(ctx, child, axisOf(side)) ? own : [...own, ...sideLeaves(ctx, edges, child, side)];
     });
-    const leafInsets = (ctx, box, leaf) => {
-        const b = ctx.rect(box);
-        const inner = {
-            l: b.x + ctx.px(box, 'border-left-width'),
-            r: b.x + b.width - ctx.px(box, 'border-right-width'),
-            t: b.y + ctx.px(box, 'border-top-width'),
-            b: b.y + b.height - ctx.px(box, 'border-bottom-width'),
+    const union = (rs) => {
+        if (rs.length === 0)
+            return null;
+        const x = Math.min(...rs.map((r) => r.x));
+        const y = Math.min(...rs.map((r) => r.y));
+        return {
+            x,
+            y,
+            width: Math.max(...rs.map((r) => r.x + r.width)) - x,
+            height: Math.max(...rs.map((r) => r.y + r.height)) - y,
         };
-        const control = isFormControl(leaf);
-        const lr = ctx.rect(leaf);
-        // Text sits inside the leaf's own padding; a control's edge is its border box.
-        const pad = (s) => (control ? 0 : ctx.px(leaf, `padding-${s}`));
-        const clipsX = ctx.style(box, 'overflow-x') !== 'visible';
-        const clipsY = ctx.style(box, 'overflow-y') !== 'visible';
-        const horizontal = clipsX
-            ? []
-            : [
-                { side: 'left', px: lr.x + pad('left') - inner.l, leaf },
-                { side: 'right', px: inner.r - (lr.x + lr.width - pad('right')), leaf },
-            ];
-        const vertical = clipsY
-            ? []
-            : [
-                { side: 'top', px: lr.y + pad('top') - inner.t, leaf },
-                { side: 'bottom', px: inner.b - (lr.y + lr.height - pad('bottom')), leaf },
-            ];
-        return [...horizontal, ...vertical];
     };
-    /** Text: left/right closer than min, or crossing any edge. Controls: any side closer than min. */
-    const violates = (i, min) => i.px < 0 || ((i.side === 'left' || i.side === 'right' || isFormControl(i.leaf)) && i.px < min);
+    const DRAWN_MEDIA = new Set(['svg', 'img', 'canvas', 'video', 'picture']);
+    /** What an edge-less control draws: its text line boxes and icons/images, itself included. */
+    const controlInk = (ctx, control) => union([control, ...control.querySelectorAll('*')]
+        .filter((el) => el === control || ctx.isVisible(el))
+        .flatMap((el) => {
+        if (DRAWN_MEDIA.has(el.tagName.toLowerCase()))
+            return [ctx.rect(el)];
+        const ink = ctx.textInk(el);
+        return ink !== null ? [ink] : [];
+    }));
+    const TEXT_ENTRY = /^(INPUT|TEXTAREA|SELECT)$/;
     /**
-     * edge_contact: inside a visible box, text or a control touching or crossing
-     * the box's inner edge (padding a parent rule zeroed). One finding per box,
-     * naming the worst side.
+     * The part of a leaf that can touch an edge. Text: its line boxes (else its
+     * rect inside its padding). A control showing an edge: its border box. A
+     * control with no edge: what it draws, or for a text field its padding box;
+     * null when it draws nothing measurable.
      */
-    const checkEdgeContact = (ctx, elements, cfg) => elements
-        .filter((el) => el !== ctx.root &&
-        el.tagName !== 'HTML' &&
-        el.tagName !== 'BODY' &&
-        ctx.isVisible(el) &&
-        !ctx.isExempt(el) &&
-        !ctx.isAriaHidden(el) &&
-        isBoxed(ctx, el))
-        .flatMap((box) => {
-        const bad = contentLeaves(ctx, box)
-            .flatMap((leaf) => leafInsets(ctx, box, leaf))
-            .filter((i) => violates(i, cfg.min_inset))
-            .sort((a, b) => a.px - b.px);
-        const worst = bad[0];
-        if (worst === undefined)
+    const leafShape = (ctx, edges, leaf) => {
+        if (isFormControl(leaf)) {
+            if (SIDES.some((s) => edges(leaf)[s]))
+                return { rect: ctx.rect(leaf), kind: 'edged', padded: false };
+            const ink = controlInk(ctx, leaf);
+            if (ink !== null)
+                return { rect: ink, kind: 'text', padded: false };
+            return TEXT_ENTRY.test(leaf.tagName) ? { rect: ctx.rect(leaf), kind: 'text', padded: true } : null;
+        }
+        const ink = ctx.textInk(leaf);
+        return ink !== null ? { rect: ink, kind: 'text', padded: false } : { rect: ctx.rect(leaf), kind: 'text', padded: true };
+    };
+    const innerEdges = (ctx, box) => {
+        const b = ctx.rect(box);
+        return {
+            left: b.x + ctx.px(box, 'border-left-width'),
+            right: b.x + b.width - ctx.px(box, 'border-right-width'),
+            top: b.y + ctx.px(box, 'border-top-width'),
+            bottom: b.y + b.height - ctx.px(box, 'border-bottom-width'),
+        };
+    };
+    /** Distance from the leaf's shape to the box's inner edge on one side. */
+    const sideInset = (ctx, box, leaf, shape, side) => {
+        const inner = innerEdges(ctx, box);
+        const r = shape.rect;
+        const pad = shape.padded ? ctx.px(leaf, `padding-${side}`) : 0;
+        const px = side === 'left'
+            ? r.x + pad - inner.left
+            : side === 'right'
+                ? inner.right - (r.x + r.width - pad)
+                : side === 'top'
+                    ? r.y + pad - inner.top
+                    : inner.bottom - (r.y + r.height - pad);
+        return { side, px, leaf, kind: shape.kind };
+    };
+    /**
+     * A control that shows its edge and spans the box's full inner width is
+     * full-bleed by design (a banner button, a card's footer action), not
+     * content missing its padding.
+     */
+    const fullBleed = (ctx, box, shape) => {
+        if (shape.kind !== 'edged')
+            return false;
+        const inner = innerEdges(ctx, box);
+        return shape.rect.x <= inner.left + 0.5 && shape.rect.x + shape.rect.width >= inner.right - 0.5;
+    };
+    /**
+     * Compared in whole CSS px, as reported, so sub-pixel layout never yields
+     * "4px (min 4)". Text: left/right under min, or crossing any edge. Edged
+     * controls: touching or crossing.
+     */
+    const violates = (i, min) => {
+        const px = Math.round(i.px);
+        if (px < 0)
+            return true;
+        return i.kind === 'edged' ? px < 1 : axisOf(i.side) === 'x' && px < min;
+    };
+    /**
+     * edge_contact: inside a box with a visible edge, text or a control touching
+     * or crossing that edge (padding a parent rule zeroed). Text and edge-less
+     * controls are measured by what they draw; controls with their own edge
+     * fail only when touching, and full-width ones are skipped. Each side is measured
+     * against the nearest box that shows an edge there, so a divider-only or
+     * same-color row inside a padded card is judged by the card. One finding per
+     * box, naming the worst side.
+     */
+    const checkEdgeContact = (ctx, elements, cfg) => {
+        const edges = memo1((el) => visibleEdges(ctx, el));
+        return elements
+            .filter((el) => el !== ctx.root &&
+            el.tagName !== 'HTML' &&
+            el.tagName !== 'BODY' &&
+            ctx.isVisible(el) &&
+            !ctx.isExempt(el) &&
+            !ctx.isAriaHidden(el) &&
+            SIDES.some((s) => edges(el)[s]))
+            .flatMap((box) => {
+            const shape = memo1((leaf) => leafShape(ctx, edges, leaf));
+            const bad = SIDES.filter((s) => edges(box)[s] && !clipsAxis(ctx, box, axisOf(s)))
+                .flatMap((s) => sideLeaves(ctx, edges, box, s).flatMap((leaf) => {
+                const sh = shape(leaf);
+                return sh === null || fullBleed(ctx, box, sh) ? [] : [sideInset(ctx, box, leaf, sh, s)];
+            }))
+                .filter((i) => violates(i, cfg.min_inset))
+                .sort((a, b) => a.px - b.px);
+            const worst = bad[0];
+            if (worst === undefined)
+                return [];
+            const what = isFormControl(worst.leaf) ? 'control' : 'text';
+            return [
+                elementFinding(ctx, 'edge_contact', box, `${what} "${accessibleName(worst.leaf)}" is ${Math.round(worst.px)}px from the ${worst.side} edge of its box (min ${cfg.min_inset})`),
+            ];
+        });
+    };
+
+    /**
+     * Ancestors that can clip el: every overflow ancestor in normal flow; for an
+     * absolutely positioned element only from its containing block (the nearest
+     * positioned ancestor) outwards; nothing past a fixed element. html and body
+     * hand their overflow to the viewport, so they are not clippers here.
+     */
+    const clippingAncestors = (ctx, el) => {
+        const walk = (node, pos, acc) => {
+            if (node === null || node.tagName === 'BODY' || node.tagName === 'HTML' || pos === 'fixed')
+                return acc;
+            const nodePos = ctx.style(node, 'position');
+            const containing = pos !== 'absolute' || nodePos !== 'static';
+            const clips = containing && (clipsAxis(ctx, node, 'x') || clipsAxis(ctx, node, 'y'));
+            return walk(node.parentElement, containing ? nodePos : pos, clips ? [...acc, node] : acc);
+        };
+        return walk(el.parentElement, ctx.style(el, 'position'), []);
+    };
+    /**
+     * How much of the ink on one side the clipper hides for good: the part past
+     * the edge of what it can scroll to (overflow: clip can't scroll at all).
+     * Outlines and shadows don't add to scrollable overflow, so scrolling never
+     * reveals them. Zero when the element's own box already crosses that edge
+     * (then the box itself is clipped, which other checks see).
+     */
+    const cutOnSide = (ctx, el, clipper, side, ink) => {
+        const axis = axisOf(side);
+        if (!clipsAxis(ctx, clipper, axis))
+            return 0;
+        const c = ctx.rect(clipper);
+        const r = ctx.rect(el);
+        const s = ctx.scroll(clipper);
+        const scrolls = ctx.style(clipper, `overflow-${axis}`) !== 'clip';
+        const start = axis === 'x'
+            ? c.x + ctx.px(clipper, 'border-left-width') - (scrolls ? s.scrollLeft : 0)
+            : c.y + ctx.px(clipper, 'border-top-width') - (scrolls ? s.scrollTop : 0);
+        const padSize = axis === 'x'
+            ? c.width - ctx.px(clipper, 'border-left-width') - ctx.px(clipper, 'border-right-width')
+            : c.height - ctx.px(clipper, 'border-top-width') - ctx.px(clipper, 'border-bottom-width');
+        const size = scrolls ? Math.max(padSize, axis === 'x' ? s.scrollWidth : s.scrollHeight) : padSize;
+        const end = start + size;
+        // An element spanning the clipper's whole visible extent on this axis
+        // (a full-width panel or bar) has its shadow fall off the clipper's own
+        // edges by design.
+        const visStart = axis === 'x' ? c.x + ctx.px(clipper, 'border-left-width') : c.y + ctx.px(clipper, 'border-top-width');
+        const lo = axis === 'x' ? r.x : r.y;
+        const hi = axis === 'x' ? r.x + r.width : r.y + r.height;
+        if (lo <= visStart + 1 && hi >= visStart + padSize - 1)
+            return 0;
+        const boxEdge = side === 'left' ? r.x : side === 'right' ? r.x + r.width : side === 'top' ? r.y : r.y + r.height;
+        const beyond = side === 'left' || side === 'top' ? start - (boxEdge - ink.px) : boxEdge + ink.px - end;
+        const boxInside = side === 'left' || side === 'top' ? boxEdge >= start - 0.5 : boxEdge <= end + 0.5;
+        return boxInside ? Math.min(ink.px, Math.max(0, beyond)) : 0;
+    };
+    const overflowText = (ctx, el, side) => {
+        const axis = axisOf(side);
+        return `overflow-${axis}: ${ctx.style(el, `overflow-${axis}`)}`;
+    };
+    /**
+     * ring_clipped: an outline or outer box-shadow (focus/selection rings, card
+     * shadows) cut off by a scrolling or clipping ancestor. The ink sits outside
+     * the border box, so box geometry alone never sees it. Reports the worst cut
+     * per element, at least min_px whole CSS px.
+     */
+    const checkRingClipped = (ctx, elements, cfg) => elements
+        .filter((el) => el !== ctx.root && ctx.isVisible(el) && !ctx.isExempt(el) && !ctx.isAriaHidden(el))
+        .flatMap((el) => {
+        const ink = inkExtents(ctx, el);
+        const sides = SIDES.filter((s) => ink[s].px >= cfg.min_px);
+        if (sides.length === 0)
             return [];
-        const what = isFormControl(worst.leaf) ? 'control' : 'text';
+        // Only the nearest clipper on an axis decides: a scroller in between moves
+        // the element relative to anything further out.
+        const clippers = clippingAncestors(ctx, el);
+        const nearest = (axis) => clippers.find((c) => clipsAxis(ctx, c, axis));
+        const cuts = sides.flatMap((side) => {
+            const clipper = nearest(axisOf(side));
+            return clipper === undefined
+                ? []
+                : [{ side, px: cutOnSide(ctx, el, clipper, side, ink[side]), ink: ink[side], clipper }];
+        });
+        const worst = [...cuts].sort((a, b) => b.px - a.px)[0];
+        if (worst === undefined || Math.round(worst.px) < cfg.min_px)
+            return [];
         return [
-            elementFinding(ctx, 'edge_contact', box, `${what} "${accessibleName(worst.leaf)}" is ${Math.round(worst.px)}px from the ${worst.side} edge of its box (min ${cfg.min_inset})`),
+            elementFinding(ctx, 'ring_clipped', el, `${worst.ink.source} of "${accessibleName(el)}" cut off ${Math.round(worst.px)}px of ${Math.round(worst.ink.px)}px on the ${worst.side} by ${elementSignature(worst.clipper).split(' ')[0]} (${overflowText(ctx, worst.clipper, worst.side)})`),
         ];
     });
+
+    /**
+     * Caller-defined checks (layout_sweep custom_checks). Each expression is
+     * compiled in the page (same new Function path as `evaluate` and
+     * states.apply, so a CSP without unsafe-eval blocks it there too) and called
+     * with the view's variables and a read-only helper bag built on the same
+     * measurement context as the built-in checks.
+     */
+    const MESSAGE_MAX = 300;
+    const SIGNATURE_MAX = 120;
+    const clip = (s, max) => {
+        const one = s.replace(/\s+/g, ' ').trim();
+        return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+    };
+    const isElement = (v) => v !== null && typeof v === 'object' && v.nodeType === 1;
+    /**
+     * The `pdl` object a custom check receives. Every read goes through the
+     * measurement context, so visibility and edges are judged exactly as the
+     * built-in checks judge them.
+     */
+    const customHelpers = (ctx) => Object.freeze({
+        root: ctx.root,
+        viewport: ctx.viewport,
+        /** Visible, non-exempt elements under the root, optionally matching a selector. */
+        elements: (selector) => [...ctx.root.querySelectorAll(selector ?? '*')].filter((el) => ctx.isVisible(el) && !ctx.isExempt(el)),
+        isVisible: (el) => ctx.isVisible(el),
+        isExempt: (el) => ctx.isExempt(el),
+        rect: (el) => ctx.rect(el),
+        style: (el, prop) => ctx.style(el, prop),
+        px: (el, prop) => ctx.px(el, prop),
+        name: (el) => accessibleName(el),
+        signature: (el) => elementSignature(el),
+        edges: (el) => visibleEdges(ctx, el),
+        ink: (el) => inkExtents(ctx, el),
+        background: (el) => effectiveBackground(ctx, el),
+    });
+    const asList = (raw) => {
+        if (raw === undefined || raw === null || typeof raw === 'boolean')
+            return [];
+        if (typeof raw === 'string' || isElement(raw) || Array.isArray(raw))
+            return Array.isArray(raw) ? raw : [raw];
+        if (typeof raw === 'object' && typeof raw[Symbol.iterator] === 'function') {
+            return [...raw];
+        }
+        return [raw];
+    };
+    const normalizeItem = (ctx, name, item, index) => {
+        const id = customCheckId(name);
+        const fromElement = (el, message, signature) => {
+            if (ctx.isExempt(el))
+                return { kind: 'skip' };
+            const base = elementFinding(ctx, id, el, clip(message ?? `${name}: "${accessibleName(el)}"`, MESSAGE_MAX));
+            return {
+                kind: 'finding',
+                finding: signature !== undefined ? { ...base, signature: clip(signature, SIGNATURE_MAX) } : base,
+            };
+        };
+        if (isElement(item))
+            return fromElement(item, undefined, undefined);
+        if (typeof item === 'string') {
+            return item.trim() === ''
+                ? { kind: 'skip' }
+                : { kind: 'finding', finding: { check: id, signature: `text "${clip(item, 80)}"`, message: clip(item, MESSAGE_MAX) } };
+        }
+        if (item !== null && typeof item === 'object') {
+            const o = item;
+            const message = typeof o.message === 'string' && o.message.trim() !== '' ? o.message : undefined;
+            const signature = typeof o.signature === 'string' && o.signature.trim() !== '' ? o.signature : undefined;
+            if (isElement(o.element))
+                return fromElement(o.element, message, signature);
+            if (o.element === undefined && message !== undefined) {
+                return {
+                    kind: 'finding',
+                    finding: { check: id, signature: clip(signature ?? message, SIGNATURE_MAX), message: clip(message, MESSAGE_MAX) },
+                };
+            }
+        }
+        return { kind: 'bad', index };
+    };
+    /**
+     * Turn what one custom check returned into findings: an element, a string, or
+     * { element?, message?, signature? }, alone or in an array / NodeList /
+     * iterable; null, undefined and booleans mean "nothing found". Exempt
+     * elements are dropped, the list is capped, and the first unusable item is
+     * reported as the check's error without discarding the rest.
+     */
+    const normalizeCustomResult = (ctx, name, raw) => {
+        if (raw !== null && typeof raw === 'object' && typeof raw.then === 'function') {
+            return { findings: [], error: 'returned a promise; custom checks must return synchronously' };
+        }
+        const items = asList(raw).map((item, i) => normalizeItem(ctx, name, item, i));
+        const findings = items.flatMap((n) => (n.kind === 'finding' ? [n.finding] : []));
+        const bad = items.find((n) => n.kind === 'bad');
+        const capped = findings.slice(0, CUSTOM_CHECK_LIMITS.max_findings);
+        const notes = [
+            ...(bad !== undefined && bad.kind === 'bad'
+                ? [`item ${bad.index} is not an element, a string or { element?, message, signature? }`]
+                : []),
+            ...(findings.length > capped.length ? [`returned ${findings.length} findings; kept ${capped.length}`] : []),
+        ];
+        return { findings: capped, ...(notes.length > 0 ? { error: notes.join('; ') } : {}) };
+    };
+    const errorText = (err) => clip(err instanceof Error ? `${err.name}: ${err.message}` : String(err), MESSAGE_MAX);
+    /** Compile one expression as the body of `(view, pdl) => (expression)`. */
+    const compile = (expression) => new Function('view', 'pdl', `"use strict";\nreturn (${expression}\n);`);
+    /**
+     * Run every custom check against one view. A check that fails to compile,
+     * throws, returns a promise or returns unusable items yields a
+     * CustomCheckError; it never stops the other checks or the view.
+     */
+    const runCustomChecks = (ctx, checks, view) => {
+        if (checks.length === 0)
+            return { findings: [], errors: [] };
+        const pdl = customHelpers(ctx);
+        const frozenView = Object.freeze({ ...view });
+        const results = checks.map((check) => {
+            try {
+                const out = normalizeCustomResult(ctx, check.name, compile(check.expression)(frozenView, pdl));
+                return { findings: out.findings, errors: out.error !== undefined ? [{ name: check.name, error: out.error }] : [] };
+            }
+            catch (err) {
+                return { findings: [], errors: [{ name: check.name, error: errorText(err) }] };
+            }
+        });
+        return {
+            findings: results.flatMap((r) => r.findings),
+            errors: results.flatMap((r) => r.errors),
+        };
+    };
 
     const CONTROL_IN_LABEL = 'input,select,textarea';
     /** A label counts as a target only when it wraps a control (it is then the hit area). */
@@ -8565,64 +9176,6 @@ var PwaDebugPageWorldCdp = (function (exports) {
             elementFinding(ctx, 'tap_target', el, `tap target ${sizeText(r.width, r.height)} "${accessibleName(el)}" (min ${cfg.min})`),
         ];
     });
-
-    /** CSS color parsing and WCAG contrast math. Pure. */
-    const clamp01 = (n) => Math.min(1, Math.max(0, n));
-    const parseChannel = (s) => s.endsWith('%') ? (parseFloat(s) / 100) * 255 : parseFloat(s);
-    const parseAlpha = (s) => s === undefined ? 1 : s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s);
-    const fromHex = (hex) => {
-        const h = hex.length <= 4 ? [...hex].map((c) => c + c).join('') : hex;
-        if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h))
-            return null;
-        const n = (i) => parseInt(h.slice(i, i + 2), 16);
-        return { r: n(0), g: n(2), b: n(4), a: h.length === 8 ? n(6) / 255 : 1 };
-    };
-    /**
-     * Parse rgb()/rgba() (comma or space syntax, optional / alpha), #rgb[a] /
-     * #rrggbb[aa] and `transparent`. Anything else (color(), oklch(), named
-     * colors) returns null so callers can skip rather than guess.
-     */
-    const parseCssColor = (input) => {
-        const s = input.trim().toLowerCase();
-        if (s === 'transparent')
-            return { r: 0, g: 0, b: 0, a: 0 };
-        if (s.startsWith('#'))
-            return fromHex(s.slice(1));
-        const m = /^rgba?\(([^)]*)\)$/.exec(s);
-        if (m === null)
-            return null;
-        const parts = (m[1] ?? '').split(/[\s,/]+/).filter(Boolean);
-        if (parts.length < 3 || parts.length > 4)
-            return null;
-        const [r, g, b, a] = parts;
-        const out = {
-            r: parseChannel(r),
-            g: parseChannel(g),
-            b: parseChannel(b),
-            a: clamp01(parseAlpha(a)),
-        };
-        return [out.r, out.g, out.b, out.a].every(Number.isFinite) ? out : null;
-    };
-    /** Source-over composite of `top` onto an opaque-or-not `bottom`. */
-    const blendOver = (top, bottom) => {
-        const a = top.a + bottom.a * (1 - top.a);
-        if (a === 0)
-            return { r: 0, g: 0, b: 0, a: 0 };
-        const mix = (t, b) => (t * top.a + b * bottom.a * (1 - top.a)) / a;
-        return { r: mix(top.r, bottom.r), g: mix(top.g, bottom.g), b: mix(top.b, bottom.b), a };
-    };
-    const linear = (c) => {
-        const s = c / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-    };
-    /** WCAG relative luminance of an opaque color. */
-    const relativeLuminance = (c) => 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
-    /** WCAG contrast ratio (1..21) between two opaque colors. */
-    const contrastRatio = (a, b) => {
-        const la = relativeLuminance(a);
-        const lb = relativeLuminance(b);
-        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-    };
 
     const SLACK = 1;
     const clipsText = (ctx, el) => {
@@ -8670,31 +9223,6 @@ var PwaDebugPageWorldCdp = (function (exports) {
         signature: `text "${match}"`,
         message: `unresolved text ${JSON.stringify(match)} (pattern /${source}/)`,
     })));
-    const WHITE = { r: 255, g: 255, b: 255, a: 1 };
-    /**
-     * Effective background behind el: background colors from el outwards,
-     * composited until opaque (white canvas at the top). Null when an ancestor
-     * paints a background image or a color this parser can't read.
-     */
-    const effectiveBackground = (ctx, el) => {
-        const layers = (node, acc) => {
-            if (node === null)
-                return acc;
-            const img = ctx.style(node, 'background-image');
-            if (img !== '' && img !== 'none')
-                return null;
-            const raw = ctx.style(node, 'background-color');
-            const c = raw === '' ? { r: 0, g: 0, b: 0, a: 0 } : parseCssColor(raw);
-            if (c === null)
-                return null;
-            const next = c.a > 0 ? [...acc, c] : acc;
-            return c.a >= 1 ? next : layers(node.parentElement, next);
-        };
-        const stack = layers(el, []);
-        if (stack === null)
-            return null;
-        return [...stack].reverse().reduce((under, top) => blendOver(top, under), WHITE);
-    };
     const isLargeText = (ctx, el) => {
         const size = ctx.px(el, 'font-size');
         const weight = parseInt(ctx.style(el, 'font-weight'), 10);
@@ -8773,6 +9301,13 @@ var PwaDebugPageWorldCdp = (function (exports) {
         const checks = resolveChecksConfig(r['checks']);
         if (!checks.ok)
             return { ok: false, error: `layout_measure: ${checks.error}` };
+        const custom = resolveCustomChecks(r['custom']);
+        if (!custom.ok)
+            return { ok: false, error: `layout_measure: ${custom.error}` };
+        const view = r['view'] ?? {};
+        if (view === null || typeof view !== 'object' || Array.isArray(view) || !Object.values(view).every((v) => typeof v === 'string')) {
+            return { ok: false, error: 'layout_measure: view must be an object of string values' };
+        }
         return {
             ok: true,
             input: {
@@ -8780,6 +9315,8 @@ var PwaDebugPageWorldCdp = (function (exports) {
                 ...(root !== undefined ? { root_selector: root } : {}),
                 exempt_selectors: exempt,
                 checks: checks.config,
+                custom: custom.checks,
+                view: view,
             },
         };
     };
@@ -8822,15 +9359,20 @@ var PwaDebugPageWorldCdp = (function (exports) {
             ...(checks.tap_target.enabled ? checkTapTargets(ctx, elements, checks.tap_target) : []),
             ...(checks.text_clipped.enabled ? checkTextClipped(ctx, elements) : []),
             ...(checks.edge_contact.enabled ? checkEdgeContact(ctx, elements, checks.edge_contact) : []),
+            ...(checks.ring_clipped.enabled ? checkRingClipped(ctx, elements, checks.ring_clipped) : []),
             ...(checks.text_patterns.enabled ? checkTextPatterns(renderedText(root), checks.text_patterns) : []),
             ...(checks.contrast.enabled ? checkContrast(ctx, elements) : []),
         ];
+        // Custom checks run last, so a busy one can't crowd built-in findings out of the cap.
+        const custom = runCustomChecks(ctx, input.custom, input.view);
+        const findings = [...all, ...custom.findings];
         return {
             url: doc.location?.href ?? '',
             viewport: ctx.viewport,
             scroll: geometry.scrollOffset(),
-            findings: all.slice(0, FINDINGS_CAP),
-            truncated: all.length > FINDINGS_CAP,
+            findings: findings.slice(0, FINDINGS_CAP),
+            truncated: findings.length > FINDINGS_CAP,
+            ...(custom.errors.length > 0 ? { custom_errors: custom.errors } : {}),
         };
     };
     /**

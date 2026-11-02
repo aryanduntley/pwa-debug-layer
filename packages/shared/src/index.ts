@@ -191,6 +191,9 @@ export type { CaptureGateSettings } from './capture_gate.js';
 
 export type {
   LayoutCheckName,
+  LayoutCheckId,
+  CustomCheck,
+  CustomCheckError,
   LayoutRect,
   ChecksConfig,
   LayoutFinding,
@@ -206,6 +209,8 @@ export type {
 } from './layout_sweep/types.js';
 
 export type { ChecksInput, ChecksResolveResult } from './layout_sweep/checks_config.js';
+export type { CustomChecksResult } from './layout_sweep/custom_checks.js';
+export { CUSTOM_CHECK_LIMITS, customCheckId, resolveCustomChecks } from './layout_sweep/custom_checks.js';
 export {
   DEFAULT_CHECKS,
   DEFAULT_TEXT_PATTERNS,

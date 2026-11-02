@@ -16,6 +16,7 @@ export const DEFAULT_CHECKS: ChecksConfig = Object.freeze({
   pinned_visible: { enabled: true, pinned_selectors: [] },
   text_clipped: { enabled: true },
   edge_contact: { enabled: true, min_inset: 4 },
+  ring_clipped: { enabled: true, min_px: 1 },
   text_patterns: { enabled: true, extra: [] },
   errors: { enabled: true },
   // Off: gradients and images make the effective background approximate.
@@ -60,7 +61,7 @@ const inRange = (n: unknown, lo: number, hi: number): boolean =>
 
 /**
  * Merge a caller's partial check config over DEFAULT_CHECKS and validate the
- * knobs (tap min 1..200 px, edge inset 0..64 px, extra patterns compile,
+ * knobs (tap min 1..200 px, edge inset 0..64 px, ring cut 1..64 px, extra patterns compile,
  * pinned selectors are strings). Pure: same input, same result.
  */
 export const resolveChecksConfig = (input: ChecksInput | undefined): ChecksResolveResult => {
@@ -72,6 +73,7 @@ export const resolveChecksConfig = (input: ChecksInput | undefined): ChecksResol
     pinned_visible: mergeCheck('pinned_visible', src),
     text_clipped: mergeCheck('text_clipped', src),
     edge_contact: mergeCheck('edge_contact', src),
+    ring_clipped: mergeCheck('ring_clipped', src),
     text_patterns: mergeCheck('text_patterns', src),
     errors: mergeCheck('errors', src),
     contrast: mergeCheck('contrast', src),
@@ -81,6 +83,9 @@ export const resolveChecksConfig = (input: ChecksInput | undefined): ChecksResol
   }
   if (!inRange(config.edge_contact.min_inset, 0, 64)) {
     return { ok: false, error: 'checks.edge_contact.min_inset must be a number from 0 to 64 (CSS px)' };
+  }
+  if (!inRange(config.ring_clipped.min_px, 1, 64)) {
+    return { ok: false, error: 'checks.ring_clipped.min_px must be a number from 1 to 64 (CSS px)' };
   }
   const extra = config.text_patterns.extra;
   if (!Array.isArray(extra) || extra.some((p) => typeof p !== 'string')) {
