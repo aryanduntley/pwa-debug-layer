@@ -101,7 +101,7 @@ describe('createAndroidBridge.attach', () => {
       forwardReused: false,
       connectionId: 'cdp:127.0.0.1:40001:175',
     });
-    expect(c.attach).toHaveBeenCalledWith({ browserUrl: '127.0.0.1:40001', urlContains: 'localhost' });
+    expect(c.attach).toHaveBeenCalledWith({ browserUrl: '127.0.0.1:40001', origin: 'android', urlContains: 'localhost' });
   });
 
   it('reverses ports and opens a tab when open_url is given', async () => {
@@ -110,7 +110,7 @@ describe('createAndroidBridge.attach', () => {
     const b = createAndroidBridge({ adb: adb.deps, cdp: c.cdp });
     const r = await b.attach({ openUrl: 'http://localhost:5173', reversePorts: [5173] });
     expect(adb.calls).toContainEqual(['-s', 'R5CX52E7J8X', 'reverse', 'tcp:5173', 'tcp:5173']);
-    expect(c.openTab).toHaveBeenCalledWith({ browserUrl: '127.0.0.1:40001', url: 'http://localhost:5173' });
+    expect(c.openTab).toHaveBeenCalledWith({ browserUrl: '127.0.0.1:40001', url: 'http://localhost:5173', origin: 'android' });
     expect(r).toMatchObject({ ok: true, url: 'http://localhost:5173', loadStatus: 'complete', reversed: [5173] });
   });
 

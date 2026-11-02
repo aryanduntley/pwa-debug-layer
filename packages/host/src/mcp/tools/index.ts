@@ -1,5 +1,6 @@
 import type { ToolDef } from '../tool_registry.js';
 import { hostStatusTool } from './host_status.js';
+import { layoutSweepTool, layoutSweepStatusTool, layoutSweepCancelTool } from './layout_sweep.js';
 import { hostRegisterExtensionTool } from './host_register_extension.js';
 import { hostUnregisterExtensionTool } from './host_unregister_extension.js';
 import { hostListRegistrationsTool } from './host_list_registrations.js';
@@ -134,6 +135,9 @@ const BASE_TOOLS: readonly ToolDef[] = Object.freeze([
   checkSetupTool,
   installExtensionTool,
   registerChromeDevtoolsTool,
+  layoutSweepTool,
+  layoutSweepStatusTool,
+  layoutSweepCancelTool,
   ...CDP_TOOLS,
   ...ANDROID_TOOLS,
   ...interactionActionTools,

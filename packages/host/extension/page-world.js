@@ -2072,12 +2072,12 @@ var PwaDebugPageWorld = (function (exports) {
         }
         return { locator: Object.freeze(loc), params };
     };
-    const fail = (message) => Object.freeze({ error: Object.freeze({ message }) });
+    const fail$1 = (message) => Object.freeze({ error: Object.freeze({ message }) });
     /** Resolve `locator` and apply the `action` dom_actions primitive to the match. */
     const runAction = async (doc, action, locator, params) => {
         const res = resolveLocator(doc, locator);
         if (!res.ok)
-            return fail(res.error);
+            return fail$1(res.error);
         const el = res.element;
         const located = Object.freeze({ describedBy: res.describedBy, matchCount: res.matchCount });
         const done = (action_result) => Object.freeze({ located, action: action_result });
@@ -2089,7 +2089,7 @@ var PwaDebugPageWorld = (function (exports) {
             case 'fill': {
                 const value = str$1(params['value']);
                 if (value === undefined)
-                    return fail('pdl_fill requires a value');
+                    return fail$1('pdl_fill requires a value');
                 return done(fillElement(el, value));
             }
             case 'submit':
@@ -2108,7 +2108,7 @@ var PwaDebugPageWorld = (function (exports) {
                 const value = str$1(params['value']);
                 const label = str$1(params['label']);
                 if (value === undefined && label === undefined) {
-                    return fail('pdl_select_option requires a value or label');
+                    return fail$1('pdl_select_option requires a value or label');
                 }
                 return done(selectOption(el, {
                     ...(value !== undefined ? { value } : {}),
@@ -2118,13 +2118,13 @@ var PwaDebugPageWorld = (function (exports) {
             case 'keyPress': {
                 const key = str$1(params['key']);
                 if (key === undefined)
-                    return fail('pdl_key_press requires a key');
+                    return fail$1('pdl_key_press requires a key');
                 return done(pressKey(el, key));
             }
             case 'typeSequence': {
                 const value = str$1(params['value']);
                 if (value === undefined)
-                    return fail('pdl_type_sequence requires a value');
+                    return fail$1('pdl_type_sequence requires a value');
                 return done(typeSequence(el, value));
             }
             case 'drag': {
@@ -2154,7 +2154,7 @@ var PwaDebugPageWorld = (function (exports) {
             case 'swipe': {
                 const direction = str$1(params['direction']);
                 if (direction !== 'up' && direction !== 'down' && direction !== 'left' && direction !== 'right') {
-                    return fail('pdl_swipe requires direction up|down|left|right');
+                    return fail$1('pdl_swipe requires direction up|down|left|right');
                 }
                 const distance = num(params['distance']);
                 const steps = num(params['steps']);
@@ -2175,7 +2175,7 @@ var PwaDebugPageWorld = (function (exports) {
             case 'pinch': {
                 const scale = num(params['scale']);
                 if (scale === undefined)
-                    return fail('pdl_pinch requires a numeric scale');
+                    return fail$1('pdl_pinch requires a numeric scale');
                 const steps = num(params['steps']);
                 return done(pinchElement(el, { scale, ...(steps !== undefined ? { steps } : {}) }));
             }
@@ -2231,6 +2231,86 @@ var PwaDebugPageWorld = (function (exports) {
         { tool: 'pdl_long_press', action: 'longPress', params: [N('duration', false, 'hold ms before release (default 500)')], summary: 'Long-press the located element (holds, then releases + contextmenu).' },
         { tool: 'pdl_pinch', action: 'pinch', params: [N('scale', true, 'target scale: >1 zoom in, <1 zoom out'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Pinch-zoom on the located element with two touches.' },
     ]);
+
+    /** Built-in unresolved-copy patterns (spec §6.1 text_patterns). */
+    const DEFAULT_TEXT_PATTERNS = Object.freeze([
+        '\\{\\{\\s*\\w+\\s*\\}\\}',
+        '\\bundefined\\b',
+        '\\bNaN\\b',
+        '\\[object Object\\]',
+    ]);
+    const DEFAULT_CHECKS = Object.freeze({
+        page_overflow_x: { enabled: true },
+        offscreen: { enabled: true },
+        // WCAG 2.2 AA 2.5.8 target size (minimum). 44/48 = platform guidelines.
+        tap_target: { enabled: true, min: 24 },
+        pinned_visible: { enabled: true, pinned_selectors: [] },
+        text_clipped: { enabled: true },
+        edge_contact: { enabled: true, min_inset: 4 },
+        text_patterns: { enabled: true, extra: [] },
+        errors: { enabled: true },
+        // Off: gradients and images make the effective background approximate.
+        contrast: { enabled: false },
+    });
+    const mergeCheck = (key, input) => {
+        const base = DEFAULT_CHECKS[key];
+        const given = input[key];
+        if (given === undefined)
+            return base;
+        if (typeof given === 'boolean')
+            return { ...base, enabled: given };
+        return { ...base, enabled: true, ...given };
+    };
+    /** Returns the first regex source that does not compile, or null. */
+    const compiles = (source) => {
+        try {
+            new RegExp(source, 'g');
+            return true;
+        }
+        catch {
+            return false;
+        }
+    };
+    const findInvalidPattern = (sources) => sources.find((s) => !compiles(s)) ?? null;
+    const inRange = (n, lo, hi) => typeof n === 'number' && Number.isFinite(n) && n >= lo && n <= hi;
+    /**
+     * Merge a caller's partial check config over DEFAULT_CHECKS and validate the
+     * knobs (tap min 1..200 px, edge inset 0..64 px, extra patterns compile,
+     * pinned selectors are strings). Pure: same input, same result.
+     */
+    const resolveChecksConfig = (input) => {
+        const src = input ?? {};
+        const config = Object.freeze({
+            page_overflow_x: mergeCheck('page_overflow_x', src),
+            offscreen: mergeCheck('offscreen', src),
+            tap_target: mergeCheck('tap_target', src),
+            pinned_visible: mergeCheck('pinned_visible', src),
+            text_clipped: mergeCheck('text_clipped', src),
+            edge_contact: mergeCheck('edge_contact', src),
+            text_patterns: mergeCheck('text_patterns', src),
+            errors: mergeCheck('errors', src),
+            contrast: mergeCheck('contrast', src),
+        });
+        if (!inRange(config.tap_target.min, 1, 200)) {
+            return { ok: false, error: 'checks.tap_target.min must be a number from 1 to 200 (CSS px)' };
+        }
+        if (!inRange(config.edge_contact.min_inset, 0, 64)) {
+            return { ok: false, error: 'checks.edge_contact.min_inset must be a number from 0 to 64 (CSS px)' };
+        }
+        const extra = config.text_patterns.extra;
+        if (!Array.isArray(extra) || extra.some((p) => typeof p !== 'string')) {
+            return { ok: false, error: 'checks.text_patterns.extra must be an array of regex source strings' };
+        }
+        const bad = findInvalidPattern(extra);
+        if (bad !== null) {
+            return { ok: false, error: `checks.text_patterns.extra: invalid regex ${JSON.stringify(bad)}` };
+        }
+        const pinned = config.pinned_visible.pinned_selectors;
+        if (!Array.isArray(pinned) || pinned.some((p) => typeof p !== 'string')) {
+            return { ok: false, error: 'checks.pinned_visible.pinned_selectors must be an array of CSS selectors' };
+        }
+        return { ok: true, config };
+    };
 
     /**
      * 0-based occurrence index of an unkeyed instance among its prior UNKEYED
@@ -4000,18 +4080,18 @@ var PwaDebugPageWorld = (function (exports) {
      * Pure: input is a JSON-parsed unknown; output is the pre-computed structure
      * (or null on validation failure). No fetch, no fs.
      */
-    const isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+    const isStringArray$1 = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
     const parseSourceMap = (raw) => {
         if (raw === null || typeof raw !== 'object')
             return null;
         const r = raw;
         if (r['version'] !== 3)
             return null;
-        if (!isStringArray(r['sources']))
+        if (!isStringArray$1(r['sources']))
             return null;
         if (typeof r['mappings'] !== 'string')
             return null;
-        const names = isStringArray(r['names']) ? r['names'] : [];
+        const names = isStringArray$1(r['names']) ? r['names'] : [];
         const sources = r['sources'];
         const mappings = r['mappings'];
         const lines = [];
@@ -8127,6 +8207,643 @@ var PwaDebugPageWorld = (function (exports) {
     const getActiveSessionId = () => active === null ? null : active.sessionId;
     const getActiveDurationCapMs = () => active === null ? undefined : active.durationCapMs;
 
+    const domGeometry = (win) => ({
+        rectOf: (el) => {
+            const r = el.getBoundingClientRect();
+            return { x: r.left, y: r.top, width: r.width, height: r.height };
+        },
+        styleOf: (el, prop) => win.getComputedStyle(el).getPropertyValue(prop),
+        scrollOf: (el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }),
+        viewport: () => {
+            const de = win.document.documentElement;
+            return {
+                width: de.clientWidth > 0 ? de.clientWidth : win.innerWidth,
+                height: de.clientHeight > 0 ? de.clientHeight : win.innerHeight,
+            };
+        },
+        docScrollWidth: () => win.document.documentElement.scrollWidth,
+        scrollOffset: () => ({ x: win.scrollX, y: win.scrollY }),
+    });
+    const memo1 = (fn) => {
+        const cache = new WeakMap();
+        return (k) => {
+            if (cache.has(k))
+                return cache.get(k);
+            const v = fn(k);
+            cache.set(k, v);
+            return v;
+        };
+    };
+    /**
+     * Build the context for one measurement. Reads are cached for the duration of
+     * the call (a view's layout doesn't change while it is measured); nothing is
+     * written to the page.
+     */
+    const createMeasureContext = (geometry, root, exemptSelectors) => {
+        const styleCache = new WeakMap();
+        const style = (el, prop) => {
+            const m = styleCache.get(el) ?? new Map();
+            if (!styleCache.has(el))
+                styleCache.set(el, m);
+            const hit = m.get(prop);
+            if (hit !== undefined)
+                return hit;
+            const v = geometry.styleOf(el, prop).trim();
+            m.set(prop, v);
+            return v;
+        };
+        const rect = memo1((el) => geometry.rectOf(el));
+        const scroll = memo1((el) => geometry.scrollOf(el));
+        const px = (el, prop) => {
+            const n = parseFloat(style(el, prop));
+            return Number.isFinite(n) ? n : 0;
+        };
+        const isVisible = memo1((el) => {
+            const r = rect(el);
+            return (r.width > 0 &&
+                r.height > 0 &&
+                style(el, 'display') !== 'none' &&
+                style(el, 'visibility') !== 'hidden' &&
+                style(el, 'opacity') !== '0');
+        });
+        const isExempt = memo1((el) => exemptSelectors.some((sel) => el.closest(sel) !== null));
+        const isAriaHidden = memo1((el) => el.closest('[aria-hidden="true"],[inert]') !== null);
+        return {
+            root,
+            viewport: geometry.viewport(),
+            rect,
+            style,
+            scroll,
+            px,
+            isVisible,
+            isExempt,
+            isAriaHidden,
+        };
+    };
+    /** Ancestors of el up to and including stop (exclusive of el). */
+    const ancestorsWithin = (el, stop) => {
+        const up = (node, acc) => node === null ? acc : node === stop ? [...acc, node] : up(node.parentElement, [...acc, node]);
+        return el === stop ? [] : up(el.parentElement, []);
+    };
+
+    const collapse = (s, max) => {
+        const one = s.replace(/\s+/g, ' ').trim();
+        return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+    };
+    const NAME_MAX = 40;
+    /**
+     * Short accessible name: aria-label, aria-labelledby text, alt, title,
+     * placeholder, a button-type input's value, then the text content.
+     */
+    const accessibleName = (el) => {
+        const attr = (n) => (el.getAttribute(n) ?? '').trim();
+        const labelledBy = attr('aria-labelledby')
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
+            .join(' ');
+        const inputValue = el.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(attr('type')) ? attr('value') : '';
+        const candidates = [
+            attr('aria-label'),
+            labelledBy,
+            attr('alt'),
+            attr('title'),
+            attr('placeholder'),
+            inputValue,
+            el.textContent ?? '',
+        ];
+        return collapse(candidates.find((c) => c.trim().length > 0) ?? '', NAME_MAX);
+    };
+    const CLASS_MAX = 3;
+    const CLASS_LEN_MAX = 30;
+    /**
+     * Stable-ish element signature for grouping: tag#id.class1.class2.class3 "name".
+     * Long (hashed / utility-soup) class names are skipped; numbers are stripped
+     * later by the grouper, not here, so messages keep real values.
+     */
+    const elementSignature = (el) => {
+        const tag = el.tagName.toLowerCase();
+        const id = el.id !== '' ? `#${el.id}` : '';
+        const classes = [...el.classList]
+            .filter((c) => c.length <= CLASS_LEN_MAX)
+            .slice(0, CLASS_MAX)
+            .map((c) => `.${c}`)
+            .join('');
+        const name = accessibleName(el);
+        return `${tag}${id}${classes}${name !== '' ? ` "${name}"` : ''}`;
+    };
+    /** True when el has a direct, non-whitespace text node child. */
+    const hasOwnText = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent ?? '').trim().length > 0);
+    const INTERACTIVE_SELECTOR = 'a[href],button,[role="button"],input:not([type="hidden"]),select,textarea,summary,label';
+    const FORM_CONTROL_SELECTOR = 'input:not([type="hidden"]),select,textarea,button';
+    const isFormControl = (el) => el.matches(FORM_CONTROL_SELECTOR);
+    /** Rounded "w×h" for messages. */
+    const sizeText = (w, h) => `${Math.round(w)}×${Math.round(h)}`;
+    const roundRect = (r) => ({
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+    });
+    /** A finding about one element: its signature, the message, its rounded rect. */
+    const elementFinding = (ctx, check, el, message) => ({
+        check,
+        signature: elementSignature(el),
+        message,
+        rect: roundRect(ctx.rect(el)),
+    });
+
+    const SLACK$1 = 1;
+    /** page_overflow_x: the document is wider than the layout viewport. */
+    const checkPageOverflow = (ctx, docScrollWidth) => docScrollWidth > ctx.viewport.width + SLACK$1
+        ? [
+            {
+                check: 'page_overflow_x',
+                signature: 'html',
+                message: `page scrolls sideways: content is ${Math.round(docScrollWidth)}px wide in a ${ctx.viewport.width}px viewport`,
+            },
+        ]
+        : [];
+    const isScrollerX = (ctx, el) => {
+        const ox = ctx.style(el, 'overflow-x');
+        if (ox === 'hidden' || ox === 'clip')
+            return true;
+        if (ox !== 'auto' && ox !== 'scroll')
+            return false;
+        const s = ctx.scroll(el);
+        return s.scrollWidth > s.clientWidth;
+    };
+    /** True when an ancestor inside the root scrolls or clips horizontally (carousels, chip rows). */
+    const insideHorizontalClip = (ctx, el) => ancestorsWithin(el, ctx.root).some((a) => a !== ctx.root && isScrollerX(ctx, a));
+    const crossesX = (ctx, r) => r.x < -SLACK$1 || r.x + r.width > ctx.viewport.width + SLACK$1;
+    const fullyOutsideX = (ctx, r) => r.x + r.width <= 0 || r.x >= ctx.viewport.width;
+    const isOutOfFlow = (ctx, el) => {
+        const p = ctx.style(el, 'position');
+        return p === 'fixed' || p === 'absolute';
+    };
+    const offending = (ctx, el) => {
+        if (!ctx.isVisible(el) || ctx.isExempt(el) || ctx.isAriaHidden(el))
+            return false;
+        const r = ctx.rect(el);
+        if (!crossesX(ctx, r))
+            return false;
+        // Off-canvas drawers parked fully outside the viewport are hidden UI, not overflow.
+        if (fullyOutsideX(ctx, r) && isOutOfFlow(ctx, el))
+            return false;
+        return !insideHorizontalClip(ctx, el);
+    };
+    /**
+     * offscreen: visible elements extending past the left or right viewport edge.
+     * Only the outermost offender is reported (its descendants overflow with it),
+     * and anything inside a horizontally scrolling or clipping ancestor is skipped.
+     */
+    const checkOffscreen = (ctx, elements) => {
+        const hits = new Set(elements.filter((el) => offending(ctx, el)));
+        return [...hits]
+            .filter((el) => !ancestorsWithin(el, ctx.root).some((a) => hits.has(a)))
+            .map((el) => {
+            const r = ctx.rect(el);
+            const side = r.x < -SLACK$1 ? `${Math.round(-r.x)}px past the left edge` : `${Math.round(r.x + r.width - ctx.viewport.width)}px past the right edge`;
+            return elementFinding(ctx, 'offscreen', el, `off screen: ${side} of a ${ctx.viewport.width}px viewport`);
+        });
+    };
+    const matchesAny = (el, selectors) => selectors.some((s) => el.matches(s));
+    const containedInViewport = (ctx, r) => r.x >= -SLACK$1 &&
+        r.y >= -SLACK$1 &&
+        r.x + r.width <= ctx.viewport.width + SLACK$1 &&
+        r.y + r.height <= ctx.viewport.height + SLACK$1;
+    const intersectsViewport = (ctx, r) => r.x < ctx.viewport.width && r.x + r.width > 0 && r.y < ctx.viewport.height && r.y + r.height > 0;
+    const edgeText = (ctx, r) => {
+        const below = r.y + r.height - ctx.viewport.height;
+        if (below > SLACK$1)
+            return `${Math.round(below)}px below the bottom edge`;
+        if (r.y < -SLACK$1)
+            return `${Math.round(-r.y)}px above the top edge`;
+        if (r.x < -SLACK$1)
+            return `${Math.round(-r.x)}px past the left edge`;
+        return `${Math.round(r.x + r.width - ctx.viewport.width)}px past the right edge`;
+    };
+    /**
+     * pinned_visible: position:fixed elements (and any pinned_selectors match) must
+     * sit fully inside the viewport. A fixed element entirely outside it is taken
+     * as parked hidden UI (a closed sheet) unless a pinned selector names it.
+     */
+    const checkPinnedVisible = (ctx, elements, cfg) => elements
+        .filter((el) => ctx.isVisible(el) && !ctx.isExempt(el) && !ctx.isAriaHidden(el))
+        .flatMap((el) => {
+        const named = matchesAny(el, cfg.pinned_selectors);
+        if (!named && ctx.style(el, 'position') !== 'fixed')
+            return [];
+        const r = ctx.rect(el);
+        if (containedInViewport(ctx, r))
+            return [];
+        if (!named && !intersectsViewport(ctx, r))
+            return [];
+        return [elementFinding(ctx, 'pinned_visible', el, `pinned element not fully on screen: ${edgeText(ctx, r)}`)];
+    });
+    const TRANSPARENT = /^(transparent|rgba\(\s*0,\s*0,\s*0,\s*0\s*\)|rgb\(\s*0\s+0\s+0\s*\/\s*0\s*\))$/;
+    const hasBorder = (ctx, el) => ['top', 'right', 'bottom', 'left'].some((s) => ctx.px(el, `border-${s}-width`) > 0 && !/^(none|hidden|)$/.test(ctx.style(el, `border-${s}-style`)));
+    /** A visible box of its own: border, background or shadow (a card, a field, a sheet). */
+    const isBoxed = (ctx, el) => {
+        const bg = ctx.style(el, 'background-color');
+        const img = ctx.style(el, 'background-image');
+        const shadow = ctx.style(el, 'box-shadow');
+        return (hasBorder(ctx, el) ||
+            (bg !== '' && !TRANSPARENT.test(bg)) ||
+            (img !== '' && img !== 'none') ||
+            (shadow !== '' && shadow !== 'none'));
+    };
+    /** Content of a box: text-bearing elements and form controls, not crossing into nested boxes. */
+    const contentLeaves = (ctx, box) => [...box.children].flatMap((child) => {
+        if (!ctx.isVisible(child) || ctx.isExempt(child) || isOutOfFlow(ctx, child))
+            return [];
+        if (isFormControl(child))
+            return [child];
+        if (isBoxed(ctx, child))
+            return [];
+        return [...(hasOwnText(child) ? [child] : []), ...contentLeaves(ctx, child)];
+    });
+    const leafInsets = (ctx, box, leaf) => {
+        const b = ctx.rect(box);
+        const inner = {
+            l: b.x + ctx.px(box, 'border-left-width'),
+            r: b.x + b.width - ctx.px(box, 'border-right-width'),
+            t: b.y + ctx.px(box, 'border-top-width'),
+            b: b.y + b.height - ctx.px(box, 'border-bottom-width'),
+        };
+        const control = isFormControl(leaf);
+        const lr = ctx.rect(leaf);
+        // Text sits inside the leaf's own padding; a control's edge is its border box.
+        const pad = (s) => (control ? 0 : ctx.px(leaf, `padding-${s}`));
+        const clipsX = ctx.style(box, 'overflow-x') !== 'visible';
+        const clipsY = ctx.style(box, 'overflow-y') !== 'visible';
+        const horizontal = clipsX
+            ? []
+            : [
+                { side: 'left', px: lr.x + pad('left') - inner.l, leaf },
+                { side: 'right', px: inner.r - (lr.x + lr.width - pad('right')), leaf },
+            ];
+        const vertical = clipsY
+            ? []
+            : [
+                { side: 'top', px: lr.y + pad('top') - inner.t, leaf },
+                { side: 'bottom', px: inner.b - (lr.y + lr.height - pad('bottom')), leaf },
+            ];
+        return [...horizontal, ...vertical];
+    };
+    /** Text: left/right closer than min, or crossing any edge. Controls: any side closer than min. */
+    const violates = (i, min) => i.px < 0 || ((i.side === 'left' || i.side === 'right' || isFormControl(i.leaf)) && i.px < min);
+    /**
+     * edge_contact: inside a visible box, text or a control touching or crossing
+     * the box's inner edge (padding a parent rule zeroed). One finding per box,
+     * naming the worst side.
+     */
+    const checkEdgeContact = (ctx, elements, cfg) => elements
+        .filter((el) => el !== ctx.root &&
+        el.tagName !== 'HTML' &&
+        el.tagName !== 'BODY' &&
+        ctx.isVisible(el) &&
+        !ctx.isExempt(el) &&
+        !ctx.isAriaHidden(el) &&
+        isBoxed(ctx, el))
+        .flatMap((box) => {
+        const bad = contentLeaves(ctx, box)
+            .flatMap((leaf) => leafInsets(ctx, box, leaf))
+            .filter((i) => violates(i, cfg.min_inset))
+            .sort((a, b) => a.px - b.px);
+        const worst = bad[0];
+        if (worst === undefined)
+            return [];
+        const what = isFormControl(worst.leaf) ? 'control' : 'text';
+        return [
+            elementFinding(ctx, 'edge_contact', box, `${what} "${accessibleName(worst.leaf)}" is ${Math.round(worst.px)}px from the ${worst.side} edge of its box (min ${cfg.min_inset})`),
+        ];
+    });
+
+    const CONTROL_IN_LABEL = 'input,select,textarea';
+    /** A label counts as a target only when it wraps a control (it is then the hit area). */
+    const isTargetCandidate = (el) => el.matches(INTERACTIVE_SELECTOR) &&
+        (el.tagName !== 'LABEL' || el.querySelector(CONTROL_IN_LABEL) !== null);
+    /** Controls inside a label are measured by the label; targets nested in targets by the outer one. */
+    const coveredByOuterTarget = (el) => {
+        if (el.tagName !== 'LABEL' && el.closest('label') !== null)
+            return true;
+        const outer = el.parentElement?.closest(INTERACTIVE_SELECTOR) ?? null;
+        return outer !== null && isTargetCandidate(outer);
+    };
+    /** WCAG 2.5.8 inline exception: a link inside a sentence, not alone in its block. */
+    const isInlineSentenceLink = (ctx, el) => {
+        if (el.tagName !== 'A' || ctx.style(el, 'display') !== 'inline')
+            return false;
+        const own = (el.textContent ?? '').trim().length;
+        const block = (el.parentElement?.textContent ?? '').trim().length;
+        return block > own;
+    };
+    /**
+     * tap_target: interactive elements smaller than `min` CSS px in either
+     * dimension, except inline sentence links and controls measured by their label.
+     */
+    const checkTapTargets = (ctx, elements, cfg) => elements
+        .filter((el) => isTargetCandidate(el) &&
+        ctx.isVisible(el) &&
+        !ctx.isExempt(el) &&
+        !ctx.isAriaHidden(el) &&
+        !coveredByOuterTarget(el) &&
+        !isInlineSentenceLink(ctx, el))
+        .flatMap((el) => {
+        const r = ctx.rect(el);
+        if (r.width >= cfg.min && r.height >= cfg.min)
+            return [];
+        return [
+            elementFinding(ctx, 'tap_target', el, `tap target ${sizeText(r.width, r.height)} "${accessibleName(el)}" (min ${cfg.min})`),
+        ];
+    });
+
+    /** CSS color parsing and WCAG contrast math. Pure. */
+    const clamp01 = (n) => Math.min(1, Math.max(0, n));
+    const parseChannel = (s) => s.endsWith('%') ? (parseFloat(s) / 100) * 255 : parseFloat(s);
+    const parseAlpha = (s) => s === undefined ? 1 : s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s);
+    const fromHex = (hex) => {
+        const h = hex.length <= 4 ? [...hex].map((c) => c + c).join('') : hex;
+        if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h))
+            return null;
+        const n = (i) => parseInt(h.slice(i, i + 2), 16);
+        return { r: n(0), g: n(2), b: n(4), a: h.length === 8 ? n(6) / 255 : 1 };
+    };
+    /**
+     * Parse rgb()/rgba() (comma or space syntax, optional / alpha), #rgb[a] /
+     * #rrggbb[aa] and `transparent`. Anything else (color(), oklch(), named
+     * colors) returns null so callers can skip rather than guess.
+     */
+    const parseCssColor = (input) => {
+        const s = input.trim().toLowerCase();
+        if (s === 'transparent')
+            return { r: 0, g: 0, b: 0, a: 0 };
+        if (s.startsWith('#'))
+            return fromHex(s.slice(1));
+        const m = /^rgba?\(([^)]*)\)$/.exec(s);
+        if (m === null)
+            return null;
+        const parts = (m[1] ?? '').split(/[\s,/]+/).filter(Boolean);
+        if (parts.length < 3 || parts.length > 4)
+            return null;
+        const [r, g, b, a] = parts;
+        const out = {
+            r: parseChannel(r),
+            g: parseChannel(g),
+            b: parseChannel(b),
+            a: clamp01(parseAlpha(a)),
+        };
+        return [out.r, out.g, out.b, out.a].every(Number.isFinite) ? out : null;
+    };
+    /** Source-over composite of `top` onto an opaque-or-not `bottom`. */
+    const blendOver = (top, bottom) => {
+        const a = top.a + bottom.a * (1 - top.a);
+        if (a === 0)
+            return { r: 0, g: 0, b: 0, a: 0 };
+        const mix = (t, b) => (t * top.a + b * bottom.a * (1 - top.a)) / a;
+        return { r: mix(top.r, bottom.r), g: mix(top.g, bottom.g), b: mix(top.b, bottom.b), a };
+    };
+    const linear = (c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    /** WCAG relative luminance of an opaque color. */
+    const relativeLuminance = (c) => 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
+    /** WCAG contrast ratio (1..21) between two opaque colors. */
+    const contrastRatio = (a, b) => {
+        const la = relativeLuminance(a);
+        const lb = relativeLuminance(b);
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    };
+
+    const SLACK = 1;
+    const clipsText = (ctx, el) => {
+        if (ctx.style(el, 'text-overflow') === 'ellipsis')
+            return true;
+        const ox = ctx.style(el, 'overflow-x');
+        return (ox === 'hidden' || ox === 'clip') && hasOwnText(el);
+    };
+    /**
+     * text_clipped: an element that hides horizontal overflow (or ellipsizes)
+     * and holds text needing more width than it has, e.g. a button label cut
+     * off in a longer language.
+     */
+    const checkTextClipped = (ctx, elements) => elements
+        .filter((el) => ctx.isVisible(el) &&
+        !ctx.isExempt(el) &&
+        !ctx.isAriaHidden(el) &&
+        (el.textContent ?? '').trim().length > 0 &&
+        clipsText(ctx, el))
+        .flatMap((el) => {
+        const s = ctx.scroll(el);
+        if (s.scrollWidth <= s.clientWidth + SLACK)
+            return [];
+        return [
+            elementFinding(ctx, 'text_clipped', el, `text cut off: "${accessibleName(el)}" needs ${Math.round(s.scrollWidth)}px, has ${Math.round(s.clientWidth)}px`),
+        ];
+    });
+    const MATCHES_PER_PATTERN = 5;
+    const distinctMatches = (text, source) => {
+        const re = new RegExp(source, 'g');
+        return [...new Set([...text.matchAll(re)].map((m) => m[0]).filter((m) => m.length > 0))].slice(0, MATCHES_PER_PATTERN);
+    };
+    /** Rendered text of the root: innerText where the engine has it, textContent otherwise. */
+    const renderedText = (root) => {
+        const inner = root.innerText;
+        return typeof inner === 'string' ? inner : (root.textContent ?? '');
+    };
+    /**
+     * text_patterns: unresolved copy in the root's rendered text (template
+     * placeholders, undefined, NaN, [object Object], plus the caller's extra
+     * patterns such as raw i18n keys). One finding per distinct match.
+     */
+    const checkTextPatterns = (text, cfg) => [...DEFAULT_TEXT_PATTERNS, ...cfg.extra].flatMap((source) => distinctMatches(text, source).map((match) => ({
+        check: 'text_patterns',
+        signature: `text "${match}"`,
+        message: `unresolved text ${JSON.stringify(match)} (pattern /${source}/)`,
+    })));
+    const WHITE = { r: 255, g: 255, b: 255, a: 1 };
+    /**
+     * Effective background behind el: background colors from el outwards,
+     * composited until opaque (white canvas at the top). Null when an ancestor
+     * paints a background image or a color this parser can't read.
+     */
+    const effectiveBackground = (ctx, el) => {
+        const layers = (node, acc) => {
+            if (node === null)
+                return acc;
+            const img = ctx.style(node, 'background-image');
+            if (img !== '' && img !== 'none')
+                return null;
+            const raw = ctx.style(node, 'background-color');
+            const c = raw === '' ? { r: 0, g: 0, b: 0, a: 0 } : parseCssColor(raw);
+            if (c === null)
+                return null;
+            const next = c.a > 0 ? [...acc, c] : acc;
+            return c.a >= 1 ? next : layers(node.parentElement, next);
+        };
+        const stack = layers(el, []);
+        if (stack === null)
+            return null;
+        return [...stack].reverse().reduce((under, top) => blendOver(top, under), WHITE);
+    };
+    const isLargeText = (ctx, el) => {
+        const size = ctx.px(el, 'font-size');
+        const weight = parseInt(ctx.style(el, 'font-weight'), 10);
+        return size >= 24 || (size >= 18.66 && Number.isFinite(weight) && weight >= 700);
+    };
+    /**
+     * contrast (off by default): text color against the effective background,
+     * WCAG AA 4.5:1, 3:1 for large text. Approximate: skipped under background
+     * images and for colors the parser can't read.
+     */
+    const checkContrast = (ctx, elements) => elements
+        .filter((el) => hasOwnText(el) && ctx.isVisible(el) && !ctx.isExempt(el) && !ctx.isAriaHidden(el))
+        .flatMap((el) => {
+        const fg = parseCssColor(ctx.style(el, 'color'));
+        const bg = effectiveBackground(ctx, el);
+        if (fg === null || bg === null)
+            return [];
+        const ratio = contrastRatio(blendOver(fg, bg), bg);
+        const need = isLargeText(ctx, el) ? 3 : 4.5;
+        if (ratio >= need)
+            return [];
+        return [
+            elementFinding(ctx, 'contrast', el, `contrast ${ratio.toFixed(2)}:1 "${accessibleName(el)}" (needs ${need}:1; approximate)`),
+        ];
+    });
+
+    /**
+     * Animation freeze for stable measurements: the one DOM write the layout
+     * sweep makes. A single style tag zeroes animation and transition timing so
+     * a view settles at its end state; removing it restores the page.
+     */
+    const FREEZE_STYLE_ID = '__pdl_layout_freeze';
+    const FREEZE_CSS = '*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;' +
+        'transition-duration:0s!important;transition-delay:0s!important;scroll-behavior:auto!important}';
+    /** Install the freeze style (idempotent). Returns true when it is in place. */
+    const freezeAnimations = (doc) => {
+        if (doc.getElementById(FREEZE_STYLE_ID) !== null)
+            return true;
+        const parent = doc.head ?? doc.documentElement;
+        if (parent === null)
+            return false;
+        const style = doc.createElement('style');
+        style.id = FREEZE_STYLE_ID;
+        style.textContent = FREEZE_CSS;
+        parent.appendChild(style);
+        return true;
+    };
+    /** Remove the freeze style if present. Returns true when one was removed. */
+    const unfreezeAnimations = (doc) => {
+        const el = doc.getElementById(FREEZE_STYLE_ID);
+        if (el === null)
+            return false;
+        el.remove();
+        return true;
+    };
+
+    /** Findings kept per view; the rest are counted out via `truncated`. */
+    const FINDINGS_CAP = 300;
+    const fail = (message) => ({ error: { message } });
+    const isStringArray = (v) => Array.isArray(v) && v.every((s) => typeof s === 'string');
+    /** Validate the layout_measure payload and resolve its check config. */
+    const readLayoutMeasureInput = (raw) => {
+        const r = raw !== null && typeof raw === 'object' ? raw : {};
+        const op = r['op'] ?? 'measure';
+        if (op !== 'measure' && op !== 'freeze' && op !== 'unfreeze') {
+            return { ok: false, error: 'layout_measure: op must be measure, freeze or unfreeze' };
+        }
+        const root = r['root_selector'];
+        if (root !== undefined && typeof root !== 'string') {
+            return { ok: false, error: 'layout_measure: root_selector must be a string' };
+        }
+        const exempt = r['exempt_selectors'] ?? [];
+        if (!isStringArray(exempt)) {
+            return { ok: false, error: 'layout_measure: exempt_selectors must be an array of strings' };
+        }
+        const checks = resolveChecksConfig(r['checks']);
+        if (!checks.ok)
+            return { ok: false, error: `layout_measure: ${checks.error}` };
+        return {
+            ok: true,
+            input: {
+                op,
+                ...(root !== undefined ? { root_selector: root } : {}),
+                exempt_selectors: exempt,
+                checks: checks.config,
+            },
+        };
+    };
+    /** First selector the document refuses to parse, or null. */
+    const findInvalidSelector = (doc, selectors) => selectors.find((sel) => {
+        try {
+            doc.querySelector(sel);
+            return false;
+        }
+        catch {
+            return true;
+        }
+    }) ?? null;
+    /**
+     * Run every enabled page-world check over the root (document.body unless
+     * root_selector names another element). Read-only. `errors` and `timeout`
+     * are recorded by the host, not here.
+     */
+    const measureLayout = (doc, input, geometry) => {
+        const { checks } = input;
+        const badSel = findInvalidSelector(doc, [
+            ...(input.root_selector !== undefined ? [input.root_selector] : []),
+            ...input.exempt_selectors,
+            ...checks.pinned_visible.pinned_selectors,
+        ]);
+        if (badSel !== null)
+            return fail(`layout_measure: invalid CSS selector ${JSON.stringify(badSel)}`);
+        const root = input.root_selector !== undefined ? doc.querySelector(input.root_selector) : doc.body;
+        if (root === null) {
+            return fail(input.root_selector !== undefined
+                ? `layout_measure: root_selector ${JSON.stringify(input.root_selector)} matched nothing`
+                : 'layout_measure: the document has no body');
+        }
+        const ctx = createMeasureContext(geometry, root, input.exempt_selectors);
+        const elements = [root, ...root.querySelectorAll('*')];
+        const all = [
+            ...(checks.page_overflow_x.enabled ? checkPageOverflow(ctx, geometry.docScrollWidth()) : []),
+            ...(checks.offscreen.enabled ? checkOffscreen(ctx, elements) : []),
+            ...(checks.pinned_visible.enabled ? checkPinnedVisible(ctx, elements, checks.pinned_visible) : []),
+            ...(checks.tap_target.enabled ? checkTapTargets(ctx, elements, checks.tap_target) : []),
+            ...(checks.text_clipped.enabled ? checkTextClipped(ctx, elements) : []),
+            ...(checks.edge_contact.enabled ? checkEdgeContact(ctx, elements, checks.edge_contact) : []),
+            ...(checks.text_patterns.enabled ? checkTextPatterns(renderedText(root), checks.text_patterns) : []),
+            ...(checks.contrast.enabled ? checkContrast(ctx, elements) : []),
+        ];
+        return {
+            url: doc.location?.href ?? '',
+            viewport: ctx.viewport,
+            scroll: geometry.scrollOffset(),
+            findings: all.slice(0, FINDINGS_CAP),
+            truncated: all.length > FINDINGS_CAP,
+        };
+    };
+    /**
+     * layout_measure bridge entry: parse the payload, then measure, or install /
+     * remove the animation freeze. `geometry` defaults to the live DOM.
+     */
+    const runLayoutMeasure = (win, raw, geometry = domGeometry(win)) => {
+        const parsed = readLayoutMeasureInput(raw);
+        if (!parsed.ok)
+            return fail(parsed.error);
+        const { input } = parsed;
+        if (input.op === 'freeze')
+            return { frozen: freezeAnimations(win.document) };
+        if (input.op === 'unfreeze') {
+            unfreezeAnimations(win.document);
+            return { frozen: false };
+        }
+        return measureLayout(win.document, input, geometry);
+    };
+
     const TOP_KEY = 'top';
     const indexInParent = (win, parent) => {
         const len = parent.frames.length;
@@ -10088,6 +10805,9 @@ var PwaDebugPageWorld = (function (exports) {
         idb_query: (env) => idbQueryHandler(env),
         pwa_update_gather: (env) => pwaUpdateGatherHandler(env),
         pwa_snapshot_gather: () => pwaSnapshotGatherHandler(),
+        // Layout sweep (spec docs/layout-sweep-spec.md): read-only layout checks for
+        // one view, or op freeze/unfreeze for the animation-freeze style.
+        layout_measure: (env) => runLayoutMeasure(window, env.payload),
     });
     const dispatchPageRequest = async (req) => {
         const handler = HANDLERS[req.tool];

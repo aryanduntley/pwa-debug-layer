@@ -712,6 +712,19 @@ const handleStorageGet: RequestHandler = async (env) => {
   return response.payload;
 };
 
+// layout_measure (layout sweep): forward the payload as-is to the tab's
+// page-world, which validates it (op, root/exempt selectors, checks).
+const handleLayoutMeasure: RequestHandler = async (env) => {
+  const tabId = readTabId(env.payload);
+  const csReq = { tool: 'layout_measure', payload: env.payload ?? {} };
+  const response =
+    tabId !== undefined
+      ? await dispatchToTab(tabId, csReq)
+      : await dispatchToActiveTab(csReq);
+  if (response.error) throw new Error(response.error.message);
+  return response.payload;
+};
+
 // idb_list (PWA Runtime Diagnostics T2): forward to the active/given tab's
 // page-world, which reads indexedDB. No params beyond tab_id.
 const handleIdbList: RequestHandler = async (env) => {
@@ -1492,6 +1505,7 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
   pwa_installability: handlePwaInstallability,
   storage_get: handleStorageGet,
   idb_list: handleIdbList,
+  layout_measure: handleLayoutMeasure,
   idb_query: handleIdbQuery,
   pwa_update_gather: handlePwaUpdateGather,
   pwa_snapshot_gather: handlePwaSnapshotGather,

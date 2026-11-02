@@ -192,9 +192,10 @@ export const createAndroidBridge = (deps: AndroidBridgeDeps): AndroidBridge => {
 
     const r: CdpAttachResult & { readonly loadStatus?: 'complete' | 'loading'; readonly url?: string } =
       opts.openUrl !== undefined
-        ? await deps.cdp.openTab({ browserUrl, url: opts.openUrl })
+        ? await deps.cdp.openTab({ browserUrl, url: opts.openUrl, origin: 'android' })
         : await deps.cdp.attach({
             browserUrl,
+            origin: 'android',
             ...(opts.targetId !== undefined ? { targetId: opts.targetId } : {}),
             ...(opts.urlContains !== undefined ? { urlContains: opts.urlContains } : {}),
             ...(opts.reload !== undefined ? { reload: opts.reload } : {}),

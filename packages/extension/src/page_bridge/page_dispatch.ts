@@ -77,6 +77,7 @@ import {
 } from '../rrweb_record/state.js';
 import type { ReplayCapturedEvent } from '@pwa-debug/shared';
 import { safeRandomId } from '../ids/safe_random_id.js';
+import { runLayoutMeasure } from '../layout_measure/measure.js';
 import type {
   StoreChangeCapturedEvent,
   CapturedEvent,
@@ -1721,6 +1722,9 @@ const HANDLERS: Readonly<Record<string, PageWorldHandler>> = Object.freeze({
   idb_query: (env) => idbQueryHandler(env),
   pwa_update_gather: (env) => pwaUpdateGatherHandler(env),
   pwa_snapshot_gather: () => pwaSnapshotGatherHandler(),
+  // Layout sweep (spec docs/layout-sweep-spec.md): read-only layout checks for
+  // one view, or op freeze/unfreeze for the animation-freeze style.
+  layout_measure: (env) => runLayoutMeasure(window, env.payload),
 });
 
 export const dispatchPageRequest = async (

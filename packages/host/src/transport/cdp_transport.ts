@@ -35,6 +35,21 @@ export type CdpAttachOptions = {
   readonly urlContains?: string;
   /** Reload after attaching so the bridge runs before the app's own code. */
   readonly reload?: boolean;
+  /** Who reached this endpoint: the adb bridge ('android') or a desktop debug port (default). */
+  readonly origin?: CdpOrigin;
+};
+
+/** How a CDP connection was reached; the layout sweep accepts phones only through 'android'. */
+export type CdpOrigin = 'android' | 'desktop';
+
+/** Where an attached connection's page lives, for callers that open their own CDP client on it. */
+export type CdpPageEndpoint = {
+  readonly connectionId: string;
+  readonly baseUrl: string;
+  readonly targetId: string;
+  readonly webSocketDebuggerUrl: string;
+  readonly url: string;
+  readonly origin: CdpOrigin;
 };
 
 export type CdpAttachResult =
@@ -61,6 +76,7 @@ export type CdpOpenTabOptions = {
   /** Validated with the shared navigation URL rules. */
   readonly url: unknown;
   readonly timeoutMs?: number;
+  readonly origin?: CdpOrigin;
 };
 
 export type CdpOpenTabResult =
@@ -72,6 +88,8 @@ export type CdpTransport = Transport & {
   readonly openTab: (opts: CdpOpenTabOptions) => Promise<CdpOpenTabResult>;
   readonly detach: (connectionId: string) => Promise<boolean>;
   readonly targets: (browserUrl: string) => Promise<CdpTargetsResult>;
+  /** The page endpoint behind an attached connection, or undefined when it is not (or no longer) attached. */
+  readonly pageEndpoint: (connectionId: string) => CdpPageEndpoint | undefined;
 };
 
 type Entry = {
@@ -79,6 +97,7 @@ type Entry = {
   /** Kept current from top-frame navigations so labels do not go stale. */
   target: CdpTarget;
   readonly baseUrl: string;
+  readonly origin: CdpOrigin;
   readonly connectedAt: number;
   lastSeenAt: number;
 };
@@ -139,6 +158,7 @@ export const createCdpTransport = (deps: CdpTransportDeps): CdpTransport => {
     baseUrl: string,
     target: CdpTarget,
     reload: boolean,
+    origin: CdpOrigin,
   ): Promise<CdpAttachResult> => {
     const connectionId = cdpConnectionId(baseUrl, target.id);
     const existing = entries.get(connectionId);
@@ -167,7 +187,7 @@ export const createCdpTransport = (deps: CdpTransportDeps): CdpTransport => {
       return { ok: false, error: `attach to ${target.url} failed: ${(err as Error).message}` };
     }
     const t = now();
-    entries.set(connectionId, { session, target, baseUrl, connectedAt: t, lastSeenAt: t });
+    entries.set(connectionId, { session, target, baseUrl, origin, connectedAt: t, lastSeenAt: t });
     client.onClose(() => {
       entries.delete(connectionId);
     });
@@ -188,7 +208,7 @@ export const createCdpTransport = (deps: CdpTransportDeps): CdpTransport => {
     if (!listed.ok) return { ok: false, error: `cannot list pages at ${baseUrl}: ${listed.message}` };
     const picked = pickTarget(listed.value, opts);
     if (!picked.ok) return { ok: false, error: picked.error, candidates: listed.value };
-    return attachTarget(baseUrl, picked.target, opts.reload === true);
+    return attachTarget(baseUrl, picked.target, opts.reload === true, opts.origin ?? 'desktop');
   };
 
   const detach = async (connectionId: string): Promise<boolean> => {
@@ -248,7 +268,7 @@ export const createCdpTransport = (deps: CdpTransportDeps): CdpTransport => {
       if (target === undefined) await sleep(NEW_TARGET_POLL_MS);
     }
     if (target === undefined) return { ok: false, error: `new tab ${targetId} never appeared in /json/list` };
-    const attached = await attachTarget(baseUrl, target, false);
+    const attached = await attachTarget(baseUrl, target, false, opts.origin ?? 'desktop');
     if (!attached.ok) return attached;
     const e = entries.get(attached.connectionId)!;
     const nav = await e.session.request({
@@ -269,6 +289,7 @@ export const createCdpTransport = (deps: CdpTransportDeps): CdpTransport => {
     const timeout = payload?.['timeout_ms'];
     const r = await openTab({
       browserUrl: from.baseUrl,
+      origin: from.origin,
       url: payload?.['url'],
       ...(typeof timeout === 'number' ? { timeoutMs: timeout } : {}),
     });
@@ -296,10 +317,24 @@ export const createCdpTransport = (deps: CdpTransportDeps): CdpTransport => {
   const sendTo = (id: string): IpcSendResult =>
     entries.has(id) ? { ok: true } : { ok: false, error: `no connected NMH for ${id}` };
 
+  const pageEndpoint = (connectionId: string): CdpPageEndpoint | undefined => {
+    const e = entries.get(connectionId);
+    return e === undefined
+      ? undefined
+      : Object.freeze({
+          connectionId,
+          baseUrl: e.baseUrl,
+          targetId: e.target.id,
+          webSocketDebuggerUrl: e.target.webSocketDebuggerUrl,
+          url: e.target.url,
+          origin: e.origin,
+        });
+  };
+
   const close = async (): Promise<void> => {
     const all = [...entries.keys()];
     await Promise.all(all.map((id) => detach(id)));
   };
 
-  return Object.freeze({ kind: 'cdp' as const, listConnections, request, sendTo, close, attach, openTab, detach, targets });
+  return Object.freeze({ kind: 'cdp' as const, listConnections, request, sendTo, close, attach, openTab, detach, targets, pageEndpoint });
 };

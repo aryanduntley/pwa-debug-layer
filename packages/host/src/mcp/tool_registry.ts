@@ -8,7 +8,7 @@ import type { CapturesRegistry } from '../captures_in/captures_in.js';
 import type { SettingsStore } from '../host_settings/host_settings.js';
 
 /** Attach/detach/list control over CDP page connections (absent in tests that do not need it). */
-export type CdpControl = Pick<CdpTransport, 'attach' | 'detach' | 'targets'>;
+export type CdpControl = Pick<CdpTransport, 'attach' | 'detach' | 'targets' | 'pageEndpoint'>;
 
 /** Phone discovery + attach over adb (absent in tests that do not need it). */
 export type AndroidControl = Pick<AndroidBridge, 'devices' | 'attach'>;

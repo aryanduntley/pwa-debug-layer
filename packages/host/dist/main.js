@@ -5,15 +5,15 @@ import { stderr, stdin, stdout } from 'node:process';
 import { createConnection, createServer } from 'node:net';
 import { join, dirname, basename, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { readFile, mkdir, writeFile, rename, access, appendFile, chmod, stat, unlink, readdir, constants, cp } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename, access, appendFile, chmod, stat, unlink, cp, readdir, constants } from 'node:fs/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createInterface } from 'node:readline';
+import { spawn, execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import require$$0 from 'util';
 import require$$1 from 'path';
 import require$$2 from 'child_process';
-import { execFile, spawn } from 'node:child_process';
-import { tmpdir } from 'node:os';
 
 const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const frameMessage = (value) => {
@@ -4748,6 +4748,1201 @@ const hostStatusTool = Object.freeze({
     handler: hostStatusHandler,
 });
 
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const encodeAsciiToBase64Url = (ascii) => {
+    let out = '';
+    let buffer = 0;
+    let bits = 0;
+    for (let i = 0; i < ascii.length; i++) {
+        buffer = (buffer << 8) | (ascii.charCodeAt(i) & 0xff);
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            out += B64_ALPHABET.charAt((buffer >> bits) & 0x3f);
+        }
+    }
+    if (bits > 0) {
+        out += B64_ALPHABET.charAt((buffer << (6 - bits)) & 0x3f);
+    }
+    return out;
+};
+const decodeBase64UrlToAscii = (s) => {
+    let out = '';
+    let buffer = 0;
+    let bits = 0;
+    for (let i = 0; i < s.length; i++) {
+        const ch = s.charAt(i);
+        const idx = B64_ALPHABET.indexOf(ch);
+        if (idx === -1)
+            return null;
+        buffer = (buffer << 6) | idx;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out += String.fromCharCode((buffer >> bits) & 0xff);
+        }
+    }
+    return out;
+};
+const encodeCursor = (parts) => {
+    const json = JSON.stringify({
+        sid: parts.sessionId,
+        seq: parts.sequenceNumber,
+    });
+    return encodeAsciiToBase64Url(json);
+};
+const decodeCursor = (cursor) => {
+    if (typeof cursor !== 'string' || cursor.length === 0) {
+        return { ok: false, error: 'cursor is empty' };
+    }
+    const json = decodeBase64UrlToAscii(cursor);
+    if (json === null) {
+        return { ok: false, error: 'cursor contains non-base64url characters' };
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(json);
+    }
+    catch {
+        return { ok: false, error: 'cursor payload is not valid JSON' };
+    }
+    if (parsed === null || typeof parsed !== 'object') {
+        return { ok: false, error: 'cursor payload is not an object' };
+    }
+    const obj = parsed;
+    if (typeof obj.sid !== 'string' || obj.sid.length === 0) {
+        return { ok: false, error: 'cursor.sid missing or not a non-empty string' };
+    }
+    if (typeof obj.seq !== 'number' ||
+        !Number.isFinite(obj.seq) ||
+        !Number.isInteger(obj.seq)) {
+        return { ok: false, error: 'cursor.seq missing or not a finite integer' };
+    }
+    return {
+        ok: true,
+        value: { sessionId: obj.sid, sequenceNumber: obj.seq },
+    };
+};
+
+const compilePatternList = (sources, fieldPathPrefix) => {
+    if (sources === undefined || sources.length === 0) {
+        return { ok: true, value: [] };
+    }
+    const out = [];
+    let i = 0;
+    for (const src of sources) {
+        try {
+            out.push(new RegExp(src));
+        }
+        catch (e) {
+            return {
+                ok: false,
+                error: {
+                    kind: 'pattern_invalid',
+                    fieldPath: `${fieldPathPrefix}[${i}]`,
+                    error: e instanceof Error ? e.message : String(e),
+                },
+            };
+        }
+        i++;
+    }
+    return { ok: true, value: out };
+};
+const eventTextForPattern = (event) => {
+    try {
+        return JSON.stringify(event) ?? '';
+    }
+    catch {
+        return '';
+    }
+};
+const compileSourceFilter = (spec) => {
+    const includeResult = compilePatternList(spec?.pattern?.include, 'pattern.include');
+    if (!includeResult.ok)
+        return { ok: false, error: includeResult.error };
+    const excludeResult = compilePatternList(spec?.pattern?.exclude, 'pattern.exclude');
+    if (!excludeResult.ok)
+        return { ok: false, error: excludeResult.error };
+    const include = includeResult.value;
+    const exclude = excludeResult.value;
+    const levelSet = spec?.level !== undefined && spec.level.length > 0
+        ? new Set(spec.level)
+        : null;
+    const predicate = (event) => {
+        if (levelSet !== null) {
+            const lvl = event.level;
+            if (lvl === undefined || !levelSet.has(lvl))
+                return false;
+        }
+        if (include.length === 0 && exclude.length === 0)
+            return true;
+        const text = eventTextForPattern(event);
+        for (const re of exclude) {
+            if (re.test(text))
+                return false;
+        }
+        if (include.length > 0) {
+            let any = false;
+            for (const re of include) {
+                if (re.test(text)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any)
+                return false;
+        }
+        return true;
+    };
+    return { ok: true, predicate };
+};
+
+/**
+ * Cross-package settings vocabulary — the single source of truth for every
+ * user-tunable setting in pwa-debug.
+ *
+ * Plug-ability invariant (M7): adding a new setting is exactly ONE line in
+ * {@link SettingTypeMap} + ONE entry in {@link SETTINGS_SCHEMA}. The host
+ * settings store, the settings.* MCP tools, and the extension settings cache
+ * all iterate {@link settingKeys} / {@link getSettingEntry} — no key is ever
+ * hardcoded — so a new key needs zero changes to any consumer's shape.
+ *
+ * Lives in @pwa-debug/shared so the host store and the (T3) extension cache
+ * enforce identical key/value shapes at compile time via getSetting<K>.
+ */
+/** Runtime tuple of every {@link CaptureKind}, for validation and introspection. */
+const CAPTURE_KINDS = [
+    'console',
+    'network',
+    'dom_mutations',
+    'lifecycle',
+    'store_change',
+    'replay',
+    'library_popup',
+    'page_error',
+    'sw_state',
+];
+// --- internal primitive guards (not exported; not part of the public surface) ---
+const isNonNegInt = (v) => typeof v === 'number' &&
+    Number.isFinite(v) &&
+    Number.isInteger(v) &&
+    v >= 0;
+const isBoolean = (v) => typeof v === 'boolean';
+/** A valid TCP port for remote debugging: integer in [1, 65535]. */
+const isPort = (v) => typeof v === 'number' &&
+    Number.isInteger(v) &&
+    v >= 1 &&
+    v <= 65535;
+const isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isCaptureKindSubset = (v) => Array.isArray(v) &&
+    new Set(v).size === v.length &&
+    v.every((x) => CAPTURE_KINDS.includes(x));
+const isPlainObject$1 = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isReadControlValue = (v) => {
+    if (!isPlainObject$1(v))
+        return false;
+    const allowed = CAPTURE_KINDS;
+    for (const [k, flag] of Object.entries(v)) {
+        if (!allowed.includes(k))
+            return false;
+        if (typeof flag !== 'boolean')
+            return false;
+    }
+    return true;
+};
+const isReadControlsRecord = (v) => {
+    if (!isPlainObject$1(v))
+        return false;
+    for (const value of Object.values(v)) {
+        if (!isReadControlValue(value))
+            return false;
+    }
+    return true;
+};
+const CONSOLE_LEVELS = [
+    'log',
+    'info',
+    'warn',
+    'error',
+    'debug',
+    'trace',
+];
+const isFilterPattern = (v) => {
+    if (!isPlainObject$1(v))
+        return false;
+    for (const [k, val] of Object.entries(v)) {
+        if (k !== 'include' && k !== 'exclude')
+            return false;
+        if (val === undefined)
+            continue;
+        if (!Array.isArray(val))
+            return false;
+        if (!val.every((x) => typeof x === 'string'))
+            return false;
+    }
+    return true;
+};
+const FILTER_SPEC_SOURCE_KEYS = ['level', 'pattern'];
+const isSourceFilterSpec = (v) => {
+    if (!isPlainObject$1(v))
+        return false;
+    for (const [k, val] of Object.entries(v)) {
+        if (!FILTER_SPEC_SOURCE_KEYS.includes(k))
+            return false;
+        if (val === undefined)
+            continue;
+        if (k === 'level') {
+            if (!Array.isArray(val))
+                return false;
+            if (!val.every((x) => typeof x === 'string' && CONSOLE_LEVELS.includes(x)))
+                return false;
+        }
+        else if (k === 'pattern') {
+            if (!isFilterPattern(val))
+                return false;
+        }
+    }
+    return true;
+};
+const isCaptureFiltersRecord = (v) => {
+    if (!isPlainObject$1(v))
+        return false;
+    const allowed = CAPTURE_KINDS;
+    for (const [k, val] of Object.entries(v)) {
+        if (!allowed.includes(k))
+            return false;
+        if (val === undefined)
+            continue;
+        if (!isSourceFilterSpec(val))
+            return false;
+    }
+    return true;
+};
+/**
+ * The schema as data. Frozen. THIS is the single const instance; every
+ * consumer reaches it through {@link settingKeys} / {@link getSettingEntry}.
+ */
+const SETTINGS_SCHEMA = Object.freeze({
+    'capture.memoryCutoffPerKind': {
+        key: 'capture.memoryCutoffPerKind',
+        type: 'number',
+        default: 5000,
+        scope: 'host',
+        description: 'Max events retained in memory per capture kind before eviction (overflow goes to disk when capture.diskSpill.enabled).',
+        validate: isNonNegInt,
+    },
+    'capture.diskSpill.enabled': {
+        key: 'capture.diskSpill.enabled',
+        type: 'boolean',
+        default: false,
+        scope: 'host',
+        description: 'When true, events evicted from the in-memory ring buffer are written to on-disk jsonl archives instead of dropped.',
+        validate: isBoolean,
+    },
+    'capture.diskSpill.archiveLongevityDays': {
+        key: 'capture.diskSpill.archiveLongevityDays',
+        type: 'number',
+        default: 7,
+        scope: 'host',
+        description: 'Age in days after which a disk archive file is pruned on the next pruner tick.',
+        validate: isNonNegInt,
+    },
+    'capture.diskSpill.maxBytes': {
+        key: 'capture.diskSpill.maxBytes',
+        type: 'number',
+        default: 100_000_000,
+        scope: 'host',
+        description: 'Total disk-archive byte cap; oldest archive files are evicted first when exceeded.',
+        validate: isNonNegInt,
+    },
+    'sites.allowlist': {
+        key: 'sites.allowlist',
+        type: 'string[]',
+        default: ['*'],
+        scope: 'both',
+        description: 'Glob patterns of origins/URLs the capture pipeline is permitted to record. Default ["*"] = all sites.',
+        validate: isStringArray,
+    },
+    'sites.blocklist': {
+        key: 'sites.blocklist',
+        type: 'string[]',
+        default: [],
+        scope: 'both',
+        description: 'Glob patterns of origins/URLs never captured; takes precedence over sites.allowlist.',
+        validate: isStringArray,
+    },
+    'capture.enabledKinds': {
+        key: 'capture.enabledKinds',
+        type: 'enum[]',
+        default: [
+            'console',
+            'network',
+            'dom_mutations',
+            'lifecycle',
+            'store_change',
+            'replay',
+            'library_popup',
+            'sw_state',
+        ],
+        scope: 'both',
+        description: 'Subset of capture kinds actively recorded. Empty = capture nothing.',
+        validate: isCaptureKindSubset,
+        enumValues: CAPTURE_KINDS,
+    },
+    'sites.readControls': {
+        key: 'sites.readControls',
+        type: 'record',
+        default: Object.freeze({}),
+        scope: 'both',
+        description: 'Per-site, per-kind read-permission overrides. Keys are glob patterns (same matcher as sites.allowlist); values are objects of CaptureKind→boolean flags. Missing flag = allowed; false denies that kind for matching URLs. Most-specific (longest) pattern wins per URL; ties broken lexicographically. Only DENIES events otherwise allowed by sites.allowlist + capture.enabledKinds — cannot re-enable what allowlist already rejected.',
+        validate: isReadControlsRecord,
+    },
+    'capture.filters': {
+        key: 'capture.filters',
+        type: 'record',
+        default: Object.freeze({}),
+        scope: 'both',
+        description: 'Per-kind source-side capture filters. Keys are CaptureKinds; values are wire FilterSpecs (level + pattern only — cursors and limit are seq-based, meaningful only on the host). When set, the capture chokepoint applies the compiled predicate BEFORE the event reaches the host buffer; rejected events are dropped at the source. Validation tightens the wire shape to source-applicable fields only.',
+        validate: isCaptureFiltersRecord,
+    },
+    'capture.stores.allowDispatch': {
+        key: 'capture.stores.allowDispatch',
+        type: 'boolean',
+        default: false,
+        scope: 'both',
+        description: 'When true, redux_dispatch (and forthcoming store-system dispatch tools) may write to the page-world store; when false (default), the dispatch tool rejects with an actionable next_steps[] hint. Gates the only write surface in the store-introspection family — reads (redux_get_state, redux_subscribe, redux_tail) are unaffected.',
+        validate: isBoolean,
+    },
+    'capture.sourceMap.enabled': {
+        key: 'capture.sourceMap.enabled',
+        type: 'boolean',
+        default: true,
+        scope: 'both',
+        description: 'When true (default), source_map_resolve fetches and resolves source maps to translate generated stack frames into original-source coordinates. When false, the tool returns errorResponse with a hint. M13 ships query-time resolution only; capture-time auto-annotation is deferred to M13.5.',
+        validate: isBoolean,
+    },
+    'launch.defaultPort': {
+        key: 'launch.defaultPort',
+        type: 'number',
+        default: 9222,
+        scope: 'host',
+        description: 'Default remote-debugging port used by pdl_launch_browser when no explicit `port` arg is given. 9222 is the chrome-devtools-mcp convention. Change it if 9222 is already in use on your machine.',
+        validate: isPort,
+    },
+});
+/**
+ * All setting keys in stable schema-declaration order — the canonical
+ * iteration order for defaults-merge and settings.list_schema.
+ */
+const settingKeys = () => Object.keys(SETTINGS_SCHEMA);
+/**
+ * Typed accessor for a single schema entry — the one DRY lookup point so a
+ * future key change is a single schema edit, never a consumer change.
+ */
+const getSettingEntry = (key) => SETTINGS_SCHEMA[key];
+/**
+ * Central pure type-guard: validate an unknown value against a key's schema
+ * validator. Single validation path shared by the host_settings store and the
+ * settings.set MCP tool. Narrows `value` to SettingTypeMap[K] on true.
+ */
+const validateSettingValue = (key, value) => getSettingEntry(key).validate(value);
+/**
+ * Factory producing a fresh fully-materialized {@link SettingsRecord} of every
+ * key's default. Array and plain-object defaults are cloned so the result
+ * never aliases the frozen SETTINGS_SCHEMA. The base the host_settings store
+ * merges over.
+ */
+const defaultSettings = () => Object.fromEntries(settingKeys().map((k) => {
+    const d = getSettingEntry(k).default;
+    if (Array.isArray(d))
+        return [k, [...d]];
+    if (isPlainObject$1(d))
+        return [k, { ...d }];
+    return [k, d];
+}));
+
+// Single source of truth for the Path 7 pdl_* interaction action tools.
+//
+// Both the host (builds a ToolDef + Zod schema per entry) and the extension
+// (SW request routing + page-world dispatch) import this table, so tool names,
+// their dom_actions action kind, and their parameters stay in sync across
+// packages. Adding a tool = one entry here + (for new param shapes) the typed
+// param model below; the three generic layers need no per-tool code.
+const S = (key, required = false, description) => ({
+    key,
+    type: 'string',
+    ...(required ? { required } : {}),
+    ...(description !== undefined ? { description } : {}),
+});
+const N = (key, required = false, description) => ({
+    key,
+    type: 'number',
+    ...(required ? { required } : {}),
+    ...(description !== undefined ? { description } : {}),
+});
+const B = (key, description) => ({
+    key,
+    type: 'boolean',
+    ...(description !== undefined ? { description } : {}),
+});
+const ACTION_TOOL_SPECS = Object.freeze([
+    // --- discrete (pointer/keyboard) ---
+    { tool: 'pdl_click', action: 'click', params: [], summary: 'Click an element (full pointer/mouse event chain so React/Vue delegated onClick fires).' },
+    { tool: 'pdl_dblclick', action: 'dblclick', params: [], summary: 'Double-click an element.' },
+    { tool: 'pdl_fill', action: 'fill', params: [S('value', true, 'text to set')], summary: "Set an input/textarea/select value via the native setter + input/change (works with React controlled inputs)." },
+    { tool: 'pdl_submit', action: 'submit', params: [], summary: 'Submit the form owning the located element (requestSubmit).' },
+    { tool: 'pdl_hover', action: 'hover', params: [], summary: 'Hover an element (pointer/mouse over/enter/move).' },
+    { tool: 'pdl_focus', action: 'focus', params: [], summary: 'Focus an element.' },
+    { tool: 'pdl_blur', action: 'blur', params: [], summary: 'Blur an element.' },
+    { tool: 'pdl_check', action: 'check', params: [], summary: 'Check a checkbox/radio (idempotent; native click path so onChange fires).' },
+    { tool: 'pdl_uncheck', action: 'uncheck', params: [], summary: 'Uncheck a checkbox (idempotent).' },
+    { tool: 'pdl_select_option', action: 'selectOption', params: [S('value', false, 'option value'), S('label', false, 'visible option label')], summary: 'Select a <select> option by value or visible label (one required).' },
+    { tool: 'pdl_key_press', action: 'keyPress', params: [S('key', true, "a character or named key e.g. 'Enter','Tab','ArrowDown'")], summary: 'Press a single key on an element.' },
+    { tool: 'pdl_type_sequence', action: 'typeSequence', params: [S('value', true, 'string to type char-by-char')], summary: 'Type a string into an editable element char-by-char.' },
+    // --- gestures (pointer/touch) ---
+    { tool: 'pdl_drag', action: 'drag', params: [N('toX', false, 'destination viewport X'), N('toY', false, 'destination viewport Y'), S('targetSelector', false, 'CSS selector for the drop target (alternative to toX/toY)'), N('steps', false, 'pointermove steps (default 10)'), B('html5', 'also fire the native HTML5 drag/drop sequence with a DataTransfer')], summary: 'Drag the located element to a point (toX/toY) or onto targetSelector; pointer drag + optional HTML5 DnD.' },
+    { tool: 'pdl_scroll', action: 'scroll', params: [N('deltaX', false, 'horizontal scroll delta'), N('deltaY', false, 'vertical scroll delta'), B('intoView', 'scrollIntoView (centered) instead of by-delta')], summary: 'Scroll the located element by delta (dispatches wheel + scrollBy) or scrollIntoView.' },
+    { tool: 'pdl_swipe', action: 'swipe', params: [{ key: 'direction', type: 'enum', required: true, enum: ['up', 'down', 'left', 'right'], description: 'swipe direction' }, N('distance', false, 'px distance (default 100)'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Swipe a touch across the located element in a direction.' },
+    { tool: 'pdl_tap', action: 'tap', params: [], summary: 'Tap (touchstart/touchend) the located element.' },
+    { tool: 'pdl_double_tap', action: 'doubleTap', params: [], summary: 'Double-tap the located element.' },
+    { tool: 'pdl_long_press', action: 'longPress', params: [N('duration', false, 'hold ms before release (default 500)')], summary: 'Long-press the located element (holds, then releases + contextmenu).' },
+    { tool: 'pdl_pinch', action: 'pinch', params: [N('scale', true, 'target scale: >1 zoom in, <1 zoom out'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Pinch-zoom on the located element with two touches.' },
+]);
+
+/**
+ * Wire contract between the host and the page-world CDP bundle
+ * (packages/extension/src/page-world-cdp.ts). Both sides import these, so a
+ * rename cannot silently split them. Bump CDP_BRIDGE_VERSION on any change.
+ */
+const CDP_BRIDGE_VERSION = 1;
+/** Created by the host with Runtime.addBinding before the bundle runs. */
+const CDP_EMIT_BINDING = '__pwaDebugCdpEmit';
+/** Page global the host calls through Runtime.evaluate. */
+const CDP_GLOBAL = '__pwaDebugCdp';
+
+// A bare javascript: URL would run script in the target page context on navigate;
+// reject it. Everything else (http(s), file:, about:, data:, chrome:, localhost
+// shorthand) is allowed — this is a debugging driver, not a sandbox.
+const JAVASCRIPT_SCHEME = /^javascript:/i;
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+/**
+ * Normalize a caller-supplied navigation URL: trim, reject empty / javascript:,
+ * and assume https:// when no scheme is given (so `example.com` works). Returns
+ * null when the input is unusable so the caller can surface a clear error.
+ * Shared by the extension (chrome.tabs) and the host (CDP Page.navigate) so both
+ * navigation paths accept exactly the same URLs.
+ */
+const normalizeUrl = (raw) => {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0)
+        return null;
+    if (JAVASCRIPT_SCHEME.test(trimmed))
+        return null;
+    return HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
+};
+
+const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
+const globToRegex = (pattern) => {
+    const escaped = pattern.replace(REGEX_SPECIALS, '\\$&').replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+};
+const matchesAnyGlob = (value, patterns) => patterns.some((p) => globToRegex(p).test(value));
+/**
+ * Raw captured-event kinds (6) -> M7 capture categories (4).
+ * The union side reflects the captured_event.ts kind discriminants.
+ */
+const KIND_MAP = Object.freeze({
+    console: 'console',
+    fetch: 'network',
+    xhr: 'network',
+    websocket: 'network',
+    dom_mutation: 'dom_mutations',
+    lifecycle: 'lifecycle',
+    // App service-worker lifecycle: its own capture category + host buffer.
+    sw_state: 'sw_state',
+    store_change: 'store_change',
+    replay: 'replay',
+    library_popup: 'library_popup',
+});
+const eventKindToCaptureKind = (rawKind) => KIND_MAP[rawKind] ?? null;
+const isKindEnabled = (rawKind, enabledKinds) => {
+    const ck = eventKindToCaptureKind(rawKind);
+    if (ck === null)
+        return true; // unknown raw kinds default-allow (future-compat)
+    return enabledKinds.includes(ck);
+};
+const isUrlAllowed = (url, allowlist, blocklist) => {
+    if (matchesAnyGlob(url, blocklist))
+        return false; // blocklist wins
+    if (allowlist.length === 0)
+        return false; // explicit opt-in model
+    return matchesAnyGlob(url, allowlist);
+};
+/**
+ * Pick the most-specific readControls entry whose glob pattern matches `url`.
+ * Specificity = longest pattern string; ties broken by lexicographic order of
+ * the pattern so the choice is deterministic. Returns undefined when no
+ * pattern matches (caller treats as no restriction).
+ */
+const pickMostSpecificReadControl = (url, controls) => {
+    let winnerPattern;
+    let winnerValue;
+    for (const [pattern, value] of Object.entries(controls)) {
+        if (!matchesAnyGlob(url, [pattern]))
+            continue;
+        if (winnerPattern === undefined) {
+            winnerPattern = pattern;
+            winnerValue = value;
+            continue;
+        }
+        if (pattern.length > winnerPattern.length ||
+            (pattern.length === winnerPattern.length && pattern < winnerPattern)) {
+            winnerPattern = pattern;
+            winnerValue = value;
+        }
+    }
+    return winnerValue;
+};
+/**
+ * True iff the resolved readControls entry permits the given CaptureKind.
+ * Missing flag = allowed (no restriction); explicit `false` denies. Undefined
+ * control (no matching readControls entry) = allowed.
+ */
+const isKindAllowedByReadControls = (kind, control) => control?.[kind] !== false;
+/**
+ * True iff the per-kind capture.filters predicate (if configured) accepts the
+ * event. No filter for the resolved kind => allow. compileSourceFilter ok:false
+ * (malformed regex despite the schema validator) => fail-open (allow) so a
+ * single bad filter cannot suppress all events of a kind.
+ */
+const passesCaptureFilter = (event, captureKind, filters) => {
+    const spec = filters[captureKind];
+    if (spec === undefined)
+        return true;
+    const compiled = compileSourceFilter(spec);
+    if (!compiled.ok)
+        return true;
+    return compiled.predicate(event);
+};
+const shouldCaptureEvent = (event, settings) => {
+    if (!isKindEnabled(event.kind, settings['capture.enabledKinds'])) {
+        return false;
+    }
+    if (!isUrlAllowed(event.frameUrl, settings['sites.allowlist'], settings['sites.blocklist'])) {
+        return false;
+    }
+    const captureKind = eventKindToCaptureKind(event.kind);
+    if (captureKind === null)
+        return true; // unknown raw kinds default-allow
+    const control = pickMostSpecificReadControl(event.frameUrl, settings['sites.readControls']);
+    if (!isKindAllowedByReadControls(captureKind, control))
+        return false;
+    return passesCaptureFilter(event, captureKind, settings['capture.filters']);
+};
+
+/** Built-in unresolved-copy patterns (spec §6.1 text_patterns). */
+const DEFAULT_CHECKS = Object.freeze({
+    page_overflow_x: { enabled: true },
+    offscreen: { enabled: true },
+    // WCAG 2.2 AA 2.5.8 target size (minimum). 44/48 = platform guidelines.
+    tap_target: { enabled: true, min: 24 },
+    pinned_visible: { enabled: true, pinned_selectors: [] },
+    text_clipped: { enabled: true },
+    edge_contact: { enabled: true, min_inset: 4 },
+    text_patterns: { enabled: true, extra: [] },
+    errors: { enabled: true },
+    // Off: gradients and images make the effective background approximate.
+    contrast: { enabled: false },
+});
+const mergeCheck = (key, input) => {
+    const base = DEFAULT_CHECKS[key];
+    const given = input[key];
+    if (given === undefined)
+        return base;
+    if (typeof given === 'boolean')
+        return { ...base, enabled: given };
+    return { ...base, enabled: true, ...given };
+};
+/** Returns the first regex source that does not compile, or null. */
+const compiles = (source) => {
+    try {
+        new RegExp(source, 'g');
+        return true;
+    }
+    catch {
+        return false;
+    }
+};
+const findInvalidPattern = (sources) => sources.find((s) => !compiles(s)) ?? null;
+const inRange = (n, lo, hi) => typeof n === 'number' && Number.isFinite(n) && n >= lo && n <= hi;
+/**
+ * Merge a caller's partial check config over DEFAULT_CHECKS and validate the
+ * knobs (tap min 1..200 px, edge inset 0..64 px, extra patterns compile,
+ * pinned selectors are strings). Pure: same input, same result.
+ */
+const resolveChecksConfig = (input) => {
+    const src = input ?? {};
+    const config = Object.freeze({
+        page_overflow_x: mergeCheck('page_overflow_x', src),
+        offscreen: mergeCheck('offscreen', src),
+        tap_target: mergeCheck('tap_target', src),
+        pinned_visible: mergeCheck('pinned_visible', src),
+        text_clipped: mergeCheck('text_clipped', src),
+        edge_contact: mergeCheck('edge_contact', src),
+        text_patterns: mergeCheck('text_patterns', src),
+        errors: mergeCheck('errors', src),
+        contrast: mergeCheck('contrast', src),
+    });
+    if (!inRange(config.tap_target.min, 1, 200)) {
+        return { ok: false, error: 'checks.tap_target.min must be a number from 1 to 200 (CSS px)' };
+    }
+    if (!inRange(config.edge_contact.min_inset, 0, 64)) {
+        return { ok: false, error: 'checks.edge_contact.min_inset must be a number from 0 to 64 (CSS px)' };
+    }
+    const extra = config.text_patterns.extra;
+    if (!Array.isArray(extra) || extra.some((p) => typeof p !== 'string')) {
+        return { ok: false, error: 'checks.text_patterns.extra must be an array of regex source strings' };
+    }
+    const bad = findInvalidPattern(extra);
+    if (bad !== null) {
+        return { ok: false, error: `checks.text_patterns.extra: invalid regex ${JSON.stringify(bad)}` };
+    }
+    const pinned = config.pinned_visible.pinned_selectors;
+    if (!Array.isArray(pinned) || pinned.some((p) => typeof p !== 'string')) {
+        return { ok: false, error: 'checks.pinned_visible.pinned_selectors must be an array of CSS selectors' };
+    }
+    return { ok: true, config };
+};
+
+const DEFAULT_MAX_VIEWS = 2000;
+const HARD_MAX_VIEWS = 10000;
+const MAX_PAGES = 200;
+const DEFAULT_WIDTHS = [360, 390, 430];
+const DEFAULT_HEIGHT = 800;
+const DEFAULT_DPR = 2;
+const DEFAULT_SCHEMES = ['light', 'dark'];
+const RESERVED_VARS = new Set(['state', 'scheme', 'page', 'width', 'height', 'viewport']);
+const DIM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Absolute URL for a page entry: absolute as given, or resolved against base_url. Null when unusable. */
+const resolvePageUrl = (page, baseUrl) => {
+    const p = page.trim();
+    if (p.length === 0 || /^javascript:/i.test(p))
+        return null;
+    try {
+        return baseUrl !== undefined ? new URL(p, baseUrl).href : new URL(p).href;
+    }
+    catch {
+        return null;
+    }
+};
+/** Every combination of the extra dimensions, in declaration order. No dimensions → [{}]. */
+const crossDimensions = (dims) => Object.entries(dims ?? {}).reduce((combos, [name, values]) => combos.flatMap((c) => values.map((v) => ({ ...c, [name]: v }))), [{}]);
+const toViewportSpec = (v) => ({
+    width: Math.round(v.width),
+    height: Math.round(v.height ?? DEFAULT_HEIGHT),
+    dpr: v.dpr ?? DEFAULT_DPR,
+    mobile: v.mobile ?? true,
+});
+/** Viewports given by the caller, or the defaults: phones start with their own size. */
+const defaultViewports = (target) => [
+    ...(target === 'phone' ? [null] : []),
+    ...DEFAULT_WIDTHS.map((width) => toViewportSpec({ width })),
+];
+const validViewport = (v) => Number.isFinite(v.width) &&
+    v.width >= 120 &&
+    v.width <= 3840 &&
+    (v.height === undefined || (Number.isFinite(v.height) && v.height >= 120 && v.height <= 4320)) &&
+    (v.dpr === undefined || (Number.isFinite(v.dpr) && v.dpr > 0 && v.dpr <= 5));
+const checkDimensions = (dims) => {
+    const bad = Object.entries(dims ?? {}).find(([name, values]) => !DIM_NAME.test(name) ||
+        RESERVED_VARS.has(name) ||
+        !Array.isArray(values) ||
+        values.length === 0 ||
+        values.some((v) => typeof v !== 'string'));
+    return bad === undefined
+        ? null
+        : `states.dimensions.${bad[0]}: name must be an identifier other than ${[...RESERVED_VARS].join('/')}, with a non-empty array of string values`;
+};
+/**
+ * Validate a sweep request and resolve its defaults into a plan. States are
+ * discovered per page at run time, so estimated_views counts one state per
+ * page; the runner re-checks max_views once each page's states are known.
+ */
+const planSweep = (input) => {
+    if (input.pages.length === 0)
+        return { ok: false, error: 'pages must list at least one page' };
+    if (input.pages.length > MAX_PAGES)
+        return { ok: false, error: `pages lists more than ${MAX_PAGES} pages` };
+    const resolved = input.pages.map((p) => resolvePageUrl(p, input.base_url));
+    const badIndex = resolved.findIndex((u) => u === null);
+    if (badIndex >= 0) {
+        return {
+            ok: false,
+            error: `pages[${badIndex}] ${JSON.stringify(input.pages[badIndex])} is not an absolute URL${input.base_url === undefined ? ' (pass base_url to use relative paths)' : ` and does not resolve against base_url`}`,
+        };
+    }
+    const given = input.viewports;
+    if (given !== undefined && (given.length === 0 || !given.every(validViewport))) {
+        return { ok: false, error: 'viewports: each needs width 120-3840, optional height 120-4320 and dpr 0-5' };
+    }
+    const viewports = given === undefined ? defaultViewports(input.target) : given.map(toViewportSpec);
+    const schemes = input.color_schemes ?? DEFAULT_SCHEMES;
+    if (schemes.length === 0)
+        return { ok: false, error: 'color_schemes must not be empty' };
+    const dimError = checkDimensions(input.states?.dimensions);
+    if (dimError !== null)
+        return { ok: false, error: dimError };
+    const maxViews = input.max_views ?? DEFAULT_MAX_VIEWS;
+    if (!Number.isInteger(maxViews) || maxViews < 1 || maxViews > HARD_MAX_VIEWS) {
+        return { ok: false, error: `max_views must be an integer from 1 to ${HARD_MAX_VIEWS}` };
+    }
+    const dimCombos = crossDimensions(input.states?.dimensions);
+    const pages = resolved;
+    const estimated = pages.length * viewports.length * schemes.length * dimCombos.length;
+    if (estimated > maxViews) {
+        return {
+            ok: false,
+            error: `the sweep plans at least ${estimated} views (pages × viewports × schemes × dimensions), over max_views ${maxViews}. Narrow it or raise max_views (up to ${HARD_MAX_VIEWS}).`,
+        };
+    }
+    return {
+        ok: true,
+        plan: {
+            target: input.target,
+            pages,
+            viewports,
+            schemes,
+            dimCombos,
+            ...(input.states !== undefined ? { states: input.states } : {}),
+            max_views: maxViews,
+            estimated_views: estimated,
+        },
+    };
+};
+/** Short page name for labels: the last path segment, else the host. */
+const LABEL_MAX = 60;
+/** Short stable tag for opaque URLs (data:, blob:), so labels stay readable. */
+const shortHash = (s) => ([...s].reduce((h, c) => ((h * 33) ^ c.charCodeAt(0)) >>> 0, 5381)).toString(36);
+const pageLabel = (url) => {
+    if (/^(data|blob|javascript|about):/i.test(url))
+        return `${url.split(':')[0]}:${shortHash(url)}`;
+    try {
+        const u = new URL(url);
+        const last = u.pathname.split('/').filter(Boolean).pop();
+        const label = last ?? u.host;
+        return label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label;
+    }
+    catch {
+        return url.length > LABEL_MAX ? `${url.slice(0, LABEL_MAX - 1)}…` : url;
+    }
+};
+/** "4.30-sign-in.html@360 create/es/dark"; a native phone viewport reads "@device". */
+const viewLabel = (page, viewport, scheme, state, dims) => {
+    const parts = [state, ...Object.values(dims), scheme].filter((p) => p.length > 0);
+    return `${pageLabel(page)}@${viewport === null ? 'device' : viewport.width} ${parts.join('/')}`;
+};
+/**
+ * Views for one page once its states are known, ordered for the runner:
+ * viewport (one emulation change) → scheme → dimension combo → state.
+ */
+const planPageViews = (plan, page, states) => {
+    const keys = states.length === 0 ? [''] : states;
+    return plan.viewports.flatMap((viewport) => plan.schemes.flatMap((scheme) => plan.dimCombos.flatMap((dims) => keys.map((state) => ({
+        page,
+        viewport,
+        scheme,
+        state,
+        dims,
+        label: viewLabel(page, viewport, scheme, state, dims),
+    })))));
+};
+/** Variables a state driver sees for one view (spec §4). */
+const viewVars = (view, actual) => ({
+    ...view.dims,
+    state: view.state,
+    scheme: view.scheme,
+    page: view.page,
+    width: String(view.viewport?.width ?? actual.width),
+    height: String(view.viewport?.height ?? actual.height),
+});
+/** Fill {name} placeholders from vars (URI-encoded); unknown names are left as written. */
+const expandTemplate = (template, vars) => template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, name) => {
+    const v = vars[name];
+    return v === undefined ? whole : encodeURIComponent(v);
+});
+
+/**
+ * Signature used for grouping: digit runs become '#' and whitespace collapses,
+ * so "card-12 \"Item 3\"" and "card-7 \"Item 4\"" are the same problem.
+ */
+const normalizeSignature = (signature) => signature.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim();
+const groupKey = (f) => `${f.check}|${normalizeSignature(f.signature)}`;
+const addTo = (acc, f, whereCap) => {
+    if (acc === undefined)
+        return { first: f, count: 1, pages: [f.page], where: [f.where] };
+    return {
+        first: acc.first,
+        count: acc.count + 1,
+        pages: acc.pages.includes(f.page) ? acc.pages : [...acc.pages, f.page],
+        where: acc.where.length < whereCap && !acc.where.includes(f.where)
+            ? [...acc.where, f.where]
+            : acc.where,
+    };
+};
+const toGroup = (a) => ({
+    check: a.first.check,
+    signature: normalizeSignature(a.first.signature),
+    message: a.first.message,
+    count: a.count,
+    pages: a.pages,
+    where: a.where,
+    ...(a.first.rect !== undefined ? { rect: a.first.rect } : {}),
+});
+/**
+ * Collapse located findings into distinct problems keyed by check + normalized
+ * element signature. Most frequent first; ties by check then signature, so the
+ * order is stable. The first occurrence supplies the message and rect.
+ */
+const groupFindings = (findings, opts = {}) => {
+    const whereCap = opts.whereCap ?? 5;
+    const byKey = findings.reduce((m, f) => {
+        const k = groupKey(f);
+        return m.set(k, addTo(m.get(k), f, whereCap));
+    }, new Map());
+    return [...byKey.values()]
+        .map(toGroup)
+        .sort((a, b) => b.count - a.count ||
+        a.check.localeCompare(b.check) ||
+        a.signature.localeCompare(b.signature));
+};
+/** Totals for the result header: raw problems, distinct groups, raw count per check. */
+const summarizeFindings = (findings, groups) => ({
+    problems: findings.length,
+    groups: groups.length,
+    by_check: findings.reduce((acc, f) => ({ ...acc, [f.check]: (acc[f.check] ?? 0) + 1 }), {}),
+});
+/** Keep the first `cap` groups inline; report how many were left for the report file. */
+const capGroups = (groups, cap = 50) => ({
+    groups: groups.slice(0, cap),
+    omitted: Math.max(0, groups.length - cap),
+});
+
+/**
+ * Pick the connection a tool call goes to. `argId` (the tools' extension_id
+ * arg) may name any live connection: an extension id or a CDP connection id.
+ */
+const resolveTarget$1 = (ctx, argId) => {
+    const conns = ctx.ipcServer.listConnections();
+    if (argId !== undefined) {
+        const found = conns.find((c) => c.extensionId === argId);
+        if (!found) {
+            return {
+                ok: false,
+                error: `no connected NMH for extension_id=${argId} (no extension or CDP connection has that id; host_status lists activeConnections)`,
+            };
+        }
+        return { ok: true, extensionId: argId };
+    }
+    if (conns.length === 0) {
+        return { ok: false, error: 'no NMH connected (no extension or CDP connection is live)' };
+    }
+    if (conns.length > 1) {
+        return {
+            ok: false,
+            error: `multiple NMH connections (${conns.length} live extension/CDP connections); pass extension_id explicitly (an extension id or a CDP connection id from host_status activeConnections)`,
+        };
+    }
+    return { ok: true, extensionId: conns[0].extensionId };
+};
+
+const cdpError = (kind, message, code) => Object.assign(new Error(message), {
+    name: 'CdpError',
+    kind,
+    ...(code !== undefined ? { code } : {}),
+});
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
+const WS_OPEN = 1;
+const parseMessage = (data) => {
+    if (typeof data !== 'string')
+        return null;
+    try {
+        const v = JSON.parse(data);
+        return v !== null && typeof v === 'object' ? v : null;
+    }
+    catch {
+        return null;
+    }
+};
+const resolveCtor = (opts) => opts?.WebSocketImpl ??
+    globalThis.WebSocket ??
+    null;
+const openSocket = (Ctor, wsUrl, timeoutMs) => new Promise((resolve, reject) => {
+    let settled = false;
+    let ws;
+    try {
+        ws = new Ctor(wsUrl);
+    }
+    catch (err) {
+        reject(cdpError('connect_failed', `cdp: cannot open ${wsUrl}: ${err.message}`));
+        return;
+    }
+    const timer = setTimeout(() => {
+        if (settled)
+            return;
+        settled = true;
+        try {
+            ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+        reject(cdpError('timeout', `cdp: connect to ${wsUrl} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    ws.addEventListener('open', () => {
+        if (settled)
+            return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ws);
+    });
+    const fail = () => {
+        if (settled)
+            return;
+        settled = true;
+        clearTimeout(timer);
+        reject(cdpError('connect_failed', `cdp: could not connect to ${wsUrl}`));
+    };
+    ws.addEventListener('error', fail);
+    ws.addEventListener('close', fail);
+});
+/**
+ * Open a CDP WebSocket. Commands are matched to responses by id; events fan
+ * out to every handler registered for their method. When the socket closes,
+ * every pending command rejects with kind 'closed' and close handlers run once.
+ */
+const connectCdp = async (wsUrl, opts) => {
+    const Ctor = resolveCtor(opts);
+    if (Ctor === null) {
+        throw cdpError('no_websocket', 'cdp: no WebSocket implementation available. CDP connections need Node 22 or newer.');
+    }
+    const ws = await openSocket(Ctor, wsUrl, opts?.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
+    const defaultTimeoutMs = opts?.defaultTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    // Connection state lives in this closure: it is the socket's lifetime.
+    let nextId = 1;
+    let open = true;
+    const pending = new Map();
+    const handlers = new Map();
+    const closeHandlers = new Set();
+    const settleAllClosed = () => {
+        if (!open)
+            return;
+        open = false;
+        for (const [id, p] of pending) {
+            clearTimeout(p.timer);
+            p.reject(cdpError('closed', `cdp: socket closed before ${p.method} answered`));
+            pending.delete(id);
+        }
+        for (const h of [...closeHandlers]) {
+            try {
+                h();
+            }
+            catch {
+                /* a close handler must not break the others */
+            }
+        }
+    };
+    ws.addEventListener('message', (ev) => {
+        const msg = parseMessage(ev.data);
+        if (msg === null)
+            return;
+        if (typeof msg.id === 'number') {
+            const p = pending.get(msg.id);
+            if (p === undefined)
+                return;
+            pending.delete(msg.id);
+            clearTimeout(p.timer);
+            if (msg.error !== undefined) {
+                const detail = msg.error.data !== undefined ? ` (${msg.error.data})` : '';
+                p.reject(cdpError('protocol', `cdp: ${p.method} failed: ${msg.error.message ?? 'unknown error'}${detail}`, msg.error.code));
+            }
+            else {
+                p.resolve(msg.result ?? {});
+            }
+            return;
+        }
+        if (typeof msg.method === 'string') {
+            const set = handlers.get(msg.method);
+            if (set === undefined)
+                return;
+            for (const h of [...set]) {
+                try {
+                    h(msg.params, msg.sessionId);
+                }
+                catch {
+                    /* one bad handler must not starve the rest */
+                }
+            }
+        }
+    });
+    ws.addEventListener('close', settleAllClosed);
+    ws.addEventListener('error', settleAllClosed);
+    const send = (method, params, sendOpts) => {
+        if (!open || ws.readyState !== WS_OPEN) {
+            return Promise.reject(cdpError('closed', `cdp: socket is closed; cannot send ${method}`));
+        }
+        const id = nextId++;
+        const timeoutMs = sendOpts?.timeoutMs ?? defaultTimeoutMs;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(id);
+                reject(cdpError('timeout', `cdp: ${method} timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+            pending.set(id, { method, resolve, reject, timer });
+            try {
+                ws.send(JSON.stringify({
+                    id,
+                    method,
+                    ...(params !== undefined ? { params } : {}),
+                    ...(sendOpts?.sessionId !== undefined ? { sessionId: sendOpts.sessionId } : {}),
+                }));
+            }
+            catch (err) {
+                clearTimeout(timer);
+                pending.delete(id);
+                reject(cdpError('closed', `cdp: send ${method} failed: ${err.message}`));
+            }
+        });
+    };
+    const on = (method, handler) => {
+        const set = handlers.get(method) ?? new Set();
+        set.add(handler);
+        handlers.set(method, set);
+        return () => {
+            set.delete(handler);
+            if (set.size === 0)
+                handlers.delete(method);
+        };
+    };
+    const onClose = (handler) => {
+        closeHandlers.add(handler);
+        return () => {
+            closeHandlers.delete(handler);
+        };
+    };
+    const close = () => {
+        try {
+            ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+        settleAllClosed();
+    };
+    return Object.freeze({ send, on, onClose, close, isOpen: () => open });
+};
+
+const DEFAULT_HTTP_TIMEOUT_MS = 2_000;
+const fail$4 = (kind, message) => Object.freeze({ ok: false, kind, message });
+const okv = (value) => Object.freeze({ ok: true, value });
+/**
+ * Accept '9222', '127.0.0.1:9222', 'http://host:port/...', 'ws://host:port/...'
+ * and return 'http://host:port'. Null when no host/port can be read.
+ */
+const normalizeBrowserUrl = (input) => {
+    const s = input.trim();
+    if (s === '')
+        return null;
+    if (/^\d{1,5}$/.test(s))
+        return `http://127.0.0.1:${s}`;
+    const withScheme = /^[a-z]+:\/\//i.test(s) ? s : `http://${s}`;
+    try {
+        const u = new URL(withScheme);
+        if (u.hostname === '' || u.port === '')
+            return null;
+        return `http://${u.hostname}:${u.port}`;
+    }
+    catch {
+        return null;
+    }
+};
+const getJson = async (url, deps) => {
+    const fetchImpl = deps?.fetchImpl ?? fetch;
+    const controller = new AbortController();
+    const timeoutMs = deps?.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetchImpl(url, { signal: controller.signal });
+        const text = await res.text();
+        if (!res.ok)
+            return fail$4('http', `GET ${url} -> HTTP ${res.status}: ${text.slice(0, 120)}`);
+        try {
+            return okv(JSON.parse(text));
+        }
+        catch {
+            // Android Chrome answers some endpoints with plain text, e.g.
+            // 'Could not create new page'.
+            return fail$4('bad_body', `GET ${url} returned non-JSON: ${text.slice(0, 120)}`);
+        }
+    }
+    catch (err) {
+        return controller.signal.aborted
+            ? fail$4('timeout', `GET ${url} timed out after ${timeoutMs}ms`)
+            : fail$4('connect_failed', `GET ${url} failed: ${err.message}`);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+};
+const str$2 = (o, k) => typeof o[k] === 'string' ? o[k] : undefined;
+/** GET /json/version: browser identity plus the browser-level socket URL. */
+const fetchBrowserVersion = async (baseUrl, deps) => {
+    const r = await getJson(`${baseUrl}/json/version`, deps);
+    if (!r.ok)
+        return r;
+    if (r.value === null || typeof r.value !== 'object') {
+        return fail$4('bad_body', `${baseUrl}/json/version is not an object`);
+    }
+    const o = r.value;
+    const androidPackage = str$2(o, 'Android-Package');
+    const ws = str$2(o, 'webSocketDebuggerUrl');
+    return okv(Object.freeze({
+        browser: str$2(o, 'Browser') ?? 'unknown',
+        protocolVersion: str$2(o, 'Protocol-Version') ?? 'unknown',
+        userAgent: str$2(o, 'User-Agent') ?? '',
+        ...(androidPackage !== undefined ? { androidPackage } : {}),
+        ...(ws !== undefined ? { webSocketDebuggerUrl: ws } : {}),
+    }));
+};
+/** GET /json/list: page targets that can be attached to. */
+const listPageTargets = async (baseUrl, deps) => {
+    const r = await getJson(`${baseUrl}/json/list`, deps);
+    if (!r.ok)
+        return r;
+    if (!Array.isArray(r.value))
+        return fail$4('bad_body', `${baseUrl}/json/list is not an array`);
+    const targets = r.value.flatMap((raw) => {
+        if (raw === null || typeof raw !== 'object')
+            return [];
+        const o = raw;
+        const id = str$2(o, 'id');
+        const ws = str$2(o, 'webSocketDebuggerUrl');
+        if (str$2(o, 'type') !== 'page' || id === undefined || ws === undefined)
+            return [];
+        return [
+            Object.freeze({
+                id,
+                type: 'page',
+                title: str$2(o, 'title') ?? '',
+                url: str$2(o, 'url') ?? '',
+                webSocketDebuggerUrl: ws,
+            }),
+        ];
+    });
+    return okv(Object.freeze(targets));
+};
+
 /** Canonical native-messaging-host identity, shared by the install tool and the
  *  flatpak sandbox-launch manifest writer so the name/description live once. */
 const HOST_NAME$3 = 'com.pwa_debug.host';
@@ -4867,6 +6062,348 @@ const uninstallManifestForBrowsers = async (manifestName, installs, options = {}
         }
     }
     return Object.freeze(out);
+};
+
+/** mkdtemp name prefix for sandbox-temp profile dirs (under os.tmpdir()). */
+const TEMP_PROFILE_PREFIX = 'pwa-debug-';
+/**
+ * Filter a directory listing (os.tmpdir() entries) down to pwa-debug sandbox-
+ * temp profiles. Used at boot to detect dirs left by a previous crashed run —
+ * graceful shutdown cleans its own, so survivors imply a SIGKILL/crash.
+ */
+const filterTempProfileNames = (names) => names.filter((n) => n.startsWith(TEMP_PROFILE_PREFIX));
+const createTempCleanupRegistry = (deps) => {
+    const dirs = new Set();
+    return Object.freeze({
+        register: (dir) => {
+            dirs.add(dir);
+        },
+        cleanupAll: () => {
+            for (const dir of dirs) {
+                try {
+                    deps.removeDir(dir);
+                }
+                catch {
+                    // best-effort; a lingering temp dir is acceptable across crashes.
+                }
+            }
+            dirs.clear();
+        },
+        list: () => Object.freeze([...dirs]),
+    });
+};
+
+const BROWSERS$2 = [
+    'chrome',
+    'chromium',
+    'edge',
+    'brave',
+    'vivaldi',
+    'opera',
+];
+const PROFILE_TYPES = [
+    'existing',
+    'sandbox-persistent',
+    'sandbox-temp',
+];
+/**
+ * A debug port serves exactly one browser at a time, so a new launch on a port
+ * supersedes any prior record for it (keeps the list bounded across restarts).
+ * Result is ordered newest-last.
+ */
+const mergeLaunch = (records, rec) => Object.freeze([...records.filter((r) => r.port !== rec.port), rec]);
+/** Drop the record for `port` (port is the unique key — see mergeLaunch). */
+const removeLaunch = (records, port) => Object.freeze(records.filter((r) => r.port !== port));
+/**
+ * Validate persisted JSON back into LaunchRecords, dropping malformed entries
+ * (a corrupt launches.json must never crash boot). Non-array input → [].
+ */
+const parseLaunchRecords = (raw) => {
+    if (!Array.isArray(raw))
+        return [];
+    const out = [];
+    for (const r of raw) {
+        if (!r || typeof r !== 'object')
+            continue;
+        const o = r;
+        if (!BROWSERS$2.includes(o['browser']))
+            continue;
+        if (!PROFILE_TYPES.includes(o['profileType']))
+            continue;
+        if (typeof o['port'] !== 'number')
+            continue;
+        if (typeof o['launchedAt'] !== 'number')
+            continue;
+        const pid = o['pid'];
+        const browserUrl = o['browserUrl'];
+        const userDataDir = o['userDataDir'];
+        out.push(Object.freeze({
+            browser: o['browser'],
+            profileType: o['profileType'],
+            port: o['port'],
+            pid: typeof pid === 'number' ? pid : null,
+            browserUrl: typeof browserUrl === 'string' ? browserUrl : null,
+            ...(typeof userDataDir === 'string' ? { userDataDir } : {}),
+            launchedAt: o['launchedAt'],
+        }));
+    }
+    return Object.freeze(out);
+};
+const createLaunchRegistry = (deps) => {
+    let records = deps.load ? [...deps.load()] : [];
+    return Object.freeze({
+        record: (rec) => {
+            records = mergeLaunch(records, Object.freeze({ ...rec, launchedAt: deps.now() }));
+            deps.persist?.(records);
+        },
+        list: () => Object.freeze([...records]),
+        remove: (port) => {
+            records = removeLaunch(records, port);
+            deps.persist?.(records);
+        },
+    });
+};
+
+/**
+ * Sandbox profile-dir + extension-path resolution (pure).
+ *
+ * The persistent profile dir is deterministic (~/.pwa-debug/profiles/<browser>).
+ * The extension path is picked from an ordered candidate list — env override,
+ * a host-bundled location (populated by M17 packaging), then the monorepo
+ * sibling for dev — choosing the first that holds a LOADABLE unpacked extension
+ * (manifest.json AND a built entry script). The built-script check is what
+ * keeps the picker from selecting the extension SOURCE root, which carries a
+ * manifest.json but none of the rollup output it references (Chromium then
+ * fails the load with "Could not load javascript 'content-script.js'").
+ * All effects (HOME lookup, file existence) are passed in.
+ */
+/** Per-browser subdir under the sandbox profile root. */
+const PROFILE_SUBDIR = Object.freeze({
+    chrome: 'chrome',
+    chromium: 'chromium',
+    edge: 'edge',
+    brave: 'brave',
+    vivaldi: 'vivaldi',
+    opera: 'opera',
+});
+/** ~/.pwa-debug/profiles/<browser> — stable across host restarts, or null without HOME. */
+const persistentProfileDir = (browser, env) => env.HOME && env.HOME.length > 0
+    ? join(env.HOME, '.pwa-debug', 'profiles', PROFILE_SUBDIR[browser])
+    : null;
+/**
+ * Ordered extension-dir candidates, most-authoritative first:
+ *   1. PWA_DEBUG_EXTENSION_PATH (explicit override)
+ *   2. <hostDir>/extension (host-bundled dist — populated by M17 packaging)
+ *   3. <hostDir>/../extension/dist (monorepo sibling, dev)
+ */
+const defaultExtensionCandidates = (env, hostDir) => {
+    const out = [];
+    if (env.PWA_DEBUG_EXTENSION_PATH && env.PWA_DEBUG_EXTENSION_PATH.length > 0) {
+        out.push(env.PWA_DEBUG_EXTENSION_PATH);
+    }
+    out.push(join(hostDir, 'extension'));
+    out.push(join(hostDir, '..', 'extension', 'dist'));
+    return Object.freeze(out);
+};
+/**
+ * Files that must BOTH exist for a dir to be a loadable unpacked extension: the
+ * manifest and a built entry script. Requiring the script rejects the extension
+ * source root (manifest.json present, rollup output absent) — the trap that made
+ * the launcher preload a dir Chromium couldn't actually load.
+ */
+const REQUIRED_EXTENSION_FILES = Object.freeze([
+    'manifest.json',
+    'content-script.js',
+]);
+/** True when `dir` holds every REQUIRED_EXTENSION_FILES entry (existence injected). */
+const isLoadableExtensionDir = (dir, exists) => REQUIRED_EXTENSION_FILES.every((f) => exists(join(dir, f)));
+/** First candidate dir that holds a loadable unpacked extension, else null. */
+const pickExtensionPath = (candidates, isLoadable) => {
+    for (const dir of candidates) {
+        if (isLoadable(dir))
+            return dir;
+    }
+    return null;
+};
+
+/**
+ * Pure browser brand+version → launch capabilities (unpacked-extension load +
+ * debug-port-on-default-profile). One place for "what can this browser version
+ * do at launch", all keyed off the BrowserVersion parsed from `--version`.
+ *
+ * Branded Google Chrome removed the --load-extension CLI flag: at 137 (with a
+ * temporary escape hatch, --disable-features=DisableLoadExtensionCommandLineSwitch)
+ * and FULLY at 142+ (escape hatch also removed). Every OTHER Chromium-family
+ * browser — unbranded Chromium, Chrome-for-Testing, Brave, Edge, Opera, Vivaldi —
+ * still honors --load-extension. So the sandbox extension-preload behavior is a
+ * function of brand + major version, computed here (pure) and consumed by the
+ * spawn-arg builder + the launch guidance. The version string is produced at the
+ * edge (`<binary> --version`) and parsed by parseBrowserVersion;
+ * extensionLoadStrategy maps the result to the launch behavior.
+ *
+ * Refs: research note #331, decision note #332.
+ */
+/** Brand matchers against the leading product name of `<binary> --version`,
+ *  most-specific first (Chrome-for-Testing before the google-chrome prefix). */
+const BRAND_MATCHERS = Object.freeze([
+    [/google chrome for testing/i, 'chrome-for-testing'],
+    [/google chrome/i, 'google-chrome'],
+    [/brave browser/i, 'brave'],
+    [/microsoft edge/i, 'edge'],
+    [/\bchromium\b/i, 'chromium'],
+    [/\bvivaldi\b/i, 'vivaldi'],
+    [/\bopera\b/i, 'opera'],
+]);
+/**
+ * Parse the stdout of `<binary> --version` into a brand + major version.
+ * Examples: "Google Chrome 148.0.7778.215", "Brave Browser 148.1.90.122",
+ * "Chromium 148.0.7778.167 snap", "Microsoft Edge 141.0.3537.57". Returns null
+ * when no dotted version number is present; an unrecognized product name still
+ * parses (brand 'unknown') as long as a version is found.
+ */
+const parseBrowserVersion = (stdout) => {
+    const text = stdout.trim();
+    if (text.length === 0)
+        return null;
+    const m = text.match(/(\d+)\.\d+\.\d+/);
+    if (!m)
+        return null;
+    const major = Number(m[1]);
+    if (!Number.isInteger(major))
+        return null;
+    const brand = BRAND_MATCHERS.find(([re]) => re.test(text))?.[1] ?? 'unknown';
+    return Object.freeze({ brand, major });
+};
+/** Chrome major at which --load-extension started being gated (escape-hatch era). */
+const CHROME_GATED_FROM = 137;
+/** Chrome major at which --load-extension AND the escape hatch are both gone. */
+const CHROME_DEAD_FROM = 142;
+/**
+ * Map a parsed version to the sandbox extension-load strategy. Only branded
+ * Google Chrome is constrained; every other brand (and an unknown brand) gets
+ * the plain flag, which still works. A null version (couldn't read `--version`)
+ * is treated optimistically as 'load-flag' — better to attempt the flag than to
+ * force the manual path on a browser that very likely supports it.
+ */
+const extensionLoadStrategy = (version) => {
+    if (!version || version.brand !== 'google-chrome')
+        return 'load-flag';
+    if (version.major >= CHROME_DEAD_FROM)
+        return 'manual-guided';
+    if (version.major >= CHROME_GATED_FROM)
+        return 'load-flag-escape-hatch';
+    return 'load-flag';
+};
+/** Chromium major from which --remote-debugging-port is refused on the DEFAULT
+ *  profile (must use a custom --user-data-dir). Brand-agnostic Chromium change. */
+const DEBUG_PORT_CUSTOM_DIR_FROM = 136;
+/**
+ * True when this browser refuses --remote-debugging-port on the default profile
+ * (Chromium >=136 — brand-agnostic). existing-mode uses the user's default
+ * profile, so when this holds the spawned browser will NOT expose a debug port;
+ * the launch degrades (no false browserUrl) and steers to a sandbox profile
+ * (custom dir), where the port works. null version => false (attempt the port).
+ */
+const debugPortBlockedOnDefaultProfile = (version) => version !== null && version.major >= DEBUG_PORT_CUSTOM_DIR_FROM;
+/**
+ * Edge (effect injected): read a browser's brand+version by invoking its
+ * `--version`. Native/snap browsers run `<execPath> --version`; a flatpak target
+ * (appId set, no host binary) runs `flatpak run <appId> --version`. A non-zero
+ * exit or unparseable output yields null, so the caller falls back to the
+ * optimistic 'load-flag' strategy rather than blocking a launch on a version
+ * read it couldn't complete.
+ */
+const readBrowserVersion = async (runCommand, target) => {
+    const { cmd, args } = target.appId
+        ? { cmd: 'flatpak', args: ['run', target.appId, '--version'] }
+        : { cmd: target.execPath, args: ['--version'] };
+    const res = await runCommand(cmd, args);
+    if (res.code !== 0)
+        return null;
+    return parseBrowserVersion(res.stdout);
+};
+
+/**
+ * Pure profile-Preferences seeding for sandbox launches.
+ *
+ * A fresh Chromium profile (every sandbox-temp dir, and a sandbox-persistent dir
+ * on its first launch) starts with Developer Mode OFF. A flatpak Chromium then
+ * REFUSES to honor --load-extension for an unpacked extension, so the pwa-debug
+ * extension never loads/connects until the user toggles Developer Mode by hand
+ * at chrome://extensions (note 318). Chromium reads the profile's
+ * <user-data-dir>/Default/Preferences at startup, so writing
+ * extensions.ui.developer_mode=true into it BEFORE spawn unblocks --load-extension
+ * with no manual step.
+ *
+ * Pure here: the path derivation and the non-destructive merge. The read/write
+ * effect lives at the edge (node_deps.seedDeveloperModeImpl).
+ */
+/**
+ * The profile Preferences file Chromium reads at startup:
+ * <user-data-dir>/Default/Preferences. Seeding it before spawn is how a flag we
+ * cannot pass on the command line (developer_mode) gets applied on first run.
+ */
+const profilePreferencesPath = (userDataDir) => join(userDataDir, 'Default', 'Preferences');
+/** Read an object-valued subkey from a prefs object, or {} when absent/non-object. */
+const objAt = (obj, key) => {
+    const v = obj[key];
+    return v !== null && typeof v === 'object' && !Array.isArray(v)
+        ? v
+        : {};
+};
+/**
+ * Merge extensions.ui.developer_mode=true into an existing Preferences object
+ * (or a fresh one when `existing` is null), preserving every other key. Returns a
+ * NEW object — the input is never mutated. Only the developer_mode leaf is forced;
+ * any sibling extensions.* / extensions.ui.* settings carry through untouched, so
+ * re-seeding a persistent profile that already has real prefs is safe.
+ */
+const mergeDeveloperModePref = (existing) => {
+    const base = existing ?? {};
+    const extensions = objAt(base, 'extensions');
+    const ui = objAt(extensions, 'ui');
+    return {
+        ...base,
+        extensions: {
+            ...extensions,
+            ui: { ...ui, developer_mode: true },
+        },
+    };
+};
+
+/**
+ * Pure CDP-target selection for the persistent-profile extension auto-refresh.
+ *
+ * A sandbox-persistent profile caches the unpacked extension and serves STALE
+ * page-world/SW code on relaunch — newly added pdl_* tools report "unknown tool"
+ * even though the on-disk bundle is current (note 318). The fix is to force
+ * chrome.runtime.reload() in the extension's MV3 service worker over CDP, which
+ * makes it re-read the source dir. To do that we need the SW's
+ * webSocketDebuggerUrl from the browser's /json/list — the pure pick lives here;
+ * the websocket effect lives at the edge (node_deps.refreshExtensionImpl).
+ */
+/** A loaded MV3 extension surfaces its service worker as a chrome-extension:// target. */
+const EXTENSION_SW_URL_RE = /^chrome-extension:\/\//;
+/**
+ * The webSocketDebuggerUrl of the first loaded-extension service-worker target in
+ * a CDP /json/list body, or null when none is present (port not up yet, or the
+ * extension's SW hasn't started). Tolerant of arbitrary/malformed entries — only
+ * an object with type==='service_worker', a chrome-extension:// url, and a string
+ * webSocketDebuggerUrl qualifies.
+ */
+const extensionSwWsUrl = (targets) => {
+    for (const t of targets) {
+        if (t === null || typeof t !== 'object')
+            continue;
+        const o = t;
+        if (o.type === 'service_worker' &&
+            typeof o.url === 'string' &&
+            EXTENSION_SW_URL_RE.test(o.url) &&
+            typeof o.webSocketDebuggerUrl === 'string') {
+            return o.webSocketDebuggerUrl;
+        }
+    }
+    return null;
 };
 
 /**
@@ -5049,6 +6586,1538 @@ const installedSnapSocketTargets = async (env, exists) => {
     }
     return Object.freeze(out);
 };
+
+/**
+ * The impure edge: real LaunchDeps backed by fetch + node:child_process.
+ * Isolated from all decision logic so launch_existing stays pure + testable.
+ */
+const PROBE_TIMEOUT_MS = 800;
+/** GET /json/version on the debug port; a 2xx JSON body means the port is live. */
+const probeDebugPortImpl = async (port) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+            signal: controller.signal,
+        });
+        if (!res.ok)
+            return false;
+        const body = (await res.json().catch(() => null));
+        return body !== null && typeof body === 'object';
+    }
+    catch {
+        return false;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+};
+/** pgrep -f the executable basename; exit 0 with output means it is running. */
+const isProcessRunningImpl = (_browser, execPath) => new Promise((resolve) => {
+    execFile('pgrep', ['-f', basename(execPath)], (err, stdout) => {
+        // pgrep exits 1 (→ err) when no process matches; treat as not-running.
+        if (err)
+            return resolve(false);
+        resolve(stdout.trim().length > 0);
+    });
+});
+/** Spawn detached + unref so the browser outlives the host process. */
+const spawnBrowserImpl = (cmd, args) => new Promise((resolve, reject) => {
+    try {
+        const child = spawn(cmd, [...args], {
+            detached: true,
+            stdio: 'ignore',
+        });
+        // Surface synchronous spawn failures (e.g. ENOENT) before unref/resolve.
+        child.once('error', reject);
+        const pid = child.pid ?? null;
+        child.unref();
+        resolve({ pid });
+    }
+    catch (e) {
+        reject(e);
+    }
+});
+/** Production LaunchDeps wiring real OS effects. */
+const defaultLaunchDeps = () => Object.freeze({
+    probeDebugPort: probeDebugPortImpl,
+    isProcessRunning: isProcessRunningImpl,
+    spawnBrowser: spawnBrowserImpl,
+});
+/** Create a fresh mkdtemp profile dir for a sandbox-temp launch. */
+const makeTempProfileDir = () => mkdtempSync(join(tmpdir(), TEMP_PROFILE_PREFIX));
+/**
+ * Resolve a sandbox-mode profile dir, packaging-aware. Snap browsers cannot use
+ * ~/.pwa-debug (a hidden dir the snap home interface blocks → the browser exits
+ * instantly), so they route to ~/snap/<pkg>/common: a persistent
+ * pwa-debug-profile dir, or a fresh mkdtemp under common for sandbox-temp. The
+ * snap-common dir already exists (the snap is installed). Native/flatpak keep
+ * the ~/.pwa-debug layout. Returns null when the dir can't be resolved.
+ */
+const resolveSandboxProfileDir = (browser, mode, packaging, env) => {
+    if (packaging === 'snap') {
+        const pkg = snapPackageForBrowser(browser);
+        if (!pkg || !env.HOME)
+            return null;
+        if (mode === 'sandbox-temp') {
+            const common = join(env.HOME, 'snap', pkg, 'common');
+            return mkdtempSync(join(common, TEMP_PROFILE_PREFIX));
+        }
+        return snapSandboxProfileDir(pkg, env);
+    }
+    return mode === 'sandbox-temp'
+        ? makeTempProfileDir()
+        : persistentProfileDir(browser, env);
+};
+/**
+ * Absolute paths of sandbox-temp profile dirs lingering under os.tmpdir() from
+ * a previous run. Graceful shutdown removes its own, so any survivors imply a
+ * crash/SIGKILL. Warn-only at boot: mkdtemp names don't identify the owning
+ * host process, so auto-removal could delete a concurrently-running host's
+ * active profile. Never throws (a missing/unreadable tmpdir yields []).
+ */
+const findLingeringTempProfiles = () => {
+    try {
+        const base = tmpdir();
+        return filterTempProfileNames(readdirSync(base)).map((n) => join(base, n));
+    }
+    catch {
+        return [];
+    }
+};
+// Lazy module-singleton temp-cleanup registry: created on first sandbox-temp
+// launch, with process signal handlers installed exactly once.
+let tempRegistry = null;
+const getTempRegistry = () => {
+    if (tempRegistry)
+        return tempRegistry;
+    const registry = createTempCleanupRegistry({
+        removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
+    });
+    const onSignal = () => {
+        registry.cleanupAll();
+        process.exit(0);
+    };
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    process.once('exit', () => registry.cleanupAll());
+    tempRegistry = registry;
+    return registry;
+};
+/**
+ * Absolute host-package root. The host bundles to a single packages/host/dist/
+ * main.js, so this module's dir is packages/host/dist — ONE level below the
+ * package root. (The earlier '..','..' overshot to packages/, making the
+ * candidate `<pkg>/extension` resolve to the extension SOURCE root.)
+ */
+const hostPackageDir = () => resolve(dirname(fileURLToPath(import.meta.url)), '..');
+/** Resolve the unpacked extension dir to preload, or null when none is found. */
+const resolveExtensionPath = (env) => pickExtensionPath(defaultExtensionCandidates(env, hostPackageDir()), (dir) => isLoadableExtensionDir(dir, (p) => existsSync(p)));
+/** execFile wrapped as a never-rejecting {code, stdout} runner (for --version). */
+const runCommandImpl$1 = (cmd, args) => new Promise((resolveCmd) => {
+    execFile(cmd, [...args], (err, stdout) => {
+        const code = err && typeof err.code === 'number'
+            ? err.code
+            : err
+                ? 1
+                : 0;
+        resolveCmd({ code, stdout: stdout ?? '' });
+    });
+});
+/**
+ * Production readVersion: run the target's `--version` (native/snap by execPath;
+ * flatpak via `flatpak run <appId>`) and parse it into a BrowserVersion. null on
+ * any failure → the launch falls back to the optimistic 'load-flag' strategy.
+ */
+const readTargetBrowserVersion = (target) => readBrowserVersion(runCommandImpl$1, {
+    execPath: target.execPath,
+    ...(target.appId !== undefined ? { appId: target.appId } : {}),
+});
+/**
+ * Sandbox manifest writer (all confinements, native included). Loads the
+ * registered extension IDs, builds the host manifest, and writes it into
+ * <userDataDir>/NativeMessagingHosts/ so the spawned Chromium — which searches
+ * the user-data-dir, not the install location (FINDING #3 applies to native
+ * custom-dir profiles too) — finds the host. The launcher the manifest points
+ * at depends on the confinement: for SNAP, ensure the snap relay + launcher
+ * exist under ~/snap/<pkg>/common (node is exec-denied + glibc-incompatible
+ * there) and point at that launcher; otherwise (native/flatpak) point at the
+ * canonical node launcher. No-op when no extension is registered (connectNative
+ * would be rejected anyway; host_register_extension is the prerequisite).
+ */
+const writeSandboxManifestImpl = async (userDataDir, snapPackage) => {
+    const state = await loadHostState(defaultStatePath());
+    if (state.extensionIds.length === 0)
+        return;
+    let hostBinaryPath;
+    if (snapPackage !== undefined) {
+        const snap = await writeSnapHostFiles(snapPackage, process.env);
+        if (!snap)
+            return;
+        hostBinaryPath = snap.launcherPath;
+    }
+    else {
+        hostBinaryPath = defaultLauncherPath(process.platform, process.env);
+    }
+    const manifest = buildHostManifest({
+        name: HOST_NAME$3,
+        description: HOST_DESCRIPTION$1,
+        hostBinaryPath,
+        allowedExtensionIds: state.extensionIds,
+    });
+    await writeHostManifestToDir(manifest, join(userDataDir, 'NativeMessagingHosts'));
+};
+/**
+ * Seed extensions.ui.developer_mode=true into the sandbox profile's
+ * Default/Preferences before spawn (#318), so a flatpak Chromium honors the
+ * unpacked --load-extension without a manual Developer-Mode toggle. Reads any
+ * existing Preferences and merges non-destructively; creates Default/ as needed;
+ * writes atomically (temp+rename). Best-effort: a read/parse/write failure must
+ * never break the launch — the manual Developer-Mode path still works.
+ */
+const seedDeveloperModeImpl = async (userDataDir) => {
+    try {
+        const prefsPath = profilePreferencesPath(userDataDir);
+        let existing = null;
+        if (existsSync(prefsPath)) {
+            try {
+                existing = JSON.parse(readFileSync(prefsPath, 'utf-8'));
+            }
+            catch {
+                existing = null; // corrupt Preferences → reseed from scratch
+            }
+        }
+        const merged = mergeDeveloperModePref(existing);
+        mkdirSync(dirname(prefsPath), { recursive: true });
+        const tmp = `${prefsPath}.tmp.${process.pid}`;
+        writeFileSync(tmp, JSON.stringify(merged));
+        renameSync(tmp, prefsPath);
+    }
+    catch {
+        // best-effort; never break the launch on a seeding failure.
+    }
+};
+const REFRESH_POLL_ATTEMPTS = 20;
+const REFRESH_POLL_INTERVAL_MS = 300;
+/** GET /json/list and return its target array (any error / non-array → []). */
+const fetchCdpTargets = async (port) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+            signal: controller.signal,
+        });
+        if (!res.ok)
+            return [];
+        const body = (await res.json().catch(() => null));
+        return Array.isArray(body) ? body : [];
+    }
+    catch {
+        return [];
+    }
+    finally {
+        clearTimeout(timer);
+    }
+};
+/**
+ * Open the extension SW's CDP websocket and evaluate chrome.runtime.reload(),
+ * forcing it to re-read the unpacked source. reload() tears the SW down, so the
+ * evaluate response OR the socket closing both count as success; resolves false
+ * on error/timeout. Uses Node's global WebSocket (Node >= 22).
+ */
+const cdpReloadExtension = (wsUrl) => new Promise((resolveP) => {
+    let settled = false;
+    const finish = (v) => {
+        if (!settled) {
+            settled = true;
+            resolveP(v);
+        }
+    };
+    try {
+        const ws = new WebSocket(wsUrl);
+        const timer = setTimeout(() => {
+            try {
+                ws.close();
+            }
+            catch {
+                /* ignore */
+            }
+            finish(false);
+        }, 2000);
+        ws.addEventListener('open', () => {
+            ws.send(JSON.stringify({
+                id: 1,
+                method: 'Runtime.evaluate',
+                params: { expression: 'chrome.runtime.reload()' },
+            }));
+        });
+        ws.addEventListener('message', () => {
+            clearTimeout(timer);
+            try {
+                ws.close();
+            }
+            catch {
+                /* ignore */
+            }
+            finish(true);
+        });
+        ws.addEventListener('close', () => {
+            clearTimeout(timer);
+            finish(true);
+        });
+        ws.addEventListener('error', () => {
+            clearTimeout(timer);
+            finish(false);
+        });
+    }
+    catch {
+        finish(false);
+    }
+});
+/**
+ * Poll the debug port for the loaded pwa-debug extension's service worker (it
+ * appears once the port binds and the SW starts), then force it to reload so a
+ * sandbox-persistent relaunch serves the rebuilt code instead of cached code
+ * (#318). Tolerates a not-yet-bound spawn by polling. Returns true when a reload
+ * was issued, false when no extension SW surfaced in time. Never throws.
+ */
+const refreshExtensionImpl = async (port) => {
+    for (let i = 0; i < REFRESH_POLL_ATTEMPTS; i += 1) {
+        const wsUrl = extensionSwWsUrl(await fetchCdpTargets(port));
+        if (wsUrl)
+            return cdpReloadExtension(wsUrl);
+        await sleep$1(REFRESH_POLL_INTERVAL_MS);
+    }
+    return false;
+};
+/** Production LaunchSandboxDeps: probe + spawn reused, temp dirs auto-tracked. */
+const defaultSandboxDeps = () => Object.freeze({
+    probeDebugPort: probeDebugPortImpl,
+    spawnBrowser: spawnBrowserImpl,
+    registerTempProfile: (dir) => getTempRegistry().register(dir),
+    writeSandboxManifest: writeSandboxManifestImpl,
+    seedDeveloperMode: seedDeveloperModeImpl,
+    refreshExtension: refreshExtensionImpl,
+});
+// Lazy module-singleton launch registry, persisted to launches.json beside the
+// host config so pdl_browser_status survives a host restart.
+let launchRegistry = null;
+/** Path to the persisted launch registry (dedicated file, not state.json). */
+const launchesStatePath = () => xdgConfigPath('launches.json');
+/** Read persisted launches; any error (missing/corrupt/no-HOME) → []. */
+const loadPersistedLaunches = () => {
+    try {
+        return parseLaunchRecords(JSON.parse(readFileSync(launchesStatePath(), 'utf-8')));
+    }
+    catch {
+        return [];
+    }
+};
+/** Crash-safe write of the launch registry; best-effort (never throws). */
+const persistLaunches = (records) => {
+    try {
+        const path = launchesStatePath();
+        mkdirSync(dirname(path), { recursive: true });
+        const tmp = `${path}.tmp.${process.pid}`;
+        writeFileSync(tmp, `${JSON.stringify(records, null, 2)}\n`);
+        renameSync(tmp, path);
+    }
+    catch {
+        // best-effort; a failed persist must never break the launch path.
+    }
+};
+/** The host-process launch registry (created on first use). */
+const getLaunchRegistry = () => {
+    if (!launchRegistry) {
+        launchRegistry = createLaunchRegistry({
+            now: Date.now,
+            load: loadPersistedLaunches,
+            persist: persistLaunches,
+        });
+    }
+    return launchRegistry;
+};
+// ── pdl_close_browser effects ──────────────────────────────────────────────
+const sleep$1 = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Poll the debug port until it stops answering (browser gone) or attempts run out. */
+const waitForPortDown = async (port, attempts) => {
+    for (let i = 0; i < attempts; i += 1) {
+        if (!(await probeDebugPortImpl(port)))
+            return true;
+        await sleep$1(250);
+    }
+    return !(await probeDebugPortImpl(port));
+};
+/** Read the browser-level CDP WebSocket URL from /json/version (null if absent). */
+const fetchBrowserWsUrl = async (port) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+            signal: controller.signal,
+        });
+        if (!res.ok)
+            return null;
+        const body = (await res.json().catch(() => null));
+        const url = body?.webSocketDebuggerUrl;
+        return typeof url === 'string' ? url : null;
+    }
+    catch {
+        return null;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+};
+/**
+ * Canonical graceful quit: connect the browser CDP WebSocket and send
+ * Browser.close. The browser exits cleanly (no crash-restore bubble) and the
+ * socket closes. Resolves true once the socket closes, false on error/timeout.
+ * Uses Node's global WebSocket (Node >= 22).
+ */
+const cdpBrowserClose = (wsUrl) => new Promise((resolveP) => {
+    let settled = false;
+    const finish = (v) => {
+        if (!settled) {
+            settled = true;
+            resolveP(v);
+        }
+    };
+    try {
+        const ws = new WebSocket(wsUrl);
+        const timer = setTimeout(() => {
+            try {
+                ws.close();
+            }
+            catch {
+                /* ignore */
+            }
+            finish(false);
+        }, 2000);
+        ws.addEventListener('open', () => {
+            ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+        });
+        // Browser.close makes the browser exit → the socket closes: that's success.
+        ws.addEventListener('close', () => {
+            clearTimeout(timer);
+            finish(true);
+        });
+        ws.addEventListener('error', () => {
+            clearTimeout(timer);
+            finish(false);
+        });
+    }
+    catch {
+        finish(false);
+    }
+});
+/**
+ * Stop a managed launch, preferring a clean shutdown:
+ *  1. port already down → already-down (idempotent).
+ *  2. CDP Browser.close over the WebSocket → clean quit, no restore bubble.
+ *  3. SIGTERM the spawned pid (graceful) → 4. SIGKILL last resort.
+ * Each step waits for the debug port to go down before reporting success.
+ */
+const terminateManagedBrowserImpl = async (record) => {
+    if (!(await probeDebugPortImpl(record.port))) {
+        return { closed: true, method: 'already-down' };
+    }
+    const wsUrl = await fetchBrowserWsUrl(record.port);
+    if (wsUrl) {
+        await cdpBrowserClose(wsUrl);
+        if (await waitForPortDown(record.port, 8)) {
+            return { closed: true, method: 'cdp' };
+        }
+    }
+    if (record.pid !== null) {
+        try {
+            process.kill(record.pid, 'SIGTERM');
+        }
+        catch {
+            /* already gone */
+        }
+        if (await waitForPortDown(record.port, 8)) {
+            return { closed: true, method: 'sigterm' };
+        }
+        try {
+            process.kill(record.pid, 'SIGKILL');
+        }
+        catch {
+            /* already gone */
+        }
+        if (await waitForPortDown(record.port, 8)) {
+            return { closed: true, method: 'sigkill' };
+        }
+    }
+    return { closed: false, method: 'failed' };
+};
+/** Regex-escape a string for safe use as a pgrep -f pattern. */
+const escapeForPgrep = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * True when any process still has `dir` in its command line — i.e. a browser
+ * instance is still using this profile. Uses pgrep -f over the escaped path.
+ * pgrep exits 1 (→ err) when nothing matches; treat that as not-referenced.
+ */
+const profileDirReferenced = (dir) => new Promise((resolveP) => {
+    execFile('pgrep', ['-f', escapeForPgrep(dir)], (err, stdout) => {
+        if (err)
+            return resolveP(false);
+        resolveP(stdout.trim().length > 0);
+    });
+});
+/** Poll until no process references the profile dir (browser fully exited) or attempts run out. */
+const waitForProfileReleased = async (dir, attempts) => {
+    for (let i = 0; i < attempts; i += 1) {
+        if (!(await profileDirReferenced(dir)))
+            return;
+        await sleep$1(250);
+    }
+};
+/**
+ * Remove a sandbox profile dir, GUARDED: only paths under ~/.pwa-debug/profiles
+ * or an os.tmpdir() entry with the sandbox-temp prefix are eligible — defense in
+ * depth so a bad caller can never rm an arbitrary (e.g. user-profile) dir.
+ *
+ * A clean CDP Browser.close drops the debug port early, but the browser's child
+ * processes keep flushing the profile to disk for a few seconds after — an
+ * immediate rmSync races those writes and the dir gets repopulated. So we first
+ * wait until no process still references the dir (the browser has fully exited),
+ * then delete and re-check once. Returns true only when the dir is actually gone.
+ */
+const discardProfileDirImpl = async (dir) => {
+    const resolved = resolve(dir);
+    const underPwaProfiles = resolved.includes(join('.pwa-debug', 'profiles'));
+    const isTempProfile = dirname(resolved) === resolve(tmpdir()) &&
+        basename(resolved).startsWith(TEMP_PROFILE_PREFIX);
+    if (!underPwaProfiles && !isTempProfile)
+        return false;
+    await waitForProfileReleased(resolved, 40); // up to ~10s for graceful shutdown
+    try {
+        rmSync(resolved, { recursive: true, force: true });
+    }
+    catch {
+        /* best-effort */
+    }
+    // A final shutdown write can race the delete; retry once if it reappeared.
+    if (existsSync(resolved)) {
+        await sleep$1(250);
+        try {
+            rmSync(resolved, { recursive: true, force: true });
+        }
+        catch {
+            /* best-effort */
+        }
+    }
+    return !existsSync(resolved);
+};
+const BROWSER_URL_ARG_RE = /--browserUrl(?:[=\s]+)(\S+)/;
+/**
+ * Read the REAL chrome-devtools-mcp registration from Claude Code via
+ * `claude mcp get chrome-devtools`. A zero exit means it is registered; the
+ * configured --browserUrl is regex-extracted from the (human-readable) output.
+ * This MCP is Claude-Code-targeted, so the `claude` CLI is the source of truth —
+ * we deliberately do NOT fall back to parsing ~/.claude.json. Never rejects:
+ * returns { registered: false } when `claude` is absent, errors, or times out.
+ */
+const readChromeDevtoolsRegistration = () => new Promise((resolveP) => {
+    execFile('claude', ['mcp', 'get', 'chrome-devtools'], { timeout: 10_000 }, (err, stdout) => {
+        if (err) {
+            resolveP({ registered: false, browserUrl: null });
+            return;
+        }
+        const match = BROWSER_URL_ARG_RE.exec(stdout ?? '');
+        resolveP({ registered: true, browserUrl: match?.[1] ?? null });
+    });
+});
+const runClaudeMcp = (args) => new Promise((resolveP) => {
+    execFile('claude', [...args], { timeout: 15_000 }, (err, _stdout, stderr) => {
+        if (err) {
+            const detail = (stderr ?? '').trim() || err.message;
+            resolveP({ ok: false, error: detail });
+            return;
+        }
+        resolveP({ ok: true, error: null });
+    });
+});
+/**
+ * Register chrome-devtools-mcp with Claude Code (user scope) pointed at the
+ * given CDP browserUrl, via `claude mcp add`. This writes a DIRECT MCP
+ * registration — Claude Code must be restarted for the new server to load.
+ */
+const addChromeDevtoolsRegistration = (browserUrl) => runClaudeMcp([
+    'mcp',
+    'add',
+    'chrome-devtools',
+    '--scope',
+    'user',
+    '--',
+    'npx',
+    '-y',
+    'chrome-devtools-mcp@latest',
+    '--browserUrl',
+    browserUrl,
+]);
+/** Remove the chrome-devtools-mcp registration via `claude mcp remove`. */
+const removeChromeDevtoolsRegistration = () => runClaudeMcp(['mcp', 'remove', 'chrome-devtools']);
+const EXTENSION_URL_RE = /^chrome-extension:\/\/([a-p]{32})\//;
+/**
+ * GET /json/list on a live debug port and return the distinct extension IDs of
+ * loaded MV3 service-worker targets (an extension surfaces its SW here once
+ * loaded). Lets the host spot an extension that is loaded in a managed browser
+ * but whose ID is not whitelisted in allowed_origins — the failure mode where
+ * the SW loads yet connectNative is rejected. Never rejects: returns [] on any
+ * error, a dead port, or a non-array body.
+ */
+const fetchLoadedExtensionIds = async (port) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+            signal: controller.signal,
+        });
+        if (!res.ok)
+            return [];
+        const body = (await res.json().catch(() => null));
+        if (!Array.isArray(body))
+            return [];
+        const ids = new Set();
+        for (const target of body) {
+            if (target === null ||
+                typeof target !== 'object' ||
+                target.type !== 'service_worker') {
+                continue;
+            }
+            const url = target.url;
+            if (typeof url !== 'string')
+                continue;
+            const id = EXTENSION_URL_RE.exec(url)?.[1];
+            if (id)
+                ids.add(id);
+        }
+        return [...ids];
+    }
+    catch {
+        return [];
+    }
+    finally {
+        clearTimeout(timer);
+    }
+};
+/** Recursively copy the unpacked extension dir to a destination. */
+const copyDir = (src, dest) => cp(src, dest, { recursive: true });
+/** Default install target: ~/Downloads/pwa-debug-extension (or HOME fallback). */
+const defaultExtensionTargetDir = (env = process.env) => {
+    const home = env.HOME && env.HOME.length > 0 ? env.HOME : '.';
+    return join(home, 'Downloads', 'pwa-debug-extension');
+};
+
+const RELAUNCH = "Launch a browser with pwa-debug so the host has its debug port: pdl_launch_browser({ profile: 'sandbox-persistent' }) (or 'sandbox-temp'), then run the sweep on that browser's extension connection.";
+const PHONE = 'Or sweep a phone: pdl_android_attach({ open_url }) and pass the returned connection id as extension_id.';
+/** Debug endpoints of launches whose port answers, normalized for comparison. */
+const liveLaunchUrls = (launches) => [
+    ...new Set(launches
+        .filter((l) => l.live)
+        .map((l) => normalizeBrowserUrl(l.browserUrl ?? String(l.port)))
+        .filter((u) => u !== null)),
+];
+/**
+ * Decide whether a connection can be swept (spec §5). Phones (CDP over adb)
+ * always can; desktop pages only inside a browser pwa-debug launched with a
+ * live debug port. Everything else is refused with what to do instead.
+ */
+const classifySweepTarget = (conn, endpoint, launches) => {
+    const live = liveLaunchUrls(launches);
+    if (conn.kind === 'cdp') {
+        if (endpoint === undefined) {
+            return {
+                ok: false,
+                error: `CDP connection ${conn.extensionId} is no longer attached`,
+                next_steps: ['Call host_status for live connections, then attach again.'],
+            };
+        }
+        if (endpoint.origin === 'android')
+            return { ok: true, kind: 'phone', endpoint };
+        const base = normalizeBrowserUrl(endpoint.baseUrl);
+        if (base !== null && live.includes(base))
+            return { ok: true, kind: 'launched_cdp', endpoint };
+        return {
+            ok: false,
+            error: `${conn.extensionId} is a desktop CDP connection to a browser pwa-debug did not launch; layout_sweep runs only on phones and on browsers started by pdl_launch_browser`,
+            next_steps: [RELAUNCH, PHONE],
+        };
+    }
+    if (live.length === 0) {
+        const portless = launches.some((l) => l.live === false || l.browserUrl === null);
+        return {
+            ok: false,
+            error: 'this extension connection is not in a browser pwa-debug launched with a live debug port, so the viewport cannot be emulated',
+            next_steps: [
+                ...(portless
+                    ? [
+                        "A launch is recorded but its debug port is not answering. An 'existing'-profile launch on Chromium 136+ has no port (the default profile refuses --remote-debugging-port).",
+                    ]
+                    : []),
+                RELAUNCH,
+                PHONE,
+            ],
+        };
+    }
+    return { ok: true, kind: 'launched_extension', browserUrls: live };
+};
+/**
+ * Find the CDP page of an extension connection's tab: stamp a one-time nonce
+ * through the bridge, then look for it in every page on the launched debug
+ * ports. Exactly one match is the tab.
+ */
+const locateTabByNonce = async (deps, browserUrls, nonce) => {
+    await deps.stampNonce(nonce);
+    try {
+        const perBrowser = await Promise.all(browserUrls.map(async (baseUrl) => {
+            const targets = (await deps.listTargets(baseUrl)) ?? [];
+            const flags = await Promise.all(targets.map((t) => deps.hasNonce(t.webSocketDebuggerUrl, nonce).catch(() => false)));
+            return targets.filter((_, i) => flags[i]).map((target) => ({ baseUrl, target }));
+        }));
+        const matches = perBrowser.flat();
+        const only = matches[0];
+        if (matches.length === 1 && only !== undefined)
+            return { ok: true, ...only };
+        return {
+            ok: false,
+            error: matches.length === 0
+                ? `the connection's tab was not found on any launched browser's debug port (${browserUrls.join(', ')}); this extension connection is probably in a browser pwa-debug did not launch`
+                : `the connection's tab matched ${matches.length} pages; pass tab_id to pick one`,
+        };
+    }
+    finally {
+        await deps.clearNonce().catch(() => undefined);
+    }
+};
+
+const NAV_TIMEOUT_MS = 12_000;
+const EVAL_TIMEOUT_MS = 3_000;
+const IPC_SLACK_MS = 2_000;
+/** Bind the router to one connection (and optional tab) as a ConnectionRequest. */
+const connectionRequest = (router, connectionId) => (tool, payload, timeoutMs) => {
+    const env = Object.freeze({
+        type: 'request',
+        requestId: randomUUID(),
+        tool,
+        extensionId: connectionId,
+        payload,
+    });
+    return router.request(connectionId, env, { timeoutMs });
+};
+const unwrap$1 = (r, what) => {
+    if (r.error !== undefined)
+        throw new Error(`${what}: ${r.error.message}`);
+    return r.payload;
+};
+const pageError = (payload) => {
+    if (payload === null || typeof payload !== 'object')
+        return null;
+    const e = payload.error;
+    return e !== undefined && typeof e.message === 'string' ? e.message : null;
+};
+/**
+ * PageOps over a connection. tab_id is passed only for extension connections
+ * (CDP sessions are one page each and ignore it).
+ */
+const createPageOps = (request, tabId) => {
+    const withTab = (p) => tabId !== undefined ? { ...p, tab_id: tabId } : p;
+    const evaluate = async (expression, awaitPromise = false) => {
+        const payload = unwrap$1(await request('evaluate', withTab({ expression, timeout_ms: EVAL_TIMEOUT_MS, ...(awaitPromise ? { await_promise: true } : {}) }), EVAL_TIMEOUT_MS + IPC_SLACK_MS), 'evaluate');
+        const err = pageError(payload);
+        if (err !== null)
+            throw new Error(`page expression failed: ${err}`);
+        return payload?.value;
+    };
+    const layoutMeasure = async (req) => {
+        const payload = unwrap$1(await request('layout_measure', withTab({ ...req }), EVAL_TIMEOUT_MS + IPC_SLACK_MS), 'layout_measure');
+        const err = pageError(payload);
+        if (err !== null)
+            throw new Error(err);
+        return payload;
+    };
+    return Object.freeze({
+        navigate: async (url) => {
+            unwrap$1(await request('pdl_navigate', withTab({ url, timeout_ms: 10_000 }), NAV_TIMEOUT_MS + IPC_SLACK_MS), 'navigate');
+        },
+        evaluate,
+        measure: async (req) => (await layoutMeasure(req)),
+        freeze: async () => {
+            await layoutMeasure({ op: 'freeze' });
+        },
+        ping: async () => {
+            try {
+                const r = await request('session_ping', withTab({}), 2_000);
+                return r.error === undefined;
+            }
+            catch {
+                return false;
+            }
+        },
+    });
+};
+/** True for the router's "connection is gone" failure. */
+const isConnectionGone = (err) => err instanceof Error && /no connected NMH for/.test(err.message);
+
+const newSweepJob = (init) => ({
+    job_id: init.job_id,
+    connection_id: init.connection_id,
+    target: init.target,
+    status: 'running',
+    started_at: init.now,
+    planned_views: init.planned_views,
+    views_done: 0,
+    findings: [],
+    views: [],
+    caveats: init.caveats,
+    warnings: [],
+    screenshots: {},
+    report_path: init.report_path,
+});
+/** Place a view's raw findings in that view. */
+const locateFindings = (view, findings) => findings.map((f) => ({ ...f, page: view.page, where: view.label }));
+const withCurrent = (job, view) => ({
+    ...job,
+    current: { page: view.page, label: view.label },
+});
+/** Record one finished view: its located findings and its view record. */
+const recordView = (job, view, findings, record) => ({
+    ...job,
+    views_done: job.views_done + 1,
+    findings: [...job.findings, ...locateFindings(view, findings)],
+    views: [
+        ...job.views,
+        {
+            label: view.label,
+            page: view.page,
+            width: view.viewport?.width ?? null,
+            findings: findings.length,
+            duration_ms: record.duration_ms,
+            ...(record.error !== undefined ? { error: record.error } : {}),
+        },
+    ],
+});
+const withPlanned = (job, planned) => ({ ...job, planned_views: planned });
+const withWarning = (job, warning) => job.warnings.includes(warning) ? job : { ...job, warnings: [...job.warnings, warning] };
+const withScreenshot = (job, key, path) => ({
+    ...job,
+    screenshots: { ...job.screenshots, [key]: path },
+});
+const finishJob = (job, status, now, error) => {
+    const { current: _current, ...rest } = job;
+    return { ...rest, status, finished_at: now, ...(error !== undefined ? { error } : {}) };
+};
+const OVERFLOW_FIRST = new Set(['page_overflow_x']);
+/** Overflow groups first (their views' other geometry findings are often symptoms), then by count. */
+const orderGroups = (groups) => [
+    ...groups.filter((g) => OVERFLOW_FIRST.has(g.check)),
+    ...groups.filter((g) => !OVERFLOW_FIRST.has(g.check)),
+];
+/** The status/result view of a job (spec §6.2), groups capped inline. */
+const buildSweepResult = (job, now, cap = 50) => {
+    const grouped = orderGroups(groupFindings(job.findings));
+    const capped = capGroups(grouped, cap);
+    return {
+        job_id: job.job_id,
+        connection_id: job.connection_id,
+        status: job.status,
+        target: job.target,
+        caveats: job.caveats,
+        warnings: job.warnings,
+        views: job.views_done,
+        planned_views: job.planned_views,
+        duration_ms: (job.finished_at ?? now) - job.started_at,
+        ...(job.current !== undefined ? { current: job.current } : {}),
+        summary: summarizeFindings(job.findings, grouped),
+        groups: capped.groups.map((g) => {
+            const shot = job.screenshots[groupKey(g)];
+            return shot !== undefined ? { ...g, screenshot: shot } : g;
+        }),
+        omitted_groups: capped.omitted,
+        failed_views: job.views.filter((v) => v.error !== undefined).length,
+        view_errors: job.views
+            .flatMap((v) => (v.error !== undefined ? [{ label: v.label, error: v.error }] : []))
+            .slice(0, 5),
+        report_path: job.report_path,
+        ...(job.error !== undefined ? { error: job.error } : {}),
+    };
+};
+/** Every finding and view, for the report file. */
+const buildSweepReport = (job, now) => ({
+    ...buildSweepResult(job, now, Number.MAX_SAFE_INTEGER),
+    view_records: job.views,
+    findings: job.findings,
+});
+const MAX_KEPT_JOBS = 20;
+/**
+ * In-memory job store (jobs live in the host, spec §2). Finished jobs beyond
+ * the last MAX_KEPT_JOBS are dropped; their report files stay on disk.
+ */
+const createSweepStore = () => {
+    const jobs = new Map();
+    const cancelled = new Set();
+    const prune = () => {
+        const finished = [...jobs.values()].filter((j) => j.status !== 'running');
+        finished
+            .slice(0, Math.max(0, finished.length - MAX_KEPT_JOBS))
+            .forEach((j) => {
+            jobs.delete(j.job_id);
+            cancelled.delete(j.job_id);
+        });
+    };
+    return Object.freeze({
+        put: (job) => {
+            jobs.set(job.job_id, job);
+            prune();
+        },
+        get: (id) => jobs.get(id),
+        update: (id, fn) => {
+            const cur = jobs.get(id);
+            if (cur === undefined)
+                return undefined;
+            const next = fn(cur);
+            jobs.set(id, next);
+            return next;
+        },
+        latest: () => [...jobs.values()].sort((a, b) => b.started_at - a.started_at)[0],
+        activeFor: (connectionId) => [...jobs.values()].find((j) => j.connection_id === connectionId && j.status === 'running'),
+        requestCancel: (id) => {
+            const j = jobs.get(id);
+            if (j === undefined || j.status !== 'running')
+                return false;
+            cancelled.add(id);
+            return true;
+        },
+        isCancelled: (id) => cancelled.has(id),
+    });
+};
+let singleton = null;
+/** The host-wide store the layout_sweep tools share. */
+const getSweepStore = () => {
+    singleton ??= createSweepStore();
+    return singleton;
+};
+
+/**
+ * CDP emulation for the sweep, on the job's own client. Emulation is scoped
+ * to that client's session, so closing the client also undoes it; reset is
+ * called explicitly anyway so the page is restored before the client closes.
+ */
+/** Set (or clear, for null = the device's own size) the device-metrics override. */
+const applyViewport = async (client, viewport) => {
+    if (viewport === null) {
+        await client.send('Emulation.clearDeviceMetricsOverride');
+        return;
+    }
+    await client.send('Emulation.setDeviceMetricsOverride', {
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: viewport.dpr,
+        mobile: viewport.mobile,
+    });
+};
+const applyColorScheme = async (client, scheme) => {
+    await client.send('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-color-scheme', value: scheme === 'no-preference' ? '' : scheme }],
+    });
+};
+/** Drop every override the sweep set. Best effort: a closed page has nothing to restore. */
+const resetEmulation = async (client) => {
+    await client.send('Emulation.clearDeviceMetricsOverride').catch(() => undefined);
+    await client.send('Emulation.setEmulatedMedia', { media: '', features: [] }).catch(() => undefined);
+};
+/** Reload the page and wait for its load event (or the timeout). */
+const reloadAndWait = (client, timeoutMs) => new Promise((resolve) => {
+    let off = () => undefined;
+    const timer = setTimeout(() => {
+        off();
+        resolve('loading');
+    }, timeoutMs);
+    off = client.on('Page.loadEventFired', () => {
+        clearTimeout(timer);
+        off();
+        resolve('complete');
+    });
+    client.send('Page.reload', { ignoreCache: false }).catch(() => {
+        clearTimeout(timer);
+        off();
+        resolve('loading');
+    });
+});
+const CLIP_MARGIN = 16;
+/** Screenshot clip around a viewport-relative rect, in page coordinates. */
+const clipFor = (rect, scroll) => {
+    const x = Math.max(0, rect.x + scroll.x - CLIP_MARGIN);
+    const y = Math.max(0, rect.y + scroll.y - CLIP_MARGIN);
+    return {
+        x,
+        y,
+        width: Math.max(1, rect.width + CLIP_MARGIN * 2),
+        height: Math.max(1, Math.min(rect.height + CLIP_MARGIN * 2, 2000)),
+        scale: 1,
+    };
+};
+/** PNG (base64) of a clip, or null when the capture fails. */
+const captureClip = async (client, clip) => {
+    try {
+        const r = (await client.send('Page.captureScreenshot', {
+            format: 'png',
+            clip,
+            captureBeyondViewport: true,
+        }));
+        return typeof r.data === 'string' ? r.data : null;
+    }
+    catch {
+        return null;
+    }
+};
+
+const MAX_STATES = 200;
+const MAX_SCREENSHOTS = 50;
+const WAIT_FOR_TIMEOUT_MS = 3_000;
+const WAIT_FOR_POLL_MS = 100;
+const BRIDGE_WAIT_MS = 8_000;
+const RELOAD_TIMEOUT_MS = 12_000;
+const withTimeout = (p, ms) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ ok: false }), ms);
+    p.then((value) => {
+        clearTimeout(timer);
+        resolve({ ok: true, value });
+    }, (err) => {
+        clearTimeout(timer);
+        reject(err);
+    });
+});
+/** Poll until the bridge answers session_ping (after a navigation or reload). */
+const waitForBridge = async (deps, timeoutMs = BRIDGE_WAIT_MS) => {
+    const deadline = deps.now() + timeoutMs;
+    while (deps.now() < deadline) {
+        if (await deps.page.ping())
+            return true;
+        await deps.sleep(150);
+    }
+    return false;
+};
+/** State keys for the loaded page: the driver's discover expression, deduped and capped, or ['']. */
+const discoverStates = async (page, driver) => {
+    if (driver?.discover === undefined)
+        return { states: [''] };
+    try {
+        const raw = await page.evaluate(driver.discover, true);
+        const list = Array.isArray(raw) ? raw.filter((s) => typeof s === 'string') : [];
+        const states = [...new Set(list)].slice(0, MAX_STATES);
+        if (states.length === 0) {
+            return { states: [''], warning: 'states.discover returned no state keys on a page; it was swept as loaded' };
+        }
+        return {
+            states,
+            ...(list.length > MAX_STATES ? { warning: `states.discover returned more than ${MAX_STATES} states; the rest were skipped` } : {}),
+        };
+    }
+    catch (err) {
+        return { states: [''], warning: `states.discover failed (${err.message}); the page was swept as loaded` };
+    }
+};
+/** Apply one view's state: the driver's apply expression, or hash_template; optional reload. */
+const applyState = async (deps, view, driver, device) => {
+    if (driver === undefined)
+        return null;
+    const vars = viewVars(view, device);
+    let warning = null;
+    if (driver.apply !== undefined) {
+        await deps.page.evaluate(`((view) => (${driver.apply}))(${JSON.stringify(vars)})`, true);
+    }
+    else if (driver.hash_template !== undefined) {
+        const hash = expandTemplate(driver.hash_template, vars);
+        const h = JSON.stringify(hash.startsWith('#') ? hash : `#${hash}`);
+        const took = await deps.page.evaluate(`(location.hash = ${h}, location.hash === ${h} || (${h} === '#' && location.hash === ''))`);
+        if (took !== true) {
+            warning =
+                'states.hash_template: location.hash did not change, so states were not applied (pages loaded from data: or other opaque URLs cannot take a fragment). Serve the pages over http(s) or use states.apply.';
+        }
+    }
+    else {
+        return null;
+    }
+    if (driver.reload === true) {
+        await reloadAndWait(deps.cdp, RELOAD_TIMEOUT_MS);
+        await waitForBridge(deps);
+    }
+    return warning;
+};
+const settleView = async (deps, settle) => {
+    if (settle.wait_ms > 0)
+        await deps.sleep(settle.wait_ms);
+    if (settle.wait_for === undefined)
+        return null;
+    const deadline = deps.now() + WAIT_FOR_TIMEOUT_MS;
+    while (deps.now() < deadline) {
+        const ok = await deps.page.evaluate(`Boolean(${settle.wait_for})`, true).catch(() => false);
+        if (ok === true)
+            return null;
+        await deps.sleep(WAIT_FOR_POLL_MS);
+    }
+    return `settle.wait_for stayed falsy for ${WAIT_FOR_TIMEOUT_MS}ms; measured anyway`;
+};
+/** Page errors in the view's window, as findings. */
+const errorFindings = (errors) => errors.map((e) => ({
+    check: 'errors',
+    signature: `error "${e.message.slice(0, 80)}"`,
+    message: `page error during the view: ${e.message.slice(0, 300)}`,
+}));
+const measureOnce = async (deps, input) => {
+    const req = {
+        checks: input.checks,
+        exempt_selectors: input.exempt_selectors,
+        ...(input.root_selector !== undefined ? { root_selector: input.root_selector } : {}),
+    };
+    try {
+        return await deps.page.measure(req);
+    }
+    catch (err) {
+        if (isConnectionGone(err))
+            throw err;
+        // The bridge may be re-attaching after a state change; wait once and retry.
+        await waitForBridge(deps, 3_000);
+        return deps.page.measure(req);
+    }
+};
+const runView = async (deps, input, view) => {
+    const started = deps.now();
+    const stateWarning = await applyState(deps, view, input.plan.states, input.device);
+    if (input.settle.freeze_animations)
+        await deps.page.freeze().catch(() => undefined);
+    const warning = stateWarning ?? (await settleView(deps, input.settle));
+    const measured = await measureOnce(deps, input);
+    const errors = input.checks.errors.enabled ? errorFindings(deps.errorsSince(started)) : [];
+    return {
+        findings: [...measured.findings, ...errors],
+        measured,
+        ...(warning !== null ? { warning } : {}),
+    };
+};
+const viewportKey = (v) => (v === null ? 'device' : `${v.width}x${v.height}@${v.dpr}${v.mobile ? 'm' : ''}`);
+/** First-per-group screenshots for groups this view introduces. */
+const shootNewGroups = async (deps, jobId, findings, scroll) => {
+    const fresh = findings.filter((f) => f.rect !== undefined);
+    for (const f of fresh) {
+        const job = deps.store.get(jobId);
+        if (job === undefined)
+            return;
+        const key = groupKey(f);
+        const taken = Object.keys(job.screenshots).length;
+        if (job.screenshots[key] !== undefined || taken >= MAX_SCREENSHOTS)
+            continue;
+        const data = await captureClip(deps.cdp, clipFor(f.rect, scroll));
+        if (data === null)
+            continue;
+        const path = await deps.writeScreenshot(jobId, taken + 1, data);
+        deps.store.update(jobId, (j) => withScreenshot(j, key, path));
+    }
+};
+/**
+ * Run a sweep job to the end: page by page (navigate, discover states), view
+ * by view (emulate, apply state, settle, measure). Progress and partial
+ * results land in the store as they happen. Emulation and the starting URL
+ * are restored however the job ends, and the report file is written.
+ */
+const runSweep = async (deps, input) => {
+    const id = input.job_id;
+    const update = (fn) => {
+        deps.store.update(id, fn);
+    };
+    let lastViewport = null;
+    let lastScheme = null;
+    let budget = input.plan.max_views;
+    let planned = 0;
+    let status = 'done';
+    let failure;
+    try {
+        await deps.cdp.send('Page.enable').catch(() => undefined);
+        pages: for (const [pageIndex, url] of input.plan.pages.entries()) {
+            if (deps.store.isCancelled(id)) {
+                status = 'cancelled';
+                break;
+            }
+            await deps.page.navigate(url);
+            await waitForBridge(deps);
+            const { states, warning } = await discoverStates(deps.page, input.plan.states);
+            if (warning !== undefined)
+                update((j) => withWarning(j, warning));
+            const views = planPageViews(input.plan, url, states);
+            const remainingPages = input.plan.pages.length - pageIndex - 1;
+            planned += views.length;
+            const estimateRest = remainingPages * input.plan.viewports.length * input.plan.schemes.length * input.plan.dimCombos.length;
+            update((j) => withPlanned(j, Math.min(input.plan.max_views, planned + estimateRest)));
+            for (const view of views) {
+                if (deps.store.isCancelled(id)) {
+                    status = 'cancelled';
+                    break pages;
+                }
+                if (budget <= 0) {
+                    update((j) => withWarning(j, `stopped at max_views ${input.plan.max_views}; later views were not swept`));
+                    break pages;
+                }
+                budget -= 1;
+                update((j) => withCurrent(j, view));
+                const vk = viewportKey(view.viewport);
+                if (vk !== lastViewport) {
+                    await applyViewport(deps.cdp, view.viewport);
+                    lastViewport = vk;
+                }
+                if (view.scheme !== lastScheme) {
+                    await applyColorScheme(deps.cdp, view.scheme);
+                    lastScheme = view.scheme;
+                }
+                const started = deps.now();
+                try {
+                    const timed = await withTimeout(runView(deps, input, view), input.view_timeout_ms);
+                    if (!timed.ok) {
+                        const f = {
+                            check: 'timeout',
+                            signature: 'view',
+                            message: `the view did not finish within ${input.view_timeout_ms}ms (state apply, settle or measure hung)`,
+                        };
+                        update((j) => recordView(j, view, [f], { duration_ms: deps.now() - started, error: 'timeout' }));
+                        continue;
+                    }
+                    const out = timed.value;
+                    if (out.warning !== undefined)
+                        update((j) => withWarning(j, out.warning));
+                    update((j) => recordView(j, view, out.findings, { duration_ms: deps.now() - started }));
+                    if (input.screenshots === 'first_per_group' && out.measured !== undefined) {
+                        await shootNewGroups(deps, id, out.findings, out.measured.scroll);
+                    }
+                }
+                catch (err) {
+                    if (isConnectionGone(err))
+                        throw err;
+                    update((j) => recordView(j, view, [], { duration_ms: deps.now() - started, error: err.message.slice(0, 300) }));
+                }
+            }
+        }
+    }
+    catch (err) {
+        status = isConnectionGone(err) ? 'interrupted' : 'failed';
+        failure = err.message;
+    }
+    finally {
+        await resetEmulation(deps.cdp);
+        if (status !== 'interrupted') {
+            await deps.page.navigate(input.start_url).catch(() => undefined);
+        }
+        update((j) => finishJob(j, status, deps.now(), failure));
+        const finished = deps.store.get(id);
+        if (finished !== undefined)
+            await deps.writeReport(finished).catch(() => undefined);
+    }
+};
+
+const toggle = (knobs) => unionType([booleanType(), objectType({ enabled: booleanType().optional(), ...knobs })]).optional();
+const checksSchema = objectType({
+    page_overflow_x: toggle({}),
+    offscreen: toggle({}),
+    tap_target: toggle({ min: numberType().optional() }),
+    pinned_visible: toggle({ pinned_selectors: arrayType(stringType()).optional() }),
+    text_clipped: toggle({}),
+    edge_contact: toggle({ min_inset: numberType().optional() }),
+    text_patterns: toggle({ extra: arrayType(stringType()).optional() }),
+    errors: toggle({}),
+    contrast: toggle({}),
+})
+    .optional();
+const schemeSchema = enumType(['light', 'dark', 'no-preference']);
+const sweepSchema = {
+    extension_id: stringType().min(1).optional(),
+    tab_id: numberType().int().optional(),
+    pages: arrayType(stringType().min(1)).min(1),
+    base_url: stringType().min(1).optional(),
+    viewports: arrayType(objectType({
+        width: numberType(),
+        height: numberType().optional(),
+        dpr: numberType().optional(),
+        mobile: booleanType().optional(),
+    }))
+        .min(1)
+        .optional(),
+    color_schemes: arrayType(schemeSchema).min(1).optional(),
+    states: objectType({
+        discover: stringType().min(1).optional(),
+        apply: stringType().min(1).optional(),
+        hash_template: stringType().min(1).optional(),
+        dimensions: recordType(stringType(), arrayType(stringType())).optional(),
+        reload: booleanType().optional(),
+    })
+        .optional(),
+    root_selector: stringType().min(1).optional(),
+    settle: objectType({
+        wait_ms: numberType().int().min(0).max(10_000).optional(),
+        wait_for: stringType().min(1).optional(),
+        freeze_animations: booleanType().optional(),
+    })
+        .optional(),
+    checks: checksSchema,
+    exempt_selectors: arrayType(stringType().min(1)).optional(),
+    max_views: numberType().int().optional(),
+    screenshots: enumType(['none', 'first_per_group']).optional(),
+    view_timeout_ms: numberType().int().min(1_000).max(60_000).optional(),
+    report_path: stringType().min(1).optional(),
+};
+const defaultLayoutSweepDeps = () => ({
+    store: getSweepStore(),
+    listLaunches: () => getLaunchRegistry().list(),
+    probePort: (port) => defaultLaunchDeps().probeDebugPort(port),
+    connect: (ws) => connectCdp(ws),
+    listTargets: async (baseUrl) => {
+        const r = await listPageTargets(baseUrl);
+        return r.ok ? r.value : null;
+    },
+    writeText: async (path, data) => {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, data);
+    },
+    writeJson: atomicWriteJson,
+    reportPath: (id) => xdgConfigPath(`layout-sweeps/${id}.json`),
+    screenshotPath: (id, n) => xdgConfigPath(`layout-sweeps/${id}/group-${n}.png`),
+    now: Date.now,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    newId: () => `sweep-${randomUUID().slice(0, 8)}`,
+});
+const liveLaunches = async (deps) => Promise.all(deps.listLaunches().map(async (l) => ({
+    browser: l.browser,
+    profileType: l.profileType,
+    port: l.port,
+    browserUrl: l.browserUrl,
+    live: await deps.probePort(l.port).catch(() => false),
+})));
+const hasNonce = (deps) => async (ws, nonce) => {
+    const client = await deps.connect(ws);
+    try {
+        const r = (await client.send('Runtime.evaluate', { expression: `globalThis.__pdl_sweep_nonce === ${JSON.stringify(nonce)}`, returnByValue: true }, { timeoutMs: 2_000 }));
+        return r.result?.value === true;
+    }
+    finally {
+        client.close();
+    }
+};
+/** The page's own size and URL before the sweep touches anything. */
+const readStart = async (page) => {
+    const v = await page.evaluate('[location.href, document.documentElement.clientWidth || innerWidth, document.documentElement.clientHeight || innerHeight]');
+    const [url, width, height] = Array.isArray(v) ? v : [];
+    return {
+        url: typeof url === 'string' ? url : '',
+        width: typeof width === 'number' ? width : 0,
+        height: typeof height === 'number' ? height : 0,
+    };
+};
+const caveatsFor = (target, device, widths, schemes) => [
+    ...(target === 'launched_browser'
+        ? ['Desktop browser emulating a phone viewport: fonts, scrollbars and the user agent are the desktop browser\'s. Confirm important findings on a phone.']
+        : []),
+    ...(target === 'phone' && widths.some((w) => w > device.width + 1)
+        ? [`Some viewports are wider than this phone's own ${device.width}px layout width; the phone scales those views down.`]
+        : []),
+    ...(schemes.includes('no-preference') ? ["'no-preference' leaves prefers-color-scheme at the device's own setting."] : []),
+];
+const resultNextSteps = (r) => {
+    if (r.status === 'running') {
+        return [
+            `Running: ${r.views}/${r.planned_views} views${r.current !== undefined ? ` (now ${r.current.label})` : ''}. Call layout_sweep_status({ job_id: "${r.job_id}" }) again in a few seconds; partial groups are already included.`,
+        ];
+    }
+    const first = r.groups[0];
+    return [
+        ...(r.failed_views > 0
+            ? [`${r.failed_views} view(s) failed instead of measuring (see view_errors), e.g. ${r.view_errors[0]?.label}: ${r.view_errors[0]?.error}. A bad root_selector/exempt selector or a failing states.apply fails every view; fix it first.`]
+            : []),
+        ...(r.status !== 'done' ? [`The sweep ended ${r.status}${r.error !== undefined ? `: ${r.error}` : ''}. Results cover the ${r.views} views that ran.`] : []),
+        ...(first === undefined
+            ? [r.views > 0 && r.failed_views === r.views ? 'No view was measured, so there are no results yet; fix the view errors above and re-run.' : 'No problems found in the swept views.']
+            : [
+                `Fix first: [${first.check}] ${first.message} (${first.count}× on ${first.pages.length} page(s)).`,
+                ...(r.groups.some((g) => g.check === 'page_overflow_x')
+                    ? ['Page overflow is listed first: on a phone it widens the layout viewport, so offscreen / pinned findings on those views may be symptoms. Fix it and re-run.']
+                    : []),
+                'After fixing, re-run layout_sweep on only the affected pages (groups[].pages).',
+            ]),
+        `Every finding and view is in ${r.report_path}.`,
+    ];
+};
+const layoutSweepStart = async (args, ctx, deps) => {
+    const resolved = resolveTarget$1(ctx, args.extension_id);
+    if (!resolved.ok)
+        return errorResponse$1(resolved.error, ['Call host_status to see live connections.']);
+    const connId = resolved.extensionId;
+    const conn = ctx.ipcServer.listConnections().find((c) => c.extensionId === connId);
+    if (conn === undefined)
+        return errorResponse$1(`connection ${connId} disappeared`, ['Call host_status.']);
+    const active = deps.store.activeFor(connId);
+    if (active !== undefined) {
+        return errorResponse$1(`a sweep is already running on ${connId} (job ${active.job_id})`, [
+            `Wait for it (layout_sweep_status({ job_id: "${active.job_id}" })) or stop it (layout_sweep_cancel).`,
+        ]);
+    }
+    const endpoint = conn.kind === 'cdp' ? ctx.cdp?.pageEndpoint(connId) : undefined;
+    const cls = classifySweepTarget(conn, endpoint, await liveLaunches(deps));
+    if (!cls.ok)
+        return errorResponse$1(cls.error, cls.next_steps);
+    const target = cls.kind === 'phone' ? 'phone' : 'launched_browser';
+    const checks = resolveChecksConfig(args.checks);
+    if (!checks.ok)
+        return errorResponse$1(checks.error, ['Fix the checks argument; pdl_help({ topic: "layout" }) shows the knobs.']);
+    const planned = planSweep({
+        target,
+        pages: args.pages,
+        ...(args.base_url !== undefined ? { base_url: args.base_url } : {}),
+        ...(args.viewports !== undefined ? { viewports: args.viewports } : {}),
+        ...(args.color_schemes !== undefined ? { color_schemes: args.color_schemes } : {}),
+        ...(args.states !== undefined ? { states: args.states } : {}),
+        ...(args.max_views !== undefined ? { max_views: args.max_views } : {}),
+    });
+    if (!planned.ok)
+        return errorResponse$1(planned.error, ['Fix the arguments and call layout_sweep again.']);
+    const plan = planned.plan;
+    const tabId = conn.kind === 'extension' ? args.tab_id : undefined;
+    const page = createPageOps(connectionRequest(ctx.ipcServer, connId), tabId);
+    let wsUrl;
+    if (cls.kind === 'launched_extension') {
+        const located = await locateTabByNonce({
+            stampNonce: async (n) => {
+                await page.evaluate(`(globalThis.__pdl_sweep_nonce = ${JSON.stringify(n)}, true)`);
+            },
+            clearNonce: async () => {
+                await page.evaluate('(delete globalThis.__pdl_sweep_nonce, true)');
+            },
+            listTargets: deps.listTargets,
+            hasNonce: hasNonce(deps),
+        }, cls.browserUrls, deps.newId());
+        if (!located.ok) {
+            return errorResponse$1(located.error, [
+                "layout_sweep runs only on browsers pwa-debug launched. pdl_launch_browser({ profile: 'sandbox-persistent' }), or attach a phone with pdl_android_attach.",
+            ]);
+        }
+        wsUrl = located.target.webSocketDebuggerUrl;
+    }
+    else {
+        wsUrl = cls.endpoint.webSocketDebuggerUrl;
+    }
+    // Capability probe: an extension whose service worker predates layout_measure
+    // (unpacked builds keep the old worker across restarts) would fail every view.
+    try {
+        await page.measure({ op: 'unfreeze' });
+    }
+    catch (err) {
+        const msg = err.message;
+        return errorResponse$1(/unknown tool/.test(msg)
+            ? 'the connected pwa-debug extension (or page bridge) does not know layout_measure yet; it predates the layout sweep'
+            : `the page bridge did not answer layout_measure: ${msg}`, [
+            'Reload the pwa-debug extension (chrome://extensions → reload, or relaunch with pdl_launch_browser), reload the tab, then call layout_sweep again.',
+            'An unpacked extension keeps its old service worker across browser restarts until it is reloaded.',
+        ]);
+    }
+    let start;
+    try {
+        start = await readStart(page);
+    }
+    catch (err) {
+        return errorResponse$1(`cannot read the page before sweeping: ${err.message}`, [
+            'Make sure the tab shows a normal web page (not chrome:// or the web store) and call session_ping.',
+        ]);
+    }
+    let client;
+    try {
+        client = await deps.connect(wsUrl);
+    }
+    catch (err) {
+        return errorResponse$1(`cannot open a CDP session on the page: ${err.message}`, [
+            'The debug port may have closed. Call pdl_browser_status (desktop) or pdl_android_devices (phone).',
+        ]);
+    }
+    const jobId = deps.newId();
+    const reportPath = args.report_path ?? deps.reportPath(jobId);
+    const widths = plan.viewports.flatMap((v) => (v === null ? [] : [v.width]));
+    const caveats = caveatsFor(target, start, widths, plan.schemes);
+    deps.store.put(newSweepJob({ job_id: jobId, connection_id: connId, target, planned_views: plan.estimated_views, caveats, report_path: reportPath, now: deps.now() }));
+    const captures = ctx.capturesRegistry;
+    void runSweep({
+        page,
+        cdp: client,
+        store: deps.store,
+        errorsSince: (since) => (captures.get(connId)?.tail('page_error', { filter: (e) => e.receivedAt >= since }) ?? []).map((e) => ({
+            message: typeof e['message'] === 'string' ? e['message'] : String(e['subkind'] ?? 'error'),
+        })),
+        writeScreenshot: async (id, n, b64) => {
+            const path = deps.screenshotPath(id, n);
+            await deps.writeText(path, Buffer.from(b64, 'base64'));
+            return path;
+        },
+        writeReport: (job) => deps.writeJson(job.report_path, buildSweepReport(job, deps.now())),
+        now: deps.now,
+        sleep: deps.sleep,
+    }, {
+        job_id: jobId,
+        plan,
+        checks: checks.config,
+        exempt_selectors: args.exempt_selectors ?? [],
+        ...(args.root_selector !== undefined ? { root_selector: args.root_selector } : {}),
+        settle: {
+            wait_ms: args.settle?.wait_ms ?? 80,
+            freeze_animations: args.settle?.freeze_animations ?? true,
+            ...(args.settle?.wait_for !== undefined ? { wait_for: args.settle.wait_for } : {}),
+        },
+        screenshots: args.screenshots ?? 'none',
+        view_timeout_ms: args.view_timeout_ms ?? 5_000,
+        start_url: start.url,
+        device: { width: start.width, height: start.height },
+    }).finally(() => client.close());
+    return okResponse({ job_id: jobId, connection_id: connId, target, planned_views: plan.estimated_views, caveats, report_path: reportPath }, [
+        `Sweep started (${plan.estimated_views} views planned before state discovery). Poll layout_sweep_status({ job_id: "${jobId}" }); partial results are available while it runs.`,
+        'The sweep drives this tab (navigation, viewport and color-scheme emulation) until it finishes; avoid other page actions on it meanwhile. The starting URL and emulation are restored at the end.',
+    ]);
+};
+const layoutSweepStatus = (args, deps) => {
+    const job = args.job_id !== undefined ? deps.store.get(args.job_id) : deps.store.latest();
+    if (job === undefined) {
+        return errorResponse$1(args.job_id !== undefined ? `no sweep job ${args.job_id}` : 'no sweep has run in this host session', [
+            'Start one with layout_sweep. Finished jobs from earlier host sessions are only in their report files.',
+        ]);
+    }
+    const r = buildSweepResult(job, deps.now());
+    return okResponse(r, resultNextSteps(r));
+};
+const layoutSweepCancel = (args, deps) => {
+    const job = deps.store.get(args.job_id);
+    if (job === undefined)
+        return errorResponse$1(`no sweep job ${args.job_id}`, ['layout_sweep_status lists the latest job.']);
+    if (!deps.store.requestCancel(args.job_id)) {
+        return okResponse({ job_id: job.job_id, status: job.status }, [`Job already ${job.status}; nothing to cancel.`]);
+    }
+    return okResponse({ job_id: job.job_id, status: 'cancelling' }, [
+        'The sweep stops after the current view, then restores the viewport, color scheme and starting URL. layout_sweep_status shows the partial results.',
+    ]);
+};
+const layoutSweepTool = Object.freeze({
+    name: 'layout_sweep',
+    description: "Responsive layout audit across a view matrix: pages × viewport widths × color schemes × app states. For every view it emulates the viewport and prefers-color-scheme over CDP on the real top-level page, applies the app state, settles, and measures in the page: sideways page overflow, elements off screen (scroll rows and carousels skipped automatically), tap targets under the minimum (WCAG 2.2 default 24px; set checks.tap_target.min 44/48 for platform guidelines), fixed bars not fully on screen, cut-off text, text or fields touching their box's edge, unresolved copy ({{x}}, undefined, NaN, [object Object], plus checks.text_patterns.extra), page errors, and optionally contrast. Results are grouped into distinct problems, not raw rows. Runs in the background: returns { job_id, planned_views, target } at once; poll layout_sweep_status. TARGETS: phones (pdl_android_attach connection) and browsers started by pdl_launch_browser (extension connection; the host uses the launch's debug port). Other connections are refused. Args: { extension_id?, tab_id?, pages: absolute URLs or paths with base_url, base_url?, viewports?: [{ width, height?=800, dpr?=2, mobile?=true }] (default 360/390/430; phones also check their own size first), color_schemes?: ['light','dark'] default, states?: { discover?: expression → string[] of state keys, apply?: expression with `view` bound ({ state, scheme, width, height, page, ...dimensions }), hash_template?: '#state={state}&lang={lang}', dimensions?: { lang: ['en','es'] }, reload?: reload after applying }, root_selector?, settle?: { wait_ms?=80, wait_for?: expression, freeze_animations?=true }, checks?: each check true/false or its knobs, exempt_selectors?, max_views?=2000 (≤10000), screenshots?: 'none' | 'first_per_group', view_timeout_ms?=5000, report_path? }. pdl_help({ topic: 'layout' }) has a worked example.",
+    inputSchema: sweepSchema,
+    handler: (args, ctx) => layoutSweepStart(args, ctx, defaultLayoutSweepDeps()),
+});
+const statusSchema = { job_id: stringType().min(1).optional() };
+const layoutSweepStatusTool = Object.freeze({
+    name: 'layout_sweep_status',
+    description: 'Progress and results of a layout_sweep job (the latest one when job_id is omitted): status (running | done | cancelled | interrupted | failed), views done / planned, the current view, caveats and warnings, summary { problems, groups, by_check }, and groups: distinct problems most frequent first (page overflow always first), each { check, signature, message, count, pages, where (up to 5 view labels), rect?, screenshot? }, capped at 50 inline. report_path holds every finding and view. Partial results while running. Args: { job_id? }.',
+    inputSchema: statusSchema,
+    handler: async (args) => layoutSweepStatus(args, defaultLayoutSweepDeps()),
+});
+const cancelSchema = { job_id: stringType().min(1) };
+const layoutSweepCancelTool = Object.freeze({
+    name: 'layout_sweep_cancel',
+    description: 'Stop a running layout_sweep after its current view; the viewport, color scheme and starting URL are restored and partial results stay available through layout_sweep_status. Args: { job_id }.',
+    inputSchema: cancelSchema,
+    handler: async (args) => layoutSweepCancel(args, defaultLayoutSweepDeps()),
+});
 
 function getDefaultExportFromCjs (x) {
 	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
@@ -6389,626 +9458,6 @@ const hostResetTool = Object.freeze({
     inputSchema: inputSchema$U,
     handler: hostResetHandler,
 });
-
-/**
- * Pick the connection a tool call goes to. `argId` (the tools' extension_id
- * arg) may name any live connection: an extension id or a CDP connection id.
- */
-const resolveTarget$1 = (ctx, argId) => {
-    const conns = ctx.ipcServer.listConnections();
-    if (argId !== undefined) {
-        const found = conns.find((c) => c.extensionId === argId);
-        if (!found) {
-            return {
-                ok: false,
-                error: `no connected NMH for extension_id=${argId} (no extension or CDP connection has that id; host_status lists activeConnections)`,
-            };
-        }
-        return { ok: true, extensionId: argId };
-    }
-    if (conns.length === 0) {
-        return { ok: false, error: 'no NMH connected (no extension or CDP connection is live)' };
-    }
-    if (conns.length > 1) {
-        return {
-            ok: false,
-            error: `multiple NMH connections (${conns.length} live extension/CDP connections); pass extension_id explicitly (an extension id or a CDP connection id from host_status activeConnections)`,
-        };
-    }
-    return { ok: true, extensionId: conns[0].extensionId };
-};
-
-const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-const encodeAsciiToBase64Url = (ascii) => {
-    let out = '';
-    let buffer = 0;
-    let bits = 0;
-    for (let i = 0; i < ascii.length; i++) {
-        buffer = (buffer << 8) | (ascii.charCodeAt(i) & 0xff);
-        bits += 8;
-        while (bits >= 6) {
-            bits -= 6;
-            out += B64_ALPHABET.charAt((buffer >> bits) & 0x3f);
-        }
-    }
-    if (bits > 0) {
-        out += B64_ALPHABET.charAt((buffer << (6 - bits)) & 0x3f);
-    }
-    return out;
-};
-const decodeBase64UrlToAscii = (s) => {
-    let out = '';
-    let buffer = 0;
-    let bits = 0;
-    for (let i = 0; i < s.length; i++) {
-        const ch = s.charAt(i);
-        const idx = B64_ALPHABET.indexOf(ch);
-        if (idx === -1)
-            return null;
-        buffer = (buffer << 6) | idx;
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out += String.fromCharCode((buffer >> bits) & 0xff);
-        }
-    }
-    return out;
-};
-const encodeCursor = (parts) => {
-    const json = JSON.stringify({
-        sid: parts.sessionId,
-        seq: parts.sequenceNumber,
-    });
-    return encodeAsciiToBase64Url(json);
-};
-const decodeCursor = (cursor) => {
-    if (typeof cursor !== 'string' || cursor.length === 0) {
-        return { ok: false, error: 'cursor is empty' };
-    }
-    const json = decodeBase64UrlToAscii(cursor);
-    if (json === null) {
-        return { ok: false, error: 'cursor contains non-base64url characters' };
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(json);
-    }
-    catch {
-        return { ok: false, error: 'cursor payload is not valid JSON' };
-    }
-    if (parsed === null || typeof parsed !== 'object') {
-        return { ok: false, error: 'cursor payload is not an object' };
-    }
-    const obj = parsed;
-    if (typeof obj.sid !== 'string' || obj.sid.length === 0) {
-        return { ok: false, error: 'cursor.sid missing or not a non-empty string' };
-    }
-    if (typeof obj.seq !== 'number' ||
-        !Number.isFinite(obj.seq) ||
-        !Number.isInteger(obj.seq)) {
-        return { ok: false, error: 'cursor.seq missing or not a finite integer' };
-    }
-    return {
-        ok: true,
-        value: { sessionId: obj.sid, sequenceNumber: obj.seq },
-    };
-};
-
-const compilePatternList = (sources, fieldPathPrefix) => {
-    if (sources === undefined || sources.length === 0) {
-        return { ok: true, value: [] };
-    }
-    const out = [];
-    let i = 0;
-    for (const src of sources) {
-        try {
-            out.push(new RegExp(src));
-        }
-        catch (e) {
-            return {
-                ok: false,
-                error: {
-                    kind: 'pattern_invalid',
-                    fieldPath: `${fieldPathPrefix}[${i}]`,
-                    error: e instanceof Error ? e.message : String(e),
-                },
-            };
-        }
-        i++;
-    }
-    return { ok: true, value: out };
-};
-const eventTextForPattern = (event) => {
-    try {
-        return JSON.stringify(event) ?? '';
-    }
-    catch {
-        return '';
-    }
-};
-const compileSourceFilter = (spec) => {
-    const includeResult = compilePatternList(spec?.pattern?.include, 'pattern.include');
-    if (!includeResult.ok)
-        return { ok: false, error: includeResult.error };
-    const excludeResult = compilePatternList(spec?.pattern?.exclude, 'pattern.exclude');
-    if (!excludeResult.ok)
-        return { ok: false, error: excludeResult.error };
-    const include = includeResult.value;
-    const exclude = excludeResult.value;
-    const levelSet = spec?.level !== undefined && spec.level.length > 0
-        ? new Set(spec.level)
-        : null;
-    const predicate = (event) => {
-        if (levelSet !== null) {
-            const lvl = event.level;
-            if (lvl === undefined || !levelSet.has(lvl))
-                return false;
-        }
-        if (include.length === 0 && exclude.length === 0)
-            return true;
-        const text = eventTextForPattern(event);
-        for (const re of exclude) {
-            if (re.test(text))
-                return false;
-        }
-        if (include.length > 0) {
-            let any = false;
-            for (const re of include) {
-                if (re.test(text)) {
-                    any = true;
-                    break;
-                }
-            }
-            if (!any)
-                return false;
-        }
-        return true;
-    };
-    return { ok: true, predicate };
-};
-
-/**
- * Cross-package settings vocabulary — the single source of truth for every
- * user-tunable setting in pwa-debug.
- *
- * Plug-ability invariant (M7): adding a new setting is exactly ONE line in
- * {@link SettingTypeMap} + ONE entry in {@link SETTINGS_SCHEMA}. The host
- * settings store, the settings.* MCP tools, and the extension settings cache
- * all iterate {@link settingKeys} / {@link getSettingEntry} — no key is ever
- * hardcoded — so a new key needs zero changes to any consumer's shape.
- *
- * Lives in @pwa-debug/shared so the host store and the (T3) extension cache
- * enforce identical key/value shapes at compile time via getSetting<K>.
- */
-/** Runtime tuple of every {@link CaptureKind}, for validation and introspection. */
-const CAPTURE_KINDS = [
-    'console',
-    'network',
-    'dom_mutations',
-    'lifecycle',
-    'store_change',
-    'replay',
-    'library_popup',
-    'page_error',
-    'sw_state',
-];
-// --- internal primitive guards (not exported; not part of the public surface) ---
-const isNonNegInt = (v) => typeof v === 'number' &&
-    Number.isFinite(v) &&
-    Number.isInteger(v) &&
-    v >= 0;
-const isBoolean = (v) => typeof v === 'boolean';
-/** A valid TCP port for remote debugging: integer in [1, 65535]. */
-const isPort = (v) => typeof v === 'number' &&
-    Number.isInteger(v) &&
-    v >= 1 &&
-    v <= 65535;
-const isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
-const isCaptureKindSubset = (v) => Array.isArray(v) &&
-    new Set(v).size === v.length &&
-    v.every((x) => CAPTURE_KINDS.includes(x));
-const isPlainObject$1 = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isReadControlValue = (v) => {
-    if (!isPlainObject$1(v))
-        return false;
-    const allowed = CAPTURE_KINDS;
-    for (const [k, flag] of Object.entries(v)) {
-        if (!allowed.includes(k))
-            return false;
-        if (typeof flag !== 'boolean')
-            return false;
-    }
-    return true;
-};
-const isReadControlsRecord = (v) => {
-    if (!isPlainObject$1(v))
-        return false;
-    for (const value of Object.values(v)) {
-        if (!isReadControlValue(value))
-            return false;
-    }
-    return true;
-};
-const CONSOLE_LEVELS = [
-    'log',
-    'info',
-    'warn',
-    'error',
-    'debug',
-    'trace',
-];
-const isFilterPattern = (v) => {
-    if (!isPlainObject$1(v))
-        return false;
-    for (const [k, val] of Object.entries(v)) {
-        if (k !== 'include' && k !== 'exclude')
-            return false;
-        if (val === undefined)
-            continue;
-        if (!Array.isArray(val))
-            return false;
-        if (!val.every((x) => typeof x === 'string'))
-            return false;
-    }
-    return true;
-};
-const FILTER_SPEC_SOURCE_KEYS = ['level', 'pattern'];
-const isSourceFilterSpec = (v) => {
-    if (!isPlainObject$1(v))
-        return false;
-    for (const [k, val] of Object.entries(v)) {
-        if (!FILTER_SPEC_SOURCE_KEYS.includes(k))
-            return false;
-        if (val === undefined)
-            continue;
-        if (k === 'level') {
-            if (!Array.isArray(val))
-                return false;
-            if (!val.every((x) => typeof x === 'string' && CONSOLE_LEVELS.includes(x)))
-                return false;
-        }
-        else if (k === 'pattern') {
-            if (!isFilterPattern(val))
-                return false;
-        }
-    }
-    return true;
-};
-const isCaptureFiltersRecord = (v) => {
-    if (!isPlainObject$1(v))
-        return false;
-    const allowed = CAPTURE_KINDS;
-    for (const [k, val] of Object.entries(v)) {
-        if (!allowed.includes(k))
-            return false;
-        if (val === undefined)
-            continue;
-        if (!isSourceFilterSpec(val))
-            return false;
-    }
-    return true;
-};
-/**
- * The schema as data. Frozen. THIS is the single const instance; every
- * consumer reaches it through {@link settingKeys} / {@link getSettingEntry}.
- */
-const SETTINGS_SCHEMA = Object.freeze({
-    'capture.memoryCutoffPerKind': {
-        key: 'capture.memoryCutoffPerKind',
-        type: 'number',
-        default: 5000,
-        scope: 'host',
-        description: 'Max events retained in memory per capture kind before eviction (overflow goes to disk when capture.diskSpill.enabled).',
-        validate: isNonNegInt,
-    },
-    'capture.diskSpill.enabled': {
-        key: 'capture.diskSpill.enabled',
-        type: 'boolean',
-        default: false,
-        scope: 'host',
-        description: 'When true, events evicted from the in-memory ring buffer are written to on-disk jsonl archives instead of dropped.',
-        validate: isBoolean,
-    },
-    'capture.diskSpill.archiveLongevityDays': {
-        key: 'capture.diskSpill.archiveLongevityDays',
-        type: 'number',
-        default: 7,
-        scope: 'host',
-        description: 'Age in days after which a disk archive file is pruned on the next pruner tick.',
-        validate: isNonNegInt,
-    },
-    'capture.diskSpill.maxBytes': {
-        key: 'capture.diskSpill.maxBytes',
-        type: 'number',
-        default: 100_000_000,
-        scope: 'host',
-        description: 'Total disk-archive byte cap; oldest archive files are evicted first when exceeded.',
-        validate: isNonNegInt,
-    },
-    'sites.allowlist': {
-        key: 'sites.allowlist',
-        type: 'string[]',
-        default: ['*'],
-        scope: 'both',
-        description: 'Glob patterns of origins/URLs the capture pipeline is permitted to record. Default ["*"] = all sites.',
-        validate: isStringArray,
-    },
-    'sites.blocklist': {
-        key: 'sites.blocklist',
-        type: 'string[]',
-        default: [],
-        scope: 'both',
-        description: 'Glob patterns of origins/URLs never captured; takes precedence over sites.allowlist.',
-        validate: isStringArray,
-    },
-    'capture.enabledKinds': {
-        key: 'capture.enabledKinds',
-        type: 'enum[]',
-        default: [
-            'console',
-            'network',
-            'dom_mutations',
-            'lifecycle',
-            'store_change',
-            'replay',
-            'library_popup',
-            'sw_state',
-        ],
-        scope: 'both',
-        description: 'Subset of capture kinds actively recorded. Empty = capture nothing.',
-        validate: isCaptureKindSubset,
-        enumValues: CAPTURE_KINDS,
-    },
-    'sites.readControls': {
-        key: 'sites.readControls',
-        type: 'record',
-        default: Object.freeze({}),
-        scope: 'both',
-        description: 'Per-site, per-kind read-permission overrides. Keys are glob patterns (same matcher as sites.allowlist); values are objects of CaptureKind→boolean flags. Missing flag = allowed; false denies that kind for matching URLs. Most-specific (longest) pattern wins per URL; ties broken lexicographically. Only DENIES events otherwise allowed by sites.allowlist + capture.enabledKinds — cannot re-enable what allowlist already rejected.',
-        validate: isReadControlsRecord,
-    },
-    'capture.filters': {
-        key: 'capture.filters',
-        type: 'record',
-        default: Object.freeze({}),
-        scope: 'both',
-        description: 'Per-kind source-side capture filters. Keys are CaptureKinds; values are wire FilterSpecs (level + pattern only — cursors and limit are seq-based, meaningful only on the host). When set, the capture chokepoint applies the compiled predicate BEFORE the event reaches the host buffer; rejected events are dropped at the source. Validation tightens the wire shape to source-applicable fields only.',
-        validate: isCaptureFiltersRecord,
-    },
-    'capture.stores.allowDispatch': {
-        key: 'capture.stores.allowDispatch',
-        type: 'boolean',
-        default: false,
-        scope: 'both',
-        description: 'When true, redux_dispatch (and forthcoming store-system dispatch tools) may write to the page-world store; when false (default), the dispatch tool rejects with an actionable next_steps[] hint. Gates the only write surface in the store-introspection family — reads (redux_get_state, redux_subscribe, redux_tail) are unaffected.',
-        validate: isBoolean,
-    },
-    'capture.sourceMap.enabled': {
-        key: 'capture.sourceMap.enabled',
-        type: 'boolean',
-        default: true,
-        scope: 'both',
-        description: 'When true (default), source_map_resolve fetches and resolves source maps to translate generated stack frames into original-source coordinates. When false, the tool returns errorResponse with a hint. M13 ships query-time resolution only; capture-time auto-annotation is deferred to M13.5.',
-        validate: isBoolean,
-    },
-    'launch.defaultPort': {
-        key: 'launch.defaultPort',
-        type: 'number',
-        default: 9222,
-        scope: 'host',
-        description: 'Default remote-debugging port used by pdl_launch_browser when no explicit `port` arg is given. 9222 is the chrome-devtools-mcp convention. Change it if 9222 is already in use on your machine.',
-        validate: isPort,
-    },
-});
-/**
- * All setting keys in stable schema-declaration order — the canonical
- * iteration order for defaults-merge and settings.list_schema.
- */
-const settingKeys = () => Object.keys(SETTINGS_SCHEMA);
-/**
- * Typed accessor for a single schema entry — the one DRY lookup point so a
- * future key change is a single schema edit, never a consumer change.
- */
-const getSettingEntry = (key) => SETTINGS_SCHEMA[key];
-/**
- * Central pure type-guard: validate an unknown value against a key's schema
- * validator. Single validation path shared by the host_settings store and the
- * settings.set MCP tool. Narrows `value` to SettingTypeMap[K] on true.
- */
-const validateSettingValue = (key, value) => getSettingEntry(key).validate(value);
-/**
- * Factory producing a fresh fully-materialized {@link SettingsRecord} of every
- * key's default. Array and plain-object defaults are cloned so the result
- * never aliases the frozen SETTINGS_SCHEMA. The base the host_settings store
- * merges over.
- */
-const defaultSettings = () => Object.fromEntries(settingKeys().map((k) => {
-    const d = getSettingEntry(k).default;
-    if (Array.isArray(d))
-        return [k, [...d]];
-    if (isPlainObject$1(d))
-        return [k, { ...d }];
-    return [k, d];
-}));
-
-// Single source of truth for the Path 7 pdl_* interaction action tools.
-//
-// Both the host (builds a ToolDef + Zod schema per entry) and the extension
-// (SW request routing + page-world dispatch) import this table, so tool names,
-// their dom_actions action kind, and their parameters stay in sync across
-// packages. Adding a tool = one entry here + (for new param shapes) the typed
-// param model below; the three generic layers need no per-tool code.
-const S = (key, required = false, description) => ({
-    key,
-    type: 'string',
-    ...(required ? { required } : {}),
-    ...(description !== undefined ? { description } : {}),
-});
-const N = (key, required = false, description) => ({
-    key,
-    type: 'number',
-    ...(required ? { required } : {}),
-    ...(description !== undefined ? { description } : {}),
-});
-const B = (key, description) => ({
-    key,
-    type: 'boolean',
-    ...(description !== undefined ? { description } : {}),
-});
-const ACTION_TOOL_SPECS = Object.freeze([
-    // --- discrete (pointer/keyboard) ---
-    { tool: 'pdl_click', action: 'click', params: [], summary: 'Click an element (full pointer/mouse event chain so React/Vue delegated onClick fires).' },
-    { tool: 'pdl_dblclick', action: 'dblclick', params: [], summary: 'Double-click an element.' },
-    { tool: 'pdl_fill', action: 'fill', params: [S('value', true, 'text to set')], summary: "Set an input/textarea/select value via the native setter + input/change (works with React controlled inputs)." },
-    { tool: 'pdl_submit', action: 'submit', params: [], summary: 'Submit the form owning the located element (requestSubmit).' },
-    { tool: 'pdl_hover', action: 'hover', params: [], summary: 'Hover an element (pointer/mouse over/enter/move).' },
-    { tool: 'pdl_focus', action: 'focus', params: [], summary: 'Focus an element.' },
-    { tool: 'pdl_blur', action: 'blur', params: [], summary: 'Blur an element.' },
-    { tool: 'pdl_check', action: 'check', params: [], summary: 'Check a checkbox/radio (idempotent; native click path so onChange fires).' },
-    { tool: 'pdl_uncheck', action: 'uncheck', params: [], summary: 'Uncheck a checkbox (idempotent).' },
-    { tool: 'pdl_select_option', action: 'selectOption', params: [S('value', false, 'option value'), S('label', false, 'visible option label')], summary: 'Select a <select> option by value or visible label (one required).' },
-    { tool: 'pdl_key_press', action: 'keyPress', params: [S('key', true, "a character or named key e.g. 'Enter','Tab','ArrowDown'")], summary: 'Press a single key on an element.' },
-    { tool: 'pdl_type_sequence', action: 'typeSequence', params: [S('value', true, 'string to type char-by-char')], summary: 'Type a string into an editable element char-by-char.' },
-    // --- gestures (pointer/touch) ---
-    { tool: 'pdl_drag', action: 'drag', params: [N('toX', false, 'destination viewport X'), N('toY', false, 'destination viewport Y'), S('targetSelector', false, 'CSS selector for the drop target (alternative to toX/toY)'), N('steps', false, 'pointermove steps (default 10)'), B('html5', 'also fire the native HTML5 drag/drop sequence with a DataTransfer')], summary: 'Drag the located element to a point (toX/toY) or onto targetSelector; pointer drag + optional HTML5 DnD.' },
-    { tool: 'pdl_scroll', action: 'scroll', params: [N('deltaX', false, 'horizontal scroll delta'), N('deltaY', false, 'vertical scroll delta'), B('intoView', 'scrollIntoView (centered) instead of by-delta')], summary: 'Scroll the located element by delta (dispatches wheel + scrollBy) or scrollIntoView.' },
-    { tool: 'pdl_swipe', action: 'swipe', params: [{ key: 'direction', type: 'enum', required: true, enum: ['up', 'down', 'left', 'right'], description: 'swipe direction' }, N('distance', false, 'px distance (default 100)'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Swipe a touch across the located element in a direction.' },
-    { tool: 'pdl_tap', action: 'tap', params: [], summary: 'Tap (touchstart/touchend) the located element.' },
-    { tool: 'pdl_double_tap', action: 'doubleTap', params: [], summary: 'Double-tap the located element.' },
-    { tool: 'pdl_long_press', action: 'longPress', params: [N('duration', false, 'hold ms before release (default 500)')], summary: 'Long-press the located element (holds, then releases + contextmenu).' },
-    { tool: 'pdl_pinch', action: 'pinch', params: [N('scale', true, 'target scale: >1 zoom in, <1 zoom out'), N('steps', false, 'touchmove steps (default 10)')], summary: 'Pinch-zoom on the located element with two touches.' },
-]);
-
-/**
- * Wire contract between the host and the page-world CDP bundle
- * (packages/extension/src/page-world-cdp.ts). Both sides import these, so a
- * rename cannot silently split them. Bump CDP_BRIDGE_VERSION on any change.
- */
-const CDP_BRIDGE_VERSION = 1;
-/** Created by the host with Runtime.addBinding before the bundle runs. */
-const CDP_EMIT_BINDING = '__pwaDebugCdpEmit';
-/** Page global the host calls through Runtime.evaluate. */
-const CDP_GLOBAL = '__pwaDebugCdp';
-
-// A bare javascript: URL would run script in the target page context on navigate;
-// reject it. Everything else (http(s), file:, about:, data:, chrome:, localhost
-// shorthand) is allowed — this is a debugging driver, not a sandbox.
-const JAVASCRIPT_SCHEME = /^javascript:/i;
-const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-/**
- * Normalize a caller-supplied navigation URL: trim, reject empty / javascript:,
- * and assume https:// when no scheme is given (so `example.com` works). Returns
- * null when the input is unusable so the caller can surface a clear error.
- * Shared by the extension (chrome.tabs) and the host (CDP Page.navigate) so both
- * navigation paths accept exactly the same URLs.
- */
-const normalizeUrl = (raw) => {
-    const trimmed = raw.trim();
-    if (trimmed.length === 0)
-        return null;
-    if (JAVASCRIPT_SCHEME.test(trimmed))
-        return null;
-    return HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
-};
-
-const REGEX_SPECIALS = /[.+?^${}()|[\]\\]/g;
-const globToRegex = (pattern) => {
-    const escaped = pattern.replace(REGEX_SPECIALS, '\\$&').replace(/\*/g, '.*');
-    return new RegExp(`^${escaped}$`);
-};
-const matchesAnyGlob = (value, patterns) => patterns.some((p) => globToRegex(p).test(value));
-/**
- * Raw captured-event kinds (6) -> M7 capture categories (4).
- * The union side reflects the captured_event.ts kind discriminants.
- */
-const KIND_MAP = Object.freeze({
-    console: 'console',
-    fetch: 'network',
-    xhr: 'network',
-    websocket: 'network',
-    dom_mutation: 'dom_mutations',
-    lifecycle: 'lifecycle',
-    // App service-worker lifecycle: its own capture category + host buffer.
-    sw_state: 'sw_state',
-    store_change: 'store_change',
-    replay: 'replay',
-    library_popup: 'library_popup',
-});
-const eventKindToCaptureKind = (rawKind) => KIND_MAP[rawKind] ?? null;
-const isKindEnabled = (rawKind, enabledKinds) => {
-    const ck = eventKindToCaptureKind(rawKind);
-    if (ck === null)
-        return true; // unknown raw kinds default-allow (future-compat)
-    return enabledKinds.includes(ck);
-};
-const isUrlAllowed = (url, allowlist, blocklist) => {
-    if (matchesAnyGlob(url, blocklist))
-        return false; // blocklist wins
-    if (allowlist.length === 0)
-        return false; // explicit opt-in model
-    return matchesAnyGlob(url, allowlist);
-};
-/**
- * Pick the most-specific readControls entry whose glob pattern matches `url`.
- * Specificity = longest pattern string; ties broken by lexicographic order of
- * the pattern so the choice is deterministic. Returns undefined when no
- * pattern matches (caller treats as no restriction).
- */
-const pickMostSpecificReadControl = (url, controls) => {
-    let winnerPattern;
-    let winnerValue;
-    for (const [pattern, value] of Object.entries(controls)) {
-        if (!matchesAnyGlob(url, [pattern]))
-            continue;
-        if (winnerPattern === undefined) {
-            winnerPattern = pattern;
-            winnerValue = value;
-            continue;
-        }
-        if (pattern.length > winnerPattern.length ||
-            (pattern.length === winnerPattern.length && pattern < winnerPattern)) {
-            winnerPattern = pattern;
-            winnerValue = value;
-        }
-    }
-    return winnerValue;
-};
-/**
- * True iff the resolved readControls entry permits the given CaptureKind.
- * Missing flag = allowed (no restriction); explicit `false` denies. Undefined
- * control (no matching readControls entry) = allowed.
- */
-const isKindAllowedByReadControls = (kind, control) => control?.[kind] !== false;
-/**
- * True iff the per-kind capture.filters predicate (if configured) accepts the
- * event. No filter for the resolved kind => allow. compileSourceFilter ok:false
- * (malformed regex despite the schema validator) => fail-open (allow) so a
- * single bad filter cannot suppress all events of a kind.
- */
-const passesCaptureFilter = (event, captureKind, filters) => {
-    const spec = filters[captureKind];
-    if (spec === undefined)
-        return true;
-    const compiled = compileSourceFilter(spec);
-    if (!compiled.ok)
-        return true;
-    return compiled.predicate(event);
-};
-const shouldCaptureEvent = (event, settings) => {
-    if (!isKindEnabled(event.kind, settings['capture.enabledKinds'])) {
-        return false;
-    }
-    if (!isUrlAllowed(event.frameUrl, settings['sites.allowlist'], settings['sites.blocklist'])) {
-        return false;
-    }
-    const captureKind = eventKindToCaptureKind(event.kind);
-    if (captureKind === null)
-        return true; // unknown raw kinds default-allow
-    const control = pickMostSpecificReadControl(event.frameUrl, settings['sites.readControls']);
-    if (!isKindAllowedByReadControls(captureKind, control))
-        return false;
-    return passesCaptureFilter(event, captureKind, settings['capture.filters']);
-};
 
 const createRingBuffer = (opts) => {
     if (!Number.isInteger(opts.capacity) || opts.capacity <= 0) {
@@ -8644,7 +11093,7 @@ const popupTailTool = Object.freeze({
 // that fired in that window (same frameKey). No I/O, no buffer access — the
 // caller (popup_failures tool) supplies the tails so this stays unit-testable.
 const CONSOLE_TEXT_CAP = 1000;
-const str$2 = (v) => typeof v === 'string' ? v : undefined;
+const str$1 = (v) => typeof v === 'string' ? v : undefined;
 const num = (v) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 const readState = (e) => {
     const s = e.state;
@@ -8686,12 +11135,12 @@ const consoleText = (e) => {
     return text.slice(0, CONSOLE_TEXT_CAP);
 };
 const isNetworkFailure = (e) => {
-    const kind = str$2(e.kind);
+    const kind = str$1(e.kind);
     if (kind === 'websocket') {
-        return str$2(e.subkind) === 'error';
+        return str$1(e.subkind) === 'error';
     }
     if (kind === 'fetch' || kind === 'xhr') {
-        if (str$2(e.phase) === 'error')
+        if (str$1(e.phase) === 'error')
             return true;
         const status = num(e.status);
         if (status !== undefined && (status === 0 || status >= 400))
@@ -8700,12 +11149,12 @@ const isNetworkFailure = (e) => {
     return false;
 };
 const toNetworkError = (e) => {
-    const url = str$2(e.url);
-    const method = str$2(e.method);
+    const url = str$1(e.url);
+    const method = str$1(e.method);
     const status = num(e.status);
-    const phase = str$2(e.phase) ?? str$2(e.subkind);
+    const phase = str$1(e.phase) ?? str$1(e.subkind);
     return {
-        kind: str$2(e.kind) ?? 'unknown',
+        kind: str$1(e.kind) ?? 'unknown',
         ...(url !== undefined ? { url } : {}),
         ...(method !== undefined ? { method } : {}),
         ...(status !== undefined ? { status } : {}),
@@ -8720,7 +11169,7 @@ const correlatePopupFailures = (input) => {
     const order = [];
     const groups = new Map();
     for (const e of input.popups) {
-        const id = str$2(e.popupId);
+        const id = str$1(e.popupId);
         if (id === undefined)
             continue;
         if (input.popupId !== undefined && id !== input.popupId)
@@ -8741,7 +11190,7 @@ const correlatePopupFailures = (input) => {
         // Role/parent come from any event in the group (the producer stamps them on
         // every phase). Default to 'primary' when absent (pre-two-tier events).
         const roleRaw = events
-            .map((e) => str$2(e.role))
+            .map((e) => str$1(e.role))
             .find((r) => r !== undefined);
         const role = roleRaw === 'nested' ? 'nested' : 'primary';
         // Primary-only by default — nested components of one widget share the
@@ -8750,16 +11199,16 @@ const correlatePopupFailures = (input) => {
             continue;
         const parentRaw = first.parentPopupId;
         const parentPopupId = typeof parentRaw === 'string' ? parentRaw : null;
-        const frameKey = str$2(first.frameKey) ?? '';
-        const library = str$2(first.library) ?? 'unknown';
-        const detection = str$2(first.detection) === 'portal'
+        const frameKey = str$1(first.frameKey) ?? '';
+        const library = str$1(first.library) ?? 'unknown';
+        const detection = str$1(first.detection) === 'portal'
             ? 'portal'
             : 'shadow';
-        const appeared = events.find((e) => str$2(e.phase) === 'appeared') ??
+        const appeared = events.find((e) => str$1(e.phase) === 'appeared') ??
             first;
         const disappeared = [...events]
             .reverse()
-            .find((e) => str$2(e.phase) === 'disappeared');
+            .find((e) => str$1(e.phase) === 'disappeared');
         const from = appeared.ts;
         const to = disappeared !== undefined ? disappeared.ts : input.now;
         const open = disappeared === undefined;
@@ -8767,10 +11216,10 @@ const correlatePopupFailures = (input) => {
         const latestWithState = [...events].reverse().find((e) => readState(e) !== undefined);
         const state = latestWithState !== undefined ? readState(latestWithState) : undefined;
         const alerts = readAlerts(state);
-        const reasonFromState = str$2(state?.failure?.reason);
+        const reasonFromState = str$1(state?.failure?.reason);
         const consoleErrors = input.consoleEvents
-            .filter((e) => str$2(e.frameKey) === frameKey &&
-            str$2(e.level) === 'error' &&
+            .filter((e) => str$1(e.frameKey) === frameKey &&
+            str$1(e.level) === 'error' &&
             inWindow(e.ts, from, to))
             .map((e) => ({
             level: 'error',
@@ -8779,17 +11228,17 @@ const correlatePopupFailures = (input) => {
             sequenceNumber: e.sequenceNumber,
         }));
         const networkErrors = input.networkEvents
-            .filter((e) => str$2(e.frameKey) === frameKey &&
+            .filter((e) => str$1(e.frameKey) === frameKey &&
             isNetworkFailure(e) &&
             inWindow(e.ts, from, to))
             .map(toNetworkError);
         const pageErrors = (input.errorEvents ?? [])
-            .filter((e) => str$2(e.frameKey) === frameKey && inWindow(e.ts, from, to))
+            .filter((e) => str$1(e.frameKey) === frameKey && inWindow(e.ts, from, to))
             .map((e) => {
-            const name = str$2(e.name);
+            const name = str$1(e.name);
             return {
-                subkind: str$2(e.subkind) ?? 'error',
-                message: str$2(e.message) ?? '',
+                subkind: str$1(e.subkind) ?? 'error',
+                message: str$1(e.message) ?? '',
                 ...(name !== undefined ? { name } : {}),
                 ts: e.ts,
                 sequenceNumber: e.sequenceNumber,
@@ -9073,7 +11522,7 @@ const popupRecordTool = Object.freeze({
 //   - 'tree'    : a hierarchy of popup nodes (primary roots, nested children
 //                 attached by parentPopupId), each node summarizing its phases
 // Pure transforms over the parsed lines; fs reads via host_io.
-const str$1 = (v) => typeof v === 'string' ? v : undefined;
+const str = (v) => typeof v === 'string' ? v : undefined;
 const readEvents = async (label, env) => {
     const path = xdgConfigPath(`${RECORDINGS_SUBDIR}/${label}/events.jsonl`, env);
     const out = [];
@@ -9096,18 +11545,18 @@ const buildTree = (events) => {
     const order = [];
     const nodes = new Map();
     for (const e of events) {
-        const id = str$1(e.popupId);
+        const id = str(e.popupId);
         if (id === undefined)
             continue;
         let node = nodes.get(id);
         if (node === undefined) {
             const parentRaw = e.parentPopupId;
-            const lib = str$1(e.library);
-            const det = str$1(e.detection);
+            const lib = str(e.library);
+            const det = str(e.detection);
             const hostVal = e.host;
             node = {
                 popupId: id,
-                role: str$1(e.role) ?? 'primary',
+                role: str(e.role) ?? 'primary',
                 ...(lib !== undefined ? { library: lib } : {}),
                 ...(det !== undefined ? { detection: det } : {}),
                 ...(hostVal !== undefined ? { host: hostVal } : {}),
@@ -9118,7 +11567,7 @@ const buildTree = (events) => {
             nodes.set(id, node);
             order.push(id);
         }
-        const phase = str$1(e.phase);
+        const phase = str(e.phase);
         if (phase !== undefined)
             node.phases.push(phase);
     }
@@ -9138,7 +11587,7 @@ const readRecording = async (label, mode, opts, env) => {
     if (mode === 'tree') {
         return { mode: 'tree', total: events.length, roots: buildTree(events) };
     }
-    const filtered = mode === 'primary' ? events.filter((e) => str$1(e.role) !== 'nested') : events;
+    const filtered = mode === 'primary' ? events.filter((e) => str(e.role) !== 'nested') : events;
     const offset = Math.max(0, opts.offset ?? 0);
     const limit = Math.min(Math.max(1, opts.limit ?? 500), 2000);
     const entries = filtered.slice(offset, offset + limit);
@@ -13163,7 +15612,7 @@ const fileExistsImpl = async (absPath) => {
     }
 };
 /** Run a command, capturing stdout + exit code. Never rejects. */
-const runCommandImpl$1 = (cmd, args) => new Promise((resolve) => {
+const runCommandImpl = (cmd, args) => new Promise((resolve) => {
     execFile(cmd, [...args], (err, stdout) => {
         if (err) {
             const code = typeof err.code === 'number'
@@ -13179,7 +15628,7 @@ const runCommandImpl$1 = (cmd, args) => new Promise((resolve) => {
 const defaultDiscoveryDeps = () => Object.freeze({
     which: whichImpl,
     fileExists: fileExistsImpl,
-    runCommand: runCommandImpl$1,
+    runCommand: runCommandImpl,
 });
 
 /**
@@ -13567,972 +16016,6 @@ const launchSandbox = async (input, deps) => {
             degradation: 'The pwa-debug extension was NOT auto-loaded (branded Google Chrome >=142 ignores --load-extension). The debug port is live for chrome-devtools-mcp, but pwa-debug tools stay disconnected until the extension is loaded manually.',
         }
         : spawned);
-};
-
-/** mkdtemp name prefix for sandbox-temp profile dirs (under os.tmpdir()). */
-const TEMP_PROFILE_PREFIX = 'pwa-debug-';
-/**
- * Filter a directory listing (os.tmpdir() entries) down to pwa-debug sandbox-
- * temp profiles. Used at boot to detect dirs left by a previous crashed run —
- * graceful shutdown cleans its own, so survivors imply a SIGKILL/crash.
- */
-const filterTempProfileNames = (names) => names.filter((n) => n.startsWith(TEMP_PROFILE_PREFIX));
-const createTempCleanupRegistry = (deps) => {
-    const dirs = new Set();
-    return Object.freeze({
-        register: (dir) => {
-            dirs.add(dir);
-        },
-        cleanupAll: () => {
-            for (const dir of dirs) {
-                try {
-                    deps.removeDir(dir);
-                }
-                catch {
-                    // best-effort; a lingering temp dir is acceptable across crashes.
-                }
-            }
-            dirs.clear();
-        },
-        list: () => Object.freeze([...dirs]),
-    });
-};
-
-const BROWSERS$2 = [
-    'chrome',
-    'chromium',
-    'edge',
-    'brave',
-    'vivaldi',
-    'opera',
-];
-const PROFILE_TYPES = [
-    'existing',
-    'sandbox-persistent',
-    'sandbox-temp',
-];
-/**
- * A debug port serves exactly one browser at a time, so a new launch on a port
- * supersedes any prior record for it (keeps the list bounded across restarts).
- * Result is ordered newest-last.
- */
-const mergeLaunch = (records, rec) => Object.freeze([...records.filter((r) => r.port !== rec.port), rec]);
-/** Drop the record for `port` (port is the unique key — see mergeLaunch). */
-const removeLaunch = (records, port) => Object.freeze(records.filter((r) => r.port !== port));
-/**
- * Validate persisted JSON back into LaunchRecords, dropping malformed entries
- * (a corrupt launches.json must never crash boot). Non-array input → [].
- */
-const parseLaunchRecords = (raw) => {
-    if (!Array.isArray(raw))
-        return [];
-    const out = [];
-    for (const r of raw) {
-        if (!r || typeof r !== 'object')
-            continue;
-        const o = r;
-        if (!BROWSERS$2.includes(o['browser']))
-            continue;
-        if (!PROFILE_TYPES.includes(o['profileType']))
-            continue;
-        if (typeof o['port'] !== 'number')
-            continue;
-        if (typeof o['launchedAt'] !== 'number')
-            continue;
-        const pid = o['pid'];
-        const browserUrl = o['browserUrl'];
-        const userDataDir = o['userDataDir'];
-        out.push(Object.freeze({
-            browser: o['browser'],
-            profileType: o['profileType'],
-            port: o['port'],
-            pid: typeof pid === 'number' ? pid : null,
-            browserUrl: typeof browserUrl === 'string' ? browserUrl : null,
-            ...(typeof userDataDir === 'string' ? { userDataDir } : {}),
-            launchedAt: o['launchedAt'],
-        }));
-    }
-    return Object.freeze(out);
-};
-const createLaunchRegistry = (deps) => {
-    let records = deps.load ? [...deps.load()] : [];
-    return Object.freeze({
-        record: (rec) => {
-            records = mergeLaunch(records, Object.freeze({ ...rec, launchedAt: deps.now() }));
-            deps.persist?.(records);
-        },
-        list: () => Object.freeze([...records]),
-        remove: (port) => {
-            records = removeLaunch(records, port);
-            deps.persist?.(records);
-        },
-    });
-};
-
-/**
- * Sandbox profile-dir + extension-path resolution (pure).
- *
- * The persistent profile dir is deterministic (~/.pwa-debug/profiles/<browser>).
- * The extension path is picked from an ordered candidate list — env override,
- * a host-bundled location (populated by M17 packaging), then the monorepo
- * sibling for dev — choosing the first that holds a LOADABLE unpacked extension
- * (manifest.json AND a built entry script). The built-script check is what
- * keeps the picker from selecting the extension SOURCE root, which carries a
- * manifest.json but none of the rollup output it references (Chromium then
- * fails the load with "Could not load javascript 'content-script.js'").
- * All effects (HOME lookup, file existence) are passed in.
- */
-/** Per-browser subdir under the sandbox profile root. */
-const PROFILE_SUBDIR = Object.freeze({
-    chrome: 'chrome',
-    chromium: 'chromium',
-    edge: 'edge',
-    brave: 'brave',
-    vivaldi: 'vivaldi',
-    opera: 'opera',
-});
-/** ~/.pwa-debug/profiles/<browser> — stable across host restarts, or null without HOME. */
-const persistentProfileDir = (browser, env) => env.HOME && env.HOME.length > 0
-    ? join(env.HOME, '.pwa-debug', 'profiles', PROFILE_SUBDIR[browser])
-    : null;
-/**
- * Ordered extension-dir candidates, most-authoritative first:
- *   1. PWA_DEBUG_EXTENSION_PATH (explicit override)
- *   2. <hostDir>/extension (host-bundled dist — populated by M17 packaging)
- *   3. <hostDir>/../extension/dist (monorepo sibling, dev)
- */
-const defaultExtensionCandidates = (env, hostDir) => {
-    const out = [];
-    if (env.PWA_DEBUG_EXTENSION_PATH && env.PWA_DEBUG_EXTENSION_PATH.length > 0) {
-        out.push(env.PWA_DEBUG_EXTENSION_PATH);
-    }
-    out.push(join(hostDir, 'extension'));
-    out.push(join(hostDir, '..', 'extension', 'dist'));
-    return Object.freeze(out);
-};
-/**
- * Files that must BOTH exist for a dir to be a loadable unpacked extension: the
- * manifest and a built entry script. Requiring the script rejects the extension
- * source root (manifest.json present, rollup output absent) — the trap that made
- * the launcher preload a dir Chromium couldn't actually load.
- */
-const REQUIRED_EXTENSION_FILES = Object.freeze([
-    'manifest.json',
-    'content-script.js',
-]);
-/** True when `dir` holds every REQUIRED_EXTENSION_FILES entry (existence injected). */
-const isLoadableExtensionDir = (dir, exists) => REQUIRED_EXTENSION_FILES.every((f) => exists(join(dir, f)));
-/** First candidate dir that holds a loadable unpacked extension, else null. */
-const pickExtensionPath = (candidates, isLoadable) => {
-    for (const dir of candidates) {
-        if (isLoadable(dir))
-            return dir;
-    }
-    return null;
-};
-
-/**
- * Pure browser brand+version → launch capabilities (unpacked-extension load +
- * debug-port-on-default-profile). One place for "what can this browser version
- * do at launch", all keyed off the BrowserVersion parsed from `--version`.
- *
- * Branded Google Chrome removed the --load-extension CLI flag: at 137 (with a
- * temporary escape hatch, --disable-features=DisableLoadExtensionCommandLineSwitch)
- * and FULLY at 142+ (escape hatch also removed). Every OTHER Chromium-family
- * browser — unbranded Chromium, Chrome-for-Testing, Brave, Edge, Opera, Vivaldi —
- * still honors --load-extension. So the sandbox extension-preload behavior is a
- * function of brand + major version, computed here (pure) and consumed by the
- * spawn-arg builder + the launch guidance. The version string is produced at the
- * edge (`<binary> --version`) and parsed by parseBrowserVersion;
- * extensionLoadStrategy maps the result to the launch behavior.
- *
- * Refs: research note #331, decision note #332.
- */
-/** Brand matchers against the leading product name of `<binary> --version`,
- *  most-specific first (Chrome-for-Testing before the google-chrome prefix). */
-const BRAND_MATCHERS = Object.freeze([
-    [/google chrome for testing/i, 'chrome-for-testing'],
-    [/google chrome/i, 'google-chrome'],
-    [/brave browser/i, 'brave'],
-    [/microsoft edge/i, 'edge'],
-    [/\bchromium\b/i, 'chromium'],
-    [/\bvivaldi\b/i, 'vivaldi'],
-    [/\bopera\b/i, 'opera'],
-]);
-/**
- * Parse the stdout of `<binary> --version` into a brand + major version.
- * Examples: "Google Chrome 148.0.7778.215", "Brave Browser 148.1.90.122",
- * "Chromium 148.0.7778.167 snap", "Microsoft Edge 141.0.3537.57". Returns null
- * when no dotted version number is present; an unrecognized product name still
- * parses (brand 'unknown') as long as a version is found.
- */
-const parseBrowserVersion = (stdout) => {
-    const text = stdout.trim();
-    if (text.length === 0)
-        return null;
-    const m = text.match(/(\d+)\.\d+\.\d+/);
-    if (!m)
-        return null;
-    const major = Number(m[1]);
-    if (!Number.isInteger(major))
-        return null;
-    const brand = BRAND_MATCHERS.find(([re]) => re.test(text))?.[1] ?? 'unknown';
-    return Object.freeze({ brand, major });
-};
-/** Chrome major at which --load-extension started being gated (escape-hatch era). */
-const CHROME_GATED_FROM = 137;
-/** Chrome major at which --load-extension AND the escape hatch are both gone. */
-const CHROME_DEAD_FROM = 142;
-/**
- * Map a parsed version to the sandbox extension-load strategy. Only branded
- * Google Chrome is constrained; every other brand (and an unknown brand) gets
- * the plain flag, which still works. A null version (couldn't read `--version`)
- * is treated optimistically as 'load-flag' — better to attempt the flag than to
- * force the manual path on a browser that very likely supports it.
- */
-const extensionLoadStrategy = (version) => {
-    if (!version || version.brand !== 'google-chrome')
-        return 'load-flag';
-    if (version.major >= CHROME_DEAD_FROM)
-        return 'manual-guided';
-    if (version.major >= CHROME_GATED_FROM)
-        return 'load-flag-escape-hatch';
-    return 'load-flag';
-};
-/** Chromium major from which --remote-debugging-port is refused on the DEFAULT
- *  profile (must use a custom --user-data-dir). Brand-agnostic Chromium change. */
-const DEBUG_PORT_CUSTOM_DIR_FROM = 136;
-/**
- * True when this browser refuses --remote-debugging-port on the default profile
- * (Chromium >=136 — brand-agnostic). existing-mode uses the user's default
- * profile, so when this holds the spawned browser will NOT expose a debug port;
- * the launch degrades (no false browserUrl) and steers to a sandbox profile
- * (custom dir), where the port works. null version => false (attempt the port).
- */
-const debugPortBlockedOnDefaultProfile = (version) => version !== null && version.major >= DEBUG_PORT_CUSTOM_DIR_FROM;
-/**
- * Edge (effect injected): read a browser's brand+version by invoking its
- * `--version`. Native/snap browsers run `<execPath> --version`; a flatpak target
- * (appId set, no host binary) runs `flatpak run <appId> --version`. A non-zero
- * exit or unparseable output yields null, so the caller falls back to the
- * optimistic 'load-flag' strategy rather than blocking a launch on a version
- * read it couldn't complete.
- */
-const readBrowserVersion = async (runCommand, target) => {
-    const { cmd, args } = target.appId
-        ? { cmd: 'flatpak', args: ['run', target.appId, '--version'] }
-        : { cmd: target.execPath, args: ['--version'] };
-    const res = await runCommand(cmd, args);
-    if (res.code !== 0)
-        return null;
-    return parseBrowserVersion(res.stdout);
-};
-
-/**
- * Pure profile-Preferences seeding for sandbox launches.
- *
- * A fresh Chromium profile (every sandbox-temp dir, and a sandbox-persistent dir
- * on its first launch) starts with Developer Mode OFF. A flatpak Chromium then
- * REFUSES to honor --load-extension for an unpacked extension, so the pwa-debug
- * extension never loads/connects until the user toggles Developer Mode by hand
- * at chrome://extensions (note 318). Chromium reads the profile's
- * <user-data-dir>/Default/Preferences at startup, so writing
- * extensions.ui.developer_mode=true into it BEFORE spawn unblocks --load-extension
- * with no manual step.
- *
- * Pure here: the path derivation and the non-destructive merge. The read/write
- * effect lives at the edge (node_deps.seedDeveloperModeImpl).
- */
-/**
- * The profile Preferences file Chromium reads at startup:
- * <user-data-dir>/Default/Preferences. Seeding it before spawn is how a flag we
- * cannot pass on the command line (developer_mode) gets applied on first run.
- */
-const profilePreferencesPath = (userDataDir) => join(userDataDir, 'Default', 'Preferences');
-/** Read an object-valued subkey from a prefs object, or {} when absent/non-object. */
-const objAt = (obj, key) => {
-    const v = obj[key];
-    return v !== null && typeof v === 'object' && !Array.isArray(v)
-        ? v
-        : {};
-};
-/**
- * Merge extensions.ui.developer_mode=true into an existing Preferences object
- * (or a fresh one when `existing` is null), preserving every other key. Returns a
- * NEW object — the input is never mutated. Only the developer_mode leaf is forced;
- * any sibling extensions.* / extensions.ui.* settings carry through untouched, so
- * re-seeding a persistent profile that already has real prefs is safe.
- */
-const mergeDeveloperModePref = (existing) => {
-    const base = existing ?? {};
-    const extensions = objAt(base, 'extensions');
-    const ui = objAt(extensions, 'ui');
-    return {
-        ...base,
-        extensions: {
-            ...extensions,
-            ui: { ...ui, developer_mode: true },
-        },
-    };
-};
-
-/**
- * Pure CDP-target selection for the persistent-profile extension auto-refresh.
- *
- * A sandbox-persistent profile caches the unpacked extension and serves STALE
- * page-world/SW code on relaunch — newly added pdl_* tools report "unknown tool"
- * even though the on-disk bundle is current (note 318). The fix is to force
- * chrome.runtime.reload() in the extension's MV3 service worker over CDP, which
- * makes it re-read the source dir. To do that we need the SW's
- * webSocketDebuggerUrl from the browser's /json/list — the pure pick lives here;
- * the websocket effect lives at the edge (node_deps.refreshExtensionImpl).
- */
-/** A loaded MV3 extension surfaces its service worker as a chrome-extension:// target. */
-const EXTENSION_SW_URL_RE = /^chrome-extension:\/\//;
-/**
- * The webSocketDebuggerUrl of the first loaded-extension service-worker target in
- * a CDP /json/list body, or null when none is present (port not up yet, or the
- * extension's SW hasn't started). Tolerant of arbitrary/malformed entries — only
- * an object with type==='service_worker', a chrome-extension:// url, and a string
- * webSocketDebuggerUrl qualifies.
- */
-const extensionSwWsUrl = (targets) => {
-    for (const t of targets) {
-        if (t === null || typeof t !== 'object')
-            continue;
-        const o = t;
-        if (o.type === 'service_worker' &&
-            typeof o.url === 'string' &&
-            EXTENSION_SW_URL_RE.test(o.url) &&
-            typeof o.webSocketDebuggerUrl === 'string') {
-            return o.webSocketDebuggerUrl;
-        }
-    }
-    return null;
-};
-
-/**
- * The impure edge: real LaunchDeps backed by fetch + node:child_process.
- * Isolated from all decision logic so launch_existing stays pure + testable.
- */
-const PROBE_TIMEOUT_MS = 800;
-/** GET /json/version on the debug port; a 2xx JSON body means the port is live. */
-const probeDebugPortImpl = async (port) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    try {
-        const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
-            signal: controller.signal,
-        });
-        if (!res.ok)
-            return false;
-        const body = (await res.json().catch(() => null));
-        return body !== null && typeof body === 'object';
-    }
-    catch {
-        return false;
-    }
-    finally {
-        clearTimeout(timer);
-    }
-};
-/** pgrep -f the executable basename; exit 0 with output means it is running. */
-const isProcessRunningImpl = (_browser, execPath) => new Promise((resolve) => {
-    execFile('pgrep', ['-f', basename(execPath)], (err, stdout) => {
-        // pgrep exits 1 (→ err) when no process matches; treat as not-running.
-        if (err)
-            return resolve(false);
-        resolve(stdout.trim().length > 0);
-    });
-});
-/** Spawn detached + unref so the browser outlives the host process. */
-const spawnBrowserImpl = (cmd, args) => new Promise((resolve, reject) => {
-    try {
-        const child = spawn(cmd, [...args], {
-            detached: true,
-            stdio: 'ignore',
-        });
-        // Surface synchronous spawn failures (e.g. ENOENT) before unref/resolve.
-        child.once('error', reject);
-        const pid = child.pid ?? null;
-        child.unref();
-        resolve({ pid });
-    }
-    catch (e) {
-        reject(e);
-    }
-});
-/** Production LaunchDeps wiring real OS effects. */
-const defaultLaunchDeps = () => Object.freeze({
-    probeDebugPort: probeDebugPortImpl,
-    isProcessRunning: isProcessRunningImpl,
-    spawnBrowser: spawnBrowserImpl,
-});
-/** Create a fresh mkdtemp profile dir for a sandbox-temp launch. */
-const makeTempProfileDir = () => mkdtempSync(join(tmpdir(), TEMP_PROFILE_PREFIX));
-/**
- * Resolve a sandbox-mode profile dir, packaging-aware. Snap browsers cannot use
- * ~/.pwa-debug (a hidden dir the snap home interface blocks → the browser exits
- * instantly), so they route to ~/snap/<pkg>/common: a persistent
- * pwa-debug-profile dir, or a fresh mkdtemp under common for sandbox-temp. The
- * snap-common dir already exists (the snap is installed). Native/flatpak keep
- * the ~/.pwa-debug layout. Returns null when the dir can't be resolved.
- */
-const resolveSandboxProfileDir = (browser, mode, packaging, env) => {
-    if (packaging === 'snap') {
-        const pkg = snapPackageForBrowser(browser);
-        if (!pkg || !env.HOME)
-            return null;
-        if (mode === 'sandbox-temp') {
-            const common = join(env.HOME, 'snap', pkg, 'common');
-            return mkdtempSync(join(common, TEMP_PROFILE_PREFIX));
-        }
-        return snapSandboxProfileDir(pkg, env);
-    }
-    return mode === 'sandbox-temp'
-        ? makeTempProfileDir()
-        : persistentProfileDir(browser, env);
-};
-/**
- * Absolute paths of sandbox-temp profile dirs lingering under os.tmpdir() from
- * a previous run. Graceful shutdown removes its own, so any survivors imply a
- * crash/SIGKILL. Warn-only at boot: mkdtemp names don't identify the owning
- * host process, so auto-removal could delete a concurrently-running host's
- * active profile. Never throws (a missing/unreadable tmpdir yields []).
- */
-const findLingeringTempProfiles = () => {
-    try {
-        const base = tmpdir();
-        return filterTempProfileNames(readdirSync(base)).map((n) => join(base, n));
-    }
-    catch {
-        return [];
-    }
-};
-// Lazy module-singleton temp-cleanup registry: created on first sandbox-temp
-// launch, with process signal handlers installed exactly once.
-let tempRegistry = null;
-const getTempRegistry = () => {
-    if (tempRegistry)
-        return tempRegistry;
-    const registry = createTempCleanupRegistry({
-        removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
-    });
-    const onSignal = () => {
-        registry.cleanupAll();
-        process.exit(0);
-    };
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
-    process.once('exit', () => registry.cleanupAll());
-    tempRegistry = registry;
-    return registry;
-};
-/**
- * Absolute host-package root. The host bundles to a single packages/host/dist/
- * main.js, so this module's dir is packages/host/dist — ONE level below the
- * package root. (The earlier '..','..' overshot to packages/, making the
- * candidate `<pkg>/extension` resolve to the extension SOURCE root.)
- */
-const hostPackageDir = () => resolve(dirname(fileURLToPath(import.meta.url)), '..');
-/** Resolve the unpacked extension dir to preload, or null when none is found. */
-const resolveExtensionPath = (env) => pickExtensionPath(defaultExtensionCandidates(env, hostPackageDir()), (dir) => isLoadableExtensionDir(dir, (p) => existsSync(p)));
-/** execFile wrapped as a never-rejecting {code, stdout} runner (for --version). */
-const runCommandImpl = (cmd, args) => new Promise((resolveCmd) => {
-    execFile(cmd, [...args], (err, stdout) => {
-        const code = err && typeof err.code === 'number'
-            ? err.code
-            : err
-                ? 1
-                : 0;
-        resolveCmd({ code, stdout: stdout ?? '' });
-    });
-});
-/**
- * Production readVersion: run the target's `--version` (native/snap by execPath;
- * flatpak via `flatpak run <appId>`) and parse it into a BrowserVersion. null on
- * any failure → the launch falls back to the optimistic 'load-flag' strategy.
- */
-const readTargetBrowserVersion = (target) => readBrowserVersion(runCommandImpl, {
-    execPath: target.execPath,
-    ...(target.appId !== undefined ? { appId: target.appId } : {}),
-});
-/**
- * Sandbox manifest writer (all confinements, native included). Loads the
- * registered extension IDs, builds the host manifest, and writes it into
- * <userDataDir>/NativeMessagingHosts/ so the spawned Chromium — which searches
- * the user-data-dir, not the install location (FINDING #3 applies to native
- * custom-dir profiles too) — finds the host. The launcher the manifest points
- * at depends on the confinement: for SNAP, ensure the snap relay + launcher
- * exist under ~/snap/<pkg>/common (node is exec-denied + glibc-incompatible
- * there) and point at that launcher; otherwise (native/flatpak) point at the
- * canonical node launcher. No-op when no extension is registered (connectNative
- * would be rejected anyway; host_register_extension is the prerequisite).
- */
-const writeSandboxManifestImpl = async (userDataDir, snapPackage) => {
-    const state = await loadHostState(defaultStatePath());
-    if (state.extensionIds.length === 0)
-        return;
-    let hostBinaryPath;
-    if (snapPackage !== undefined) {
-        const snap = await writeSnapHostFiles(snapPackage, process.env);
-        if (!snap)
-            return;
-        hostBinaryPath = snap.launcherPath;
-    }
-    else {
-        hostBinaryPath = defaultLauncherPath(process.platform, process.env);
-    }
-    const manifest = buildHostManifest({
-        name: HOST_NAME$3,
-        description: HOST_DESCRIPTION$1,
-        hostBinaryPath,
-        allowedExtensionIds: state.extensionIds,
-    });
-    await writeHostManifestToDir(manifest, join(userDataDir, 'NativeMessagingHosts'));
-};
-/**
- * Seed extensions.ui.developer_mode=true into the sandbox profile's
- * Default/Preferences before spawn (#318), so a flatpak Chromium honors the
- * unpacked --load-extension without a manual Developer-Mode toggle. Reads any
- * existing Preferences and merges non-destructively; creates Default/ as needed;
- * writes atomically (temp+rename). Best-effort: a read/parse/write failure must
- * never break the launch — the manual Developer-Mode path still works.
- */
-const seedDeveloperModeImpl = async (userDataDir) => {
-    try {
-        const prefsPath = profilePreferencesPath(userDataDir);
-        let existing = null;
-        if (existsSync(prefsPath)) {
-            try {
-                existing = JSON.parse(readFileSync(prefsPath, 'utf-8'));
-            }
-            catch {
-                existing = null; // corrupt Preferences → reseed from scratch
-            }
-        }
-        const merged = mergeDeveloperModePref(existing);
-        mkdirSync(dirname(prefsPath), { recursive: true });
-        const tmp = `${prefsPath}.tmp.${process.pid}`;
-        writeFileSync(tmp, JSON.stringify(merged));
-        renameSync(tmp, prefsPath);
-    }
-    catch {
-        // best-effort; never break the launch on a seeding failure.
-    }
-};
-const REFRESH_POLL_ATTEMPTS = 20;
-const REFRESH_POLL_INTERVAL_MS = 300;
-/** GET /json/list and return its target array (any error / non-array → []). */
-const fetchCdpTargets = async (port) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    try {
-        const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
-            signal: controller.signal,
-        });
-        if (!res.ok)
-            return [];
-        const body = (await res.json().catch(() => null));
-        return Array.isArray(body) ? body : [];
-    }
-    catch {
-        return [];
-    }
-    finally {
-        clearTimeout(timer);
-    }
-};
-/**
- * Open the extension SW's CDP websocket and evaluate chrome.runtime.reload(),
- * forcing it to re-read the unpacked source. reload() tears the SW down, so the
- * evaluate response OR the socket closing both count as success; resolves false
- * on error/timeout. Uses Node's global WebSocket (Node >= 22).
- */
-const cdpReloadExtension = (wsUrl) => new Promise((resolveP) => {
-    let settled = false;
-    const finish = (v) => {
-        if (!settled) {
-            settled = true;
-            resolveP(v);
-        }
-    };
-    try {
-        const ws = new WebSocket(wsUrl);
-        const timer = setTimeout(() => {
-            try {
-                ws.close();
-            }
-            catch {
-                /* ignore */
-            }
-            finish(false);
-        }, 2000);
-        ws.addEventListener('open', () => {
-            ws.send(JSON.stringify({
-                id: 1,
-                method: 'Runtime.evaluate',
-                params: { expression: 'chrome.runtime.reload()' },
-            }));
-        });
-        ws.addEventListener('message', () => {
-            clearTimeout(timer);
-            try {
-                ws.close();
-            }
-            catch {
-                /* ignore */
-            }
-            finish(true);
-        });
-        ws.addEventListener('close', () => {
-            clearTimeout(timer);
-            finish(true);
-        });
-        ws.addEventListener('error', () => {
-            clearTimeout(timer);
-            finish(false);
-        });
-    }
-    catch {
-        finish(false);
-    }
-});
-/**
- * Poll the debug port for the loaded pwa-debug extension's service worker (it
- * appears once the port binds and the SW starts), then force it to reload so a
- * sandbox-persistent relaunch serves the rebuilt code instead of cached code
- * (#318). Tolerates a not-yet-bound spawn by polling. Returns true when a reload
- * was issued, false when no extension SW surfaced in time. Never throws.
- */
-const refreshExtensionImpl = async (port) => {
-    for (let i = 0; i < REFRESH_POLL_ATTEMPTS; i += 1) {
-        const wsUrl = extensionSwWsUrl(await fetchCdpTargets(port));
-        if (wsUrl)
-            return cdpReloadExtension(wsUrl);
-        await sleep$1(REFRESH_POLL_INTERVAL_MS);
-    }
-    return false;
-};
-/** Production LaunchSandboxDeps: probe + spawn reused, temp dirs auto-tracked. */
-const defaultSandboxDeps = () => Object.freeze({
-    probeDebugPort: probeDebugPortImpl,
-    spawnBrowser: spawnBrowserImpl,
-    registerTempProfile: (dir) => getTempRegistry().register(dir),
-    writeSandboxManifest: writeSandboxManifestImpl,
-    seedDeveloperMode: seedDeveloperModeImpl,
-    refreshExtension: refreshExtensionImpl,
-});
-// Lazy module-singleton launch registry, persisted to launches.json beside the
-// host config so pdl_browser_status survives a host restart.
-let launchRegistry = null;
-/** Path to the persisted launch registry (dedicated file, not state.json). */
-const launchesStatePath = () => xdgConfigPath('launches.json');
-/** Read persisted launches; any error (missing/corrupt/no-HOME) → []. */
-const loadPersistedLaunches = () => {
-    try {
-        return parseLaunchRecords(JSON.parse(readFileSync(launchesStatePath(), 'utf-8')));
-    }
-    catch {
-        return [];
-    }
-};
-/** Crash-safe write of the launch registry; best-effort (never throws). */
-const persistLaunches = (records) => {
-    try {
-        const path = launchesStatePath();
-        mkdirSync(dirname(path), { recursive: true });
-        const tmp = `${path}.tmp.${process.pid}`;
-        writeFileSync(tmp, `${JSON.stringify(records, null, 2)}\n`);
-        renameSync(tmp, path);
-    }
-    catch {
-        // best-effort; a failed persist must never break the launch path.
-    }
-};
-/** The host-process launch registry (created on first use). */
-const getLaunchRegistry = () => {
-    if (!launchRegistry) {
-        launchRegistry = createLaunchRegistry({
-            now: Date.now,
-            load: loadPersistedLaunches,
-            persist: persistLaunches,
-        });
-    }
-    return launchRegistry;
-};
-// ── pdl_close_browser effects ──────────────────────────────────────────────
-const sleep$1 = (ms) => new Promise((r) => setTimeout(r, ms));
-/** Poll the debug port until it stops answering (browser gone) or attempts run out. */
-const waitForPortDown = async (port, attempts) => {
-    for (let i = 0; i < attempts; i += 1) {
-        if (!(await probeDebugPortImpl(port)))
-            return true;
-        await sleep$1(250);
-    }
-    return !(await probeDebugPortImpl(port));
-};
-/** Read the browser-level CDP WebSocket URL from /json/version (null if absent). */
-const fetchBrowserWsUrl = async (port) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    try {
-        const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
-            signal: controller.signal,
-        });
-        if (!res.ok)
-            return null;
-        const body = (await res.json().catch(() => null));
-        const url = body?.webSocketDebuggerUrl;
-        return typeof url === 'string' ? url : null;
-    }
-    catch {
-        return null;
-    }
-    finally {
-        clearTimeout(timer);
-    }
-};
-/**
- * Canonical graceful quit: connect the browser CDP WebSocket and send
- * Browser.close. The browser exits cleanly (no crash-restore bubble) and the
- * socket closes. Resolves true once the socket closes, false on error/timeout.
- * Uses Node's global WebSocket (Node >= 22).
- */
-const cdpBrowserClose = (wsUrl) => new Promise((resolveP) => {
-    let settled = false;
-    const finish = (v) => {
-        if (!settled) {
-            settled = true;
-            resolveP(v);
-        }
-    };
-    try {
-        const ws = new WebSocket(wsUrl);
-        const timer = setTimeout(() => {
-            try {
-                ws.close();
-            }
-            catch {
-                /* ignore */
-            }
-            finish(false);
-        }, 2000);
-        ws.addEventListener('open', () => {
-            ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
-        });
-        // Browser.close makes the browser exit → the socket closes: that's success.
-        ws.addEventListener('close', () => {
-            clearTimeout(timer);
-            finish(true);
-        });
-        ws.addEventListener('error', () => {
-            clearTimeout(timer);
-            finish(false);
-        });
-    }
-    catch {
-        finish(false);
-    }
-});
-/**
- * Stop a managed launch, preferring a clean shutdown:
- *  1. port already down → already-down (idempotent).
- *  2. CDP Browser.close over the WebSocket → clean quit, no restore bubble.
- *  3. SIGTERM the spawned pid (graceful) → 4. SIGKILL last resort.
- * Each step waits for the debug port to go down before reporting success.
- */
-const terminateManagedBrowserImpl = async (record) => {
-    if (!(await probeDebugPortImpl(record.port))) {
-        return { closed: true, method: 'already-down' };
-    }
-    const wsUrl = await fetchBrowserWsUrl(record.port);
-    if (wsUrl) {
-        await cdpBrowserClose(wsUrl);
-        if (await waitForPortDown(record.port, 8)) {
-            return { closed: true, method: 'cdp' };
-        }
-    }
-    if (record.pid !== null) {
-        try {
-            process.kill(record.pid, 'SIGTERM');
-        }
-        catch {
-            /* already gone */
-        }
-        if (await waitForPortDown(record.port, 8)) {
-            return { closed: true, method: 'sigterm' };
-        }
-        try {
-            process.kill(record.pid, 'SIGKILL');
-        }
-        catch {
-            /* already gone */
-        }
-        if (await waitForPortDown(record.port, 8)) {
-            return { closed: true, method: 'sigkill' };
-        }
-    }
-    return { closed: false, method: 'failed' };
-};
-/** Regex-escape a string for safe use as a pgrep -f pattern. */
-const escapeForPgrep = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/**
- * True when any process still has `dir` in its command line — i.e. a browser
- * instance is still using this profile. Uses pgrep -f over the escaped path.
- * pgrep exits 1 (→ err) when nothing matches; treat that as not-referenced.
- */
-const profileDirReferenced = (dir) => new Promise((resolveP) => {
-    execFile('pgrep', ['-f', escapeForPgrep(dir)], (err, stdout) => {
-        if (err)
-            return resolveP(false);
-        resolveP(stdout.trim().length > 0);
-    });
-});
-/** Poll until no process references the profile dir (browser fully exited) or attempts run out. */
-const waitForProfileReleased = async (dir, attempts) => {
-    for (let i = 0; i < attempts; i += 1) {
-        if (!(await profileDirReferenced(dir)))
-            return;
-        await sleep$1(250);
-    }
-};
-/**
- * Remove a sandbox profile dir, GUARDED: only paths under ~/.pwa-debug/profiles
- * or an os.tmpdir() entry with the sandbox-temp prefix are eligible — defense in
- * depth so a bad caller can never rm an arbitrary (e.g. user-profile) dir.
- *
- * A clean CDP Browser.close drops the debug port early, but the browser's child
- * processes keep flushing the profile to disk for a few seconds after — an
- * immediate rmSync races those writes and the dir gets repopulated. So we first
- * wait until no process still references the dir (the browser has fully exited),
- * then delete and re-check once. Returns true only when the dir is actually gone.
- */
-const discardProfileDirImpl = async (dir) => {
-    const resolved = resolve(dir);
-    const underPwaProfiles = resolved.includes(join('.pwa-debug', 'profiles'));
-    const isTempProfile = dirname(resolved) === resolve(tmpdir()) &&
-        basename(resolved).startsWith(TEMP_PROFILE_PREFIX);
-    if (!underPwaProfiles && !isTempProfile)
-        return false;
-    await waitForProfileReleased(resolved, 40); // up to ~10s for graceful shutdown
-    try {
-        rmSync(resolved, { recursive: true, force: true });
-    }
-    catch {
-        /* best-effort */
-    }
-    // A final shutdown write can race the delete; retry once if it reappeared.
-    if (existsSync(resolved)) {
-        await sleep$1(250);
-        try {
-            rmSync(resolved, { recursive: true, force: true });
-        }
-        catch {
-            /* best-effort */
-        }
-    }
-    return !existsSync(resolved);
-};
-const BROWSER_URL_ARG_RE = /--browserUrl(?:[=\s]+)(\S+)/;
-/**
- * Read the REAL chrome-devtools-mcp registration from Claude Code via
- * `claude mcp get chrome-devtools`. A zero exit means it is registered; the
- * configured --browserUrl is regex-extracted from the (human-readable) output.
- * This MCP is Claude-Code-targeted, so the `claude` CLI is the source of truth —
- * we deliberately do NOT fall back to parsing ~/.claude.json. Never rejects:
- * returns { registered: false } when `claude` is absent, errors, or times out.
- */
-const readChromeDevtoolsRegistration = () => new Promise((resolveP) => {
-    execFile('claude', ['mcp', 'get', 'chrome-devtools'], { timeout: 10_000 }, (err, stdout) => {
-        if (err) {
-            resolveP({ registered: false, browserUrl: null });
-            return;
-        }
-        const match = BROWSER_URL_ARG_RE.exec(stdout ?? '');
-        resolveP({ registered: true, browserUrl: match?.[1] ?? null });
-    });
-});
-const runClaudeMcp = (args) => new Promise((resolveP) => {
-    execFile('claude', [...args], { timeout: 15_000 }, (err, _stdout, stderr) => {
-        if (err) {
-            const detail = (stderr ?? '').trim() || err.message;
-            resolveP({ ok: false, error: detail });
-            return;
-        }
-        resolveP({ ok: true, error: null });
-    });
-});
-/**
- * Register chrome-devtools-mcp with Claude Code (user scope) pointed at the
- * given CDP browserUrl, via `claude mcp add`. This writes a DIRECT MCP
- * registration — Claude Code must be restarted for the new server to load.
- */
-const addChromeDevtoolsRegistration = (browserUrl) => runClaudeMcp([
-    'mcp',
-    'add',
-    'chrome-devtools',
-    '--scope',
-    'user',
-    '--',
-    'npx',
-    '-y',
-    'chrome-devtools-mcp@latest',
-    '--browserUrl',
-    browserUrl,
-]);
-/** Remove the chrome-devtools-mcp registration via `claude mcp remove`. */
-const removeChromeDevtoolsRegistration = () => runClaudeMcp(['mcp', 'remove', 'chrome-devtools']);
-const EXTENSION_URL_RE = /^chrome-extension:\/\/([a-p]{32})\//;
-/**
- * GET /json/list on a live debug port and return the distinct extension IDs of
- * loaded MV3 service-worker targets (an extension surfaces its SW here once
- * loaded). Lets the host spot an extension that is loaded in a managed browser
- * but whose ID is not whitelisted in allowed_origins — the failure mode where
- * the SW loads yet connectNative is rejected. Never rejects: returns [] on any
- * error, a dead port, or a non-array body.
- */
-const fetchLoadedExtensionIds = async (port) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    try {
-        const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
-            signal: controller.signal,
-        });
-        if (!res.ok)
-            return [];
-        const body = (await res.json().catch(() => null));
-        if (!Array.isArray(body))
-            return [];
-        const ids = new Set();
-        for (const target of body) {
-            if (target === null ||
-                typeof target !== 'object' ||
-                target.type !== 'service_worker') {
-                continue;
-            }
-            const url = target.url;
-            if (typeof url !== 'string')
-                continue;
-            const id = EXTENSION_URL_RE.exec(url)?.[1];
-            if (id)
-                ids.add(id);
-        }
-        return [...ids];
-    }
-    catch {
-        return [];
-    }
-    finally {
-        clearTimeout(timer);
-    }
-};
-/** Recursively copy the unpacked extension dir to a destination. */
-const copyDir = (src, dest) => cp(src, dest, { recursive: true });
-/** Default install target: ~/Downloads/pwa-debug-extension (or HOME fallback). */
-const defaultExtensionTargetDir = (env = process.env) => {
-    const home = env.HOME && env.HOME.length > 0 ? env.HOME : '.';
-    return join(home, 'Downloads', 'pwa-debug-extension');
 };
 
 const BROWSERS$1 = [
@@ -15644,6 +17127,7 @@ const HELP_CAPABILITIES = Object.freeze([
     'Capture library popups such as wallet modals, including shadow DOM, and correlate their failures (topic "popups").',
     "Work on the user's real logged-in profile, or a sandbox profile with the extension preloaded (topic \"browser\").",
     'Drive Android phones (Chrome tabs and installed PWAs) with the same tools: pdl_android_attach finds the phone over adb and attaches in one call (topic "mobile").',
+    'Audit responsive layout across pages × widths × color schemes × app states in one call, grouped into distinct problems (topic "layout").',
 ]);
 /** The standard startup sequence, shown in the pdl_help overview. */
 const HELP_WORKFLOW = Object.freeze([
@@ -15769,6 +17253,22 @@ const HELP_TOPICS = Object.freeze([
             'cache_list', 'cache_inspect', 'cache_match', 'pwa_installability',
             'storage_get', 'idb_list', 'idb_query', 'pwa_snapshot',
         ],
+    }),
+    topic({
+        id: 'layout',
+        title: 'Responsive layout sweep',
+        summary: 'One call checks many pages, widths, color schemes and app states for overflow, cut-off text, small tap targets, off-screen bars, edge contact and unresolved copy.',
+        guide: [
+            'Use layout_sweep instead of writing your own resize-and-measure scripts. It runs in the background: it returns a job_id, then poll layout_sweep_status until status is done.',
+            'Targets: a phone (pdl_android_attach, then pass its connection id as extension_id) or a browser started by pdl_launch_browser with the extension. A browser the user started themselves is refused, because the host needs its debug port to emulate the viewport.',
+            'Each view gets real top-level emulation over CDP: viewport width/height/dpr/mobile and prefers-color-scheme. Phones check their own size first, then 360/390/430 by default.',
+            'App states the URL cannot reach: states.discover (expression returning state keys), then states.hash_template (e.g. "#state={state}&lang={lang}&theme={scheme}") or states.apply (expression with `view` bound). states.dimensions adds crossed axes such as { lang: ["en","es"] }; states.reload reloads after applying for apps that read their hash only on load.',
+            'Example: layout_sweep({ extension_id: "<phone connection>", base_url: "http://localhost:8080/pages/", pages: ["customer/4.01-search.html", "all/4.10-chat.html"], viewports: [{ width: 360 }, { width: 411 }, { width: 430 }], root_selector: ".phone", states: { discover: "[...document.querySelectorAll(\'[data-tool=state]\')].map(b => b.dataset.value)", hash_template: "#state={state}&lang={lang}&theme={scheme}", dimensions: { lang: ["en", "es"] } }, checks: { tap_target: { min: 44 }, text_patterns: { extra: ["\\[[a-z-]+:[\\w.]+\\]"] } } }). For a desktop dev server reached from a phone, attach with reverse_ports.',
+            'Reading results: groups are distinct problems (numbers in element names ignored), most frequent first, page overflow always first because it makes other geometry findings unreliable. Fix the first group, then re-run on groups[].pages only. report_path has every finding.',
+            'Noise control: exempt_selectors skips elements and their subtrees; checks.<name>: false turns a check off; contrast is off by default (approximate). screenshots: "first_per_group" saves one clipped PNG per group as evidence.',
+            'layout_sweep_cancel stops after the current view; emulation and the starting URL are always restored.',
+        ],
+        tools: ['layout_sweep', 'layout_sweep_status', 'layout_sweep_cancel'],
     }),
     topic({
         id: 'popups',
@@ -15971,7 +17471,7 @@ const summarize = (description) => {
         : firstSentence;
 };
 const ok$2 = (data, next_steps) => Object.freeze({ ok: true, data, next_steps: Object.freeze([...next_steps]) });
-const fail$4 = (error, next_steps) => Object.freeze({ ok: false, error, next_steps: Object.freeze([...next_steps]) });
+const fail$3 = (error, next_steps) => Object.freeze({ ok: false, error, next_steps: Object.freeze([...next_steps]) });
 /** pdl_help with no arguments: capabilities, workflow, and the topic index. */
 const renderOverview = (topics, toolCount) => ok$2({
     title: 'pwa-debug: how to use it',
@@ -16038,7 +17538,7 @@ const resolveTool = (name, topics, tools) => {
     if (exact !== undefined)
         return renderToolHelp(exact, topics);
     const suggestions = suggest(name, tools.map((t) => ({ key: t.name, text: `${t.name} ${t.description}` })));
-    return fail$4(`unknown tool: ${name}`, [
+    return fail$3(`unknown tool: ${name}`, [
         suggestions.length > 0
             ? `Closest tools: ${suggestions.join(', ')}.`
             : 'No similar tool names.',
@@ -16050,7 +17550,7 @@ const resolveTopic = (id, topics, tools) => {
     if (exact !== undefined)
         return renderTopic(exact, tools);
     const suggestions = suggest(id, topics.map((t) => ({ key: t.id, text: `${t.id} ${t.title} ${t.summary}` })));
-    return fail$4(`unknown topic: ${id}`, [
+    return fail$3(`unknown topic: ${id}`, [
         suggestions.length > 0
             ? `Closest topics: ${suggestions.join(', ')}.`
             : `Topics: ${topics.map((t) => t.id).join(', ')}.`,
@@ -16379,6 +17879,9 @@ const BASE_TOOLS = Object.freeze([
     checkSetupTool,
     installExtensionTool,
     registerChromeDevtoolsTool,
+    layoutSweepTool,
+    layoutSweepStatusTool,
+    layoutSweepCancelTool,
     ...CDP_TOOLS,
     ...ANDROID_TOOLS,
     ...interactionActionTools,
@@ -16869,294 +18372,6 @@ const createTransportRouter = (transports) => {
     return Object.freeze({ listConnections, request, sendTo, close });
 };
 
-const cdpError = (kind, message, code) => Object.assign(new Error(message), {
-    name: 'CdpError',
-    kind,
-    ...(code !== undefined ? { code } : {}),
-});
-
-const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
-const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
-const WS_OPEN = 1;
-const parseMessage = (data) => {
-    if (typeof data !== 'string')
-        return null;
-    try {
-        const v = JSON.parse(data);
-        return v !== null && typeof v === 'object' ? v : null;
-    }
-    catch {
-        return null;
-    }
-};
-const resolveCtor = (opts) => opts?.WebSocketImpl ??
-    globalThis.WebSocket ??
-    null;
-const openSocket = (Ctor, wsUrl, timeoutMs) => new Promise((resolve, reject) => {
-    let settled = false;
-    let ws;
-    try {
-        ws = new Ctor(wsUrl);
-    }
-    catch (err) {
-        reject(cdpError('connect_failed', `cdp: cannot open ${wsUrl}: ${err.message}`));
-        return;
-    }
-    const timer = setTimeout(() => {
-        if (settled)
-            return;
-        settled = true;
-        try {
-            ws.close();
-        }
-        catch {
-            /* ignore */
-        }
-        reject(cdpError('timeout', `cdp: connect to ${wsUrl} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    ws.addEventListener('open', () => {
-        if (settled)
-            return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(ws);
-    });
-    const fail = () => {
-        if (settled)
-            return;
-        settled = true;
-        clearTimeout(timer);
-        reject(cdpError('connect_failed', `cdp: could not connect to ${wsUrl}`));
-    };
-    ws.addEventListener('error', fail);
-    ws.addEventListener('close', fail);
-});
-/**
- * Open a CDP WebSocket. Commands are matched to responses by id; events fan
- * out to every handler registered for their method. When the socket closes,
- * every pending command rejects with kind 'closed' and close handlers run once.
- */
-const connectCdp = async (wsUrl, opts) => {
-    const Ctor = resolveCtor(opts);
-    if (Ctor === null) {
-        throw cdpError('no_websocket', 'cdp: no WebSocket implementation available. CDP connections need Node 22 or newer.');
-    }
-    const ws = await openSocket(Ctor, wsUrl, opts?.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
-    const defaultTimeoutMs = opts?.defaultTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
-    // Connection state lives in this closure: it is the socket's lifetime.
-    let nextId = 1;
-    let open = true;
-    const pending = new Map();
-    const handlers = new Map();
-    const closeHandlers = new Set();
-    const settleAllClosed = () => {
-        if (!open)
-            return;
-        open = false;
-        for (const [id, p] of pending) {
-            clearTimeout(p.timer);
-            p.reject(cdpError('closed', `cdp: socket closed before ${p.method} answered`));
-            pending.delete(id);
-        }
-        for (const h of [...closeHandlers]) {
-            try {
-                h();
-            }
-            catch {
-                /* a close handler must not break the others */
-            }
-        }
-    };
-    ws.addEventListener('message', (ev) => {
-        const msg = parseMessage(ev.data);
-        if (msg === null)
-            return;
-        if (typeof msg.id === 'number') {
-            const p = pending.get(msg.id);
-            if (p === undefined)
-                return;
-            pending.delete(msg.id);
-            clearTimeout(p.timer);
-            if (msg.error !== undefined) {
-                const detail = msg.error.data !== undefined ? ` (${msg.error.data})` : '';
-                p.reject(cdpError('protocol', `cdp: ${p.method} failed: ${msg.error.message ?? 'unknown error'}${detail}`, msg.error.code));
-            }
-            else {
-                p.resolve(msg.result ?? {});
-            }
-            return;
-        }
-        if (typeof msg.method === 'string') {
-            const set = handlers.get(msg.method);
-            if (set === undefined)
-                return;
-            for (const h of [...set]) {
-                try {
-                    h(msg.params, msg.sessionId);
-                }
-                catch {
-                    /* one bad handler must not starve the rest */
-                }
-            }
-        }
-    });
-    ws.addEventListener('close', settleAllClosed);
-    ws.addEventListener('error', settleAllClosed);
-    const send = (method, params, sendOpts) => {
-        if (!open || ws.readyState !== WS_OPEN) {
-            return Promise.reject(cdpError('closed', `cdp: socket is closed; cannot send ${method}`));
-        }
-        const id = nextId++;
-        const timeoutMs = sendOpts?.timeoutMs ?? defaultTimeoutMs;
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                pending.delete(id);
-                reject(cdpError('timeout', `cdp: ${method} timed out after ${timeoutMs}ms`));
-            }, timeoutMs);
-            pending.set(id, { method, resolve, reject, timer });
-            try {
-                ws.send(JSON.stringify({
-                    id,
-                    method,
-                    ...(params !== undefined ? { params } : {}),
-                    ...(sendOpts?.sessionId !== undefined ? { sessionId: sendOpts.sessionId } : {}),
-                }));
-            }
-            catch (err) {
-                clearTimeout(timer);
-                pending.delete(id);
-                reject(cdpError('closed', `cdp: send ${method} failed: ${err.message}`));
-            }
-        });
-    };
-    const on = (method, handler) => {
-        const set = handlers.get(method) ?? new Set();
-        set.add(handler);
-        handlers.set(method, set);
-        return () => {
-            set.delete(handler);
-            if (set.size === 0)
-                handlers.delete(method);
-        };
-    };
-    const onClose = (handler) => {
-        closeHandlers.add(handler);
-        return () => {
-            closeHandlers.delete(handler);
-        };
-    };
-    const close = () => {
-        try {
-            ws.close();
-        }
-        catch {
-            /* ignore */
-        }
-        settleAllClosed();
-    };
-    return Object.freeze({ send, on, onClose, close, isOpen: () => open });
-};
-
-const DEFAULT_HTTP_TIMEOUT_MS = 2_000;
-const fail$3 = (kind, message) => Object.freeze({ ok: false, kind, message });
-const okv = (value) => Object.freeze({ ok: true, value });
-/**
- * Accept '9222', '127.0.0.1:9222', 'http://host:port/...', 'ws://host:port/...'
- * and return 'http://host:port'. Null when no host/port can be read.
- */
-const normalizeBrowserUrl = (input) => {
-    const s = input.trim();
-    if (s === '')
-        return null;
-    if (/^\d{1,5}$/.test(s))
-        return `http://127.0.0.1:${s}`;
-    const withScheme = /^[a-z]+:\/\//i.test(s) ? s : `http://${s}`;
-    try {
-        const u = new URL(withScheme);
-        if (u.hostname === '' || u.port === '')
-            return null;
-        return `http://${u.hostname}:${u.port}`;
-    }
-    catch {
-        return null;
-    }
-};
-const getJson = async (url, deps) => {
-    const fetchImpl = deps?.fetchImpl ?? fetch;
-    const controller = new AbortController();
-    const timeoutMs = deps?.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        const res = await fetchImpl(url, { signal: controller.signal });
-        const text = await res.text();
-        if (!res.ok)
-            return fail$3('http', `GET ${url} -> HTTP ${res.status}: ${text.slice(0, 120)}`);
-        try {
-            return okv(JSON.parse(text));
-        }
-        catch {
-            // Android Chrome answers some endpoints with plain text, e.g.
-            // 'Could not create new page'.
-            return fail$3('bad_body', `GET ${url} returned non-JSON: ${text.slice(0, 120)}`);
-        }
-    }
-    catch (err) {
-        return controller.signal.aborted
-            ? fail$3('timeout', `GET ${url} timed out after ${timeoutMs}ms`)
-            : fail$3('connect_failed', `GET ${url} failed: ${err.message}`);
-    }
-    finally {
-        clearTimeout(timer);
-    }
-};
-const str = (o, k) => typeof o[k] === 'string' ? o[k] : undefined;
-/** GET /json/version: browser identity plus the browser-level socket URL. */
-const fetchBrowserVersion = async (baseUrl, deps) => {
-    const r = await getJson(`${baseUrl}/json/version`, deps);
-    if (!r.ok)
-        return r;
-    if (r.value === null || typeof r.value !== 'object') {
-        return fail$3('bad_body', `${baseUrl}/json/version is not an object`);
-    }
-    const o = r.value;
-    const androidPackage = str(o, 'Android-Package');
-    const ws = str(o, 'webSocketDebuggerUrl');
-    return okv(Object.freeze({
-        browser: str(o, 'Browser') ?? 'unknown',
-        protocolVersion: str(o, 'Protocol-Version') ?? 'unknown',
-        userAgent: str(o, 'User-Agent') ?? '',
-        ...(androidPackage !== undefined ? { androidPackage } : {}),
-        ...(ws !== undefined ? { webSocketDebuggerUrl: ws } : {}),
-    }));
-};
-/** GET /json/list: page targets that can be attached to. */
-const listPageTargets = async (baseUrl, deps) => {
-    const r = await getJson(`${baseUrl}/json/list`, deps);
-    if (!r.ok)
-        return r;
-    if (!Array.isArray(r.value))
-        return fail$3('bad_body', `${baseUrl}/json/list is not an array`);
-    const targets = r.value.flatMap((raw) => {
-        if (raw === null || typeof raw !== 'object')
-            return [];
-        const o = raw;
-        const id = str(o, 'id');
-        const ws = str(o, 'webSocketDebuggerUrl');
-        if (str(o, 'type') !== 'page' || id === undefined || ws === undefined)
-            return [];
-        return [
-            Object.freeze({
-                id,
-                type: 'page',
-                title: str(o, 'title') ?? '',
-                url: str(o, 'url') ?? '',
-                webSocketDebuggerUrl: ws,
-            }),
-        ];
-    });
-    return okv(Object.freeze(targets));
-};
-
 /** Not tied to a page connection; they behave the same whatever is attached. */
 /** Need the extension's service worker; refused on CDP connections with this guidance. */
 const EXTENSION_ONLY_TOOLS = Object.freeze({
@@ -17345,7 +18560,7 @@ const createCdpTransport = (deps) => {
         lastSeenAt: e.lastSeenAt,
         label: e.target.title !== '' ? `${e.target.title} (${e.target.url})` : e.target.url,
     }));
-    const attachTarget = async (baseUrl, target, reload) => {
+    const attachTarget = async (baseUrl, target, reload, origin) => {
         const connectionId = cdpConnectionId(baseUrl, target.id);
         const existing = entries.get(connectionId);
         if (existing !== undefined) {
@@ -17376,7 +18591,7 @@ const createCdpTransport = (deps) => {
             return { ok: false, error: `attach to ${target.url} failed: ${err.message}` };
         }
         const t = now();
-        entries.set(connectionId, { session, target, baseUrl, connectedAt: t, lastSeenAt: t });
+        entries.set(connectionId, { session, target, baseUrl, origin, connectedAt: t, lastSeenAt: t });
         client.onClose(() => {
             entries.delete(connectionId);
         });
@@ -17400,7 +18615,7 @@ const createCdpTransport = (deps) => {
         const picked = pickTarget(listed.value, opts);
         if (!picked.ok)
             return { ok: false, error: picked.error, candidates: listed.value };
-        return attachTarget(baseUrl, picked.target, opts.reload === true);
+        return attachTarget(baseUrl, picked.target, opts.reload === true, opts.origin ?? 'desktop');
     };
     const detach = async (connectionId) => {
         const e = entries.get(connectionId);
@@ -17467,7 +18682,7 @@ const createCdpTransport = (deps) => {
         }
         if (target === undefined)
             return { ok: false, error: `new tab ${targetId} never appeared in /json/list` };
-        const attached = await attachTarget(baseUrl, target, false);
+        const attached = await attachTarget(baseUrl, target, false, opts.origin ?? 'desktop');
         if (!attached.ok)
             return attached;
         const e = entries.get(attached.connectionId);
@@ -17489,6 +18704,7 @@ const createCdpTransport = (deps) => {
         const timeout = payload?.['timeout_ms'];
         const r = await openTab({
             browserUrl: from.baseUrl,
+            origin: from.origin,
             url: payload?.['url'],
             ...(typeof timeout === 'number' ? { timeoutMs: timeout } : {}),
         });
@@ -17510,11 +18726,24 @@ const createCdpTransport = (deps) => {
     // Settings pushes target the extension's settings cache; a CDP page has
     // none yet (capture gating for CDP connections is host-side, later).
     const sendTo = (id) => entries.has(id) ? { ok: true } : { ok: false, error: `no connected NMH for ${id}` };
+    const pageEndpoint = (connectionId) => {
+        const e = entries.get(connectionId);
+        return e === undefined
+            ? undefined
+            : Object.freeze({
+                connectionId,
+                baseUrl: e.baseUrl,
+                targetId: e.target.id,
+                webSocketDebuggerUrl: e.target.webSocketDebuggerUrl,
+                url: e.target.url,
+                origin: e.origin,
+            });
+    };
     const close = async () => {
         const all = [...entries.keys()];
         await Promise.all(all.map((id) => detach(id)));
     };
-    return Object.freeze({ kind: 'cdp', listConnections, request, sendTo, close, attach, openTab, detach, targets });
+    return Object.freeze({ kind: 'cdp', listConnections, request, sendTo, close, attach, openTab, detach, targets, pageEndpoint });
 };
 
 const KNOWN_STATES = new Set(['device', 'unauthorized', 'offline']);
@@ -17801,9 +19030,10 @@ const createAndroidBridge = (deps) => {
             createdForwards.set(`${device.serial}:${fwd.value.port}`, { serial: device.serial, port: fwd.value.port });
         const browserUrl = `127.0.0.1:${fwd.value.port}`;
         const r = opts.openUrl !== undefined
-            ? await deps.cdp.openTab({ browserUrl, url: opts.openUrl })
+            ? await deps.cdp.openTab({ browserUrl, url: opts.openUrl, origin: 'android' })
             : await deps.cdp.attach({
                 browserUrl,
+                origin: 'android',
                 ...(opts.targetId !== undefined ? { targetId: opts.targetId } : {}),
                 ...(opts.urlContains !== undefined ? { urlContains: opts.urlContains } : {}),
                 ...(opts.reload !== undefined ? { reload: opts.reload } : {}),

@@ -16,6 +16,7 @@ export const HELP_CAPABILITIES: readonly string[] = Object.freeze([
   'Capture library popups such as wallet modals, including shadow DOM, and correlate their failures (topic "popups").',
   "Work on the user's real logged-in profile, or a sandbox profile with the extension preloaded (topic \"browser\").",
   'Drive Android phones (Chrome tabs and installed PWAs) with the same tools: pdl_android_attach finds the phone over adb and attaches in one call (topic "mobile").',
+  'Audit responsive layout across pages × widths × color schemes × app states in one call, grouped into distinct problems (topic "layout").',
 ]);
 
 /** The standard startup sequence, shown in the pdl_help overview. */
@@ -143,6 +144,22 @@ export const HELP_TOPICS: readonly HelpTopic[] = Object.freeze([
       'cache_list', 'cache_inspect', 'cache_match', 'pwa_installability',
       'storage_get', 'idb_list', 'idb_query', 'pwa_snapshot',
     ],
+  }),
+  topic({
+    id: 'layout',
+    title: 'Responsive layout sweep',
+    summary: 'One call checks many pages, widths, color schemes and app states for overflow, cut-off text, small tap targets, off-screen bars, edge contact and unresolved copy.',
+    guide: [
+      'Use layout_sweep instead of writing your own resize-and-measure scripts. It runs in the background: it returns a job_id, then poll layout_sweep_status until status is done.',
+      'Targets: a phone (pdl_android_attach, then pass its connection id as extension_id) or a browser started by pdl_launch_browser with the extension. A browser the user started themselves is refused, because the host needs its debug port to emulate the viewport.',
+      'Each view gets real top-level emulation over CDP: viewport width/height/dpr/mobile and prefers-color-scheme. Phones check their own size first, then 360/390/430 by default.',
+      'App states the URL cannot reach: states.discover (expression returning state keys), then states.hash_template (e.g. "#state={state}&lang={lang}&theme={scheme}") or states.apply (expression with `view` bound). states.dimensions adds crossed axes such as { lang: ["en","es"] }; states.reload reloads after applying for apps that read their hash only on load.',
+      'Example: layout_sweep({ extension_id: "<phone connection>", base_url: "http://localhost:8080/pages/", pages: ["customer/4.01-search.html", "all/4.10-chat.html"], viewports: [{ width: 360 }, { width: 411 }, { width: 430 }], root_selector: ".phone", states: { discover: "[...document.querySelectorAll(\'[data-tool=state]\')].map(b => b.dataset.value)", hash_template: "#state={state}&lang={lang}&theme={scheme}", dimensions: { lang: ["en", "es"] } }, checks: { tap_target: { min: 44 }, text_patterns: { extra: ["\\[[a-z-]+:[\\w.]+\\]"] } } }). For a desktop dev server reached from a phone, attach with reverse_ports.',
+      'Reading results: groups are distinct problems (numbers in element names ignored), most frequent first, page overflow always first because it makes other geometry findings unreliable. Fix the first group, then re-run on groups[].pages only. report_path has every finding.',
+      'Noise control: exempt_selectors skips elements and their subtrees; checks.<name>: false turns a check off; contrast is off by default (approximate). screenshots: "first_per_group" saves one clipped PNG per group as evidence.',
+      'layout_sweep_cancel stops after the current view; emulation and the starting URL are always restored.',
+    ],
+    tools: ['layout_sweep', 'layout_sweep_status', 'layout_sweep_cancel'],
   }),
   topic({
     id: 'popups',

@@ -27,6 +27,8 @@ export const HOST_LEVEL_TOOLS: ReadonlySet<string> = new Set([
   'pdl_cdp_detach',
   'pdl_android_devices',
   'pdl_android_attach',
+  'layout_sweep_status',
+  'layout_sweep_cancel',
 ]);
 
 /** Need the extension's service worker; refused on CDP connections with this guidance. */

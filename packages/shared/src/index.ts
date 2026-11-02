@@ -188,3 +188,45 @@ export {
   shouldCaptureEvent,
 } from './capture_gate.js';
 export type { CaptureGateSettings } from './capture_gate.js';
+
+export type {
+  LayoutCheckName,
+  LayoutRect,
+  ChecksConfig,
+  LayoutFinding,
+  LayoutMeasureRequest,
+  LayoutMeasureResult,
+  LayoutColorScheme,
+  LayoutViewportSpec,
+  LayoutStateDriver,
+  LayoutView,
+  LocatedFinding,
+  LayoutGroup,
+  LayoutSummary,
+} from './layout_sweep/types.js';
+
+export type { ChecksInput, ChecksResolveResult } from './layout_sweep/checks_config.js';
+export {
+  DEFAULT_CHECKS,
+  DEFAULT_TEXT_PATTERNS,
+  resolveChecksConfig,
+  findInvalidPattern,
+} from './layout_sweep/checks_config.js';
+
+export type { SweepTarget, ViewportInput, SweepPlanInput, SweepPlan, SweepPlanResult } from './layout_sweep/plan.js';
+export {
+  DEFAULT_MAX_VIEWS,
+  HARD_MAX_VIEWS,
+  MAX_PAGES,
+  resolvePageUrl,
+  crossDimensions,
+  defaultViewports,
+  planSweep,
+  pageLabel,
+  viewLabel,
+  planPageViews,
+  viewVars,
+  expandTemplate,
+} from './layout_sweep/plan.js';
+
+export { normalizeSignature, groupKey, groupFindings, summarizeFindings, capGroups } from './layout_sweep/group.js';
