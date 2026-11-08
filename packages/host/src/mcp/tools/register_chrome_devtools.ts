@@ -11,11 +11,17 @@ import {
   readChromeDevtoolsRegistration,
   removeChromeDevtoolsRegistration,
   getLaunchRegistry,
+  defaultLaunchDeps,
   type ChromeDevtoolsRegistration,
   type ClaudeMcpResult,
 } from '../../browser_launch/node_deps.js';
 import { browserUrlFor } from '../../browser_launch/spawn_args.js';
-import { cdpAddSnippet, cdpPortOf, expectedCdpPort } from './_cdp_registration.js';
+import {
+  cdpAddSnippet,
+  cdpPortOf,
+  expectedCdpPort,
+  liveManagedPorts,
+} from './_cdp_registration.js';
 
 const inputSchema = {
   port: z.number().int().positive().optional(),
@@ -27,7 +33,10 @@ export type RegisterCdpDeps = {
   readonly runMcpAdd: (browserUrl: string) => Promise<ClaudeMcpResult>;
   readonly runMcpRemove: () => Promise<ClaudeMcpResult>;
   readonly defaultPort: () => number;
+  /** Persisted launch ports (possibly long dead). */
   readonly listManagedPorts: () => readonly { readonly port: number }[];
+  /** Whether a debug port still answers; dead launches are ignored. */
+  readonly probePort: (port: number) => Promise<boolean>;
 };
 
 /**
@@ -47,7 +56,12 @@ export const registerChromeDevtoolsCore = async (
   args: z.infer<z.ZodObject<typeof inputSchema>>,
   deps: RegisterCdpDeps,
 ): Promise<ToolResponse> => {
-  const expectedPort = args.port ?? expectedCdpPort(deps.listManagedPorts(), deps.defaultPort());
+  const expectedPort =
+    args.port ??
+    expectedCdpPort(
+      await liveManagedPorts(deps.listManagedPorts(), deps.probePort),
+      deps.defaultPort(),
+    );
   const browserUrl = browserUrlFor(expectedPort);
   const snippet = cdpAddSnippet(browserUrl);
 
@@ -111,12 +125,13 @@ export const registerChromeDevtoolsHandler = async (
       getLaunchRegistry()
         .list()
         .map((l) => ({ port: l.port })),
+    probePort: (port) => defaultLaunchDeps().probeDebugPort(port),
   });
 
 export const registerChromeDevtoolsTool: ToolDef<typeof inputSchema> = Object.freeze({
   name: 'pdl_register_chrome_devtools',
   description:
-    "Register the separate, optional chrome-devtools-mcp server with Claude Code on the user's behalf, pinned to the active debug port. Runs `claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:<port>` via the `claude` CLI. Port resolves to: the `port` arg if given, else the active managed launch port (from pdl_launch_browser), else the host launch.defaultPort. Idempotent: no-op when already registered at the correct port; removes + re-adds when registered at the wrong port. IMPORTANT: this MUTATES the user's global (user-scope) MCP config — ALWAYS ask the user for confirmation before calling it. Because it writes a DIRECT MCP registration, a full Claude Code restart is required afterward for the tools to load (next_steps explains the restart, the context-handoff to hand the user before restarting, and the lower-friction plugin alternative that needs only /reload-plugins). Args: port? (override the debug port).",
+    "Register the separate, optional chrome-devtools-mcp server with Claude Code on the user's behalf, pinned to the active debug port. Runs `claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:<port>` via the `claude` CLI. Port resolves to: the `port` arg if given, else the most recent managed launch whose debug port still answers (from pdl_launch_browser), else the host launch.defaultPort. Idempotent: no-op when already registered at the correct port; removes + re-adds when registered at the wrong port. IMPORTANT: this MUTATES the user's global (user-scope) MCP config — ALWAYS ask the user for confirmation before calling it. Because it writes a DIRECT MCP registration, a full Claude Code restart is required afterward for the tools to load (next_steps explains the restart, the context-handoff to hand the user before restarting, and the lower-friction plugin alternative that needs only /reload-plugins). Args: port? (override the debug port).",
   inputSchema,
   handler: registerChromeDevtoolsHandler,
 });

@@ -15,6 +15,7 @@ import {
   installExtensionCore,
   type InstallExtensionDeps,
 } from '../../../src/mcp/tools/install_extension.js';
+import { expectedCdpPort, liveManagedPorts } from '../../../src/mcp/tools/_cdp_registration.js';
 import {
   registerChromeDevtoolsCore,
   type RegisterCdpDeps,
@@ -182,8 +183,86 @@ describe('checkSetupCore', () => {
     listConnections: () => [{ extensionId: 'abc' }],
     deriveBundledExtensionId: async () => 'abc',
     listManagedPorts: () => [],
+    probePort: async () => true,
     fetchLoadedExtensionIds: async () => [],
+    readLauncher: async () => ({
+      path: '/c/pwa-debug/bin/pwa-debug-host',
+      body: "#!/bin/sh\nexec '/nvm/v26/bin/node' '/abs/dist/main.js' \"$@\"\n",
+    }),
+    pathExists: async () => true,
     ...over,
+  });
+
+  it('ignores persisted launches whose debug port no longer answers', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        // a stale sandbox-temp record from a prior host run: its /tmp profile is gone
+        manifestExists: async (p: string) => !p.startsWith('/tmp/'),
+        listManagedPorts: () => [
+          { port: 9555, sandbox: true, userDataDir: '/tmp/pwa-debug-dead' },
+          { port: 9444, sandbox: true, userDataDir: '/h/.pwa-debug/profiles/brave' },
+        ],
+        probePort: async (port) => port === 9444,
+        readCdpRegistration: async () => ({ registered: true, browserUrl: 'http://127.0.0.1:9444' }),
+      }),
+    );
+    const data = res.data as {
+      ok: boolean;
+      gaps: string[];
+      detail: {
+        chromeDevtoolsMcp: { expectedBrowserUrl: string };
+        sandboxProfileManifests: readonly { port: number }[];
+      };
+    };
+    expect(data.gaps).toEqual([]);
+    expect(data.ok).toBe(true);
+    expect(data.detail.chromeDevtoolsMcp.expectedBrowserUrl).toBe('http://127.0.0.1:9444');
+    expect(data.detail.sandboxProfileManifests.map((m) => m.port)).toEqual([9444]);
+  });
+
+  it('expects the default port when every persisted launch is dead', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        listManagedPorts: () => [{ port: 9555, sandbox: true, userDataDir: '/tmp/x' }],
+        probePort: async () => false,
+      }),
+    );
+    const data = res.data as { ok: boolean; detail: { chromeDevtoolsMcp: { expectedBrowserUrl: string } } };
+    expect(data.ok).toBe(true);
+    expect(data.detail.chromeDevtoolsMcp.expectedBrowserUrl).toBe('http://127.0.0.1:9222');
+  });
+
+  it('flags a launcher whose baked node binary no longer exists', async () => {
+    const res = await checkSetupCore(
+      allGood({ pathExists: async (p) => p !== '/nvm/v26/bin/node' }),
+    );
+    const data = res.data as {
+      ok: boolean;
+      gaps: string[];
+      recommendations: string[];
+      detail: { launcher: { nodePath: string | null; nodeExists: boolean | null } };
+    };
+    expect(data.ok).toBe(false);
+    expect(data.gaps.join(' ')).toContain('/nvm/v26/bin/node, which no longer exists');
+    expect(data.recommendations.join(' ')).toContain('host_register_extension abc');
+    expect(data.detail.launcher).toMatchObject({ nodePath: '/nvm/v26/bin/node', nodeExists: false });
+  });
+
+  it('flags a missing launcher when a manifest points at it', async () => {
+    const res = await checkSetupCore(allGood({ readLauncher: async () => null }));
+    const data = res.data as { gaps: string[] };
+    expect(data.gaps.join(' ')).toContain('launcher script it points at is missing');
+  });
+
+  it('does not flag an unrecognisable launcher body', async () => {
+    const res = await checkSetupCore(
+      allGood({
+        readLauncher: async () => ({ path: '/l', body: '#!/bin/sh\necho custom\n' }),
+        pathExists: async () => false,
+      }),
+    );
+    const data = res.data as { ok: boolean; gaps: string[] };
+    expect(data.ok).toBe(true);
   });
 
   it('ok=true with no gaps when everything is present', async () => {
@@ -414,6 +493,7 @@ describe('registerChromeDevtoolsCore', () => {
       },
       defaultPort: () => 9222,
       listManagedPorts: () => [],
+      probePort: async () => true,
       ...over,
       get added() {
         return added;
@@ -475,6 +555,24 @@ describe('registerChromeDevtoolsCore', () => {
     });
     await registerChromeDevtoolsCore({}, deps);
     expect(deps.added).toEqual(['http://127.0.0.1:9444']);
+  });
+
+  it('ignores dead managed launches and falls back to launch.defaultPort', async () => {
+    const deps = make({
+      listManagedPorts: () => [{ port: 9555 }, { port: 9779 }],
+      probePort: async () => false,
+    });
+    await registerChromeDevtoolsCore({}, deps);
+    expect(deps.added).toEqual(['http://127.0.0.1:9222']);
+  });
+
+  it('targets the newest live launch when several are recorded', async () => {
+    const deps = make({
+      listManagedPorts: () => [{ port: 9444 }, { port: 9555 }, { port: 9666 }],
+      probePort: async (port) => port !== 9666,
+    });
+    await registerChromeDevtoolsCore({}, deps);
+    expect(deps.added).toEqual(['http://127.0.0.1:9555']);
   });
 
   it('honors an explicit port arg over everything else', async () => {
@@ -543,5 +641,26 @@ describe('installExtensionCore', () => {
     const res = await installExtensionCore({ target: '/root/x' }, deps);
     expect(res.ok).toBe(false);
     expect(res.error).toContain('Failed to copy');
+  });
+});
+
+describe('liveManagedPorts / expectedCdpPort', () => {
+  it('keeps only answering ports, preserves order, probes each port once', async () => {
+    const probed: number[] = [];
+    const live = await liveManagedPorts(
+      [{ port: 1 }, { port: 2 }, { port: 1 }, { port: 3 }],
+      async (p) => {
+        probed.push(p);
+        if (p === 3) throw new Error('ECONNREFUSED');
+        return p === 1;
+      },
+    );
+    expect(live).toEqual([{ port: 1 }, { port: 1 }]);
+    expect([...probed].sort()).toEqual([1, 2, 3]);
+  });
+
+  it('expectedCdpPort picks the newest (last) port, else the default', () => {
+    expect(expectedCdpPort([{ port: 9444 }, { port: 9555 }], 9222)).toBe(9555);
+    expect(expectedCdpPort([], 9222)).toBe(9222);
   });
 });

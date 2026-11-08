@@ -12,6 +12,7 @@ import {
 } from '../../native-messaging/browser_paths.js';
 import { defaultStatePath, loadHostState } from '../../state/host_state.js';
 import {
+  defaultLaunchDeps,
   fetchLoadedExtensionIds,
   getLaunchRegistry,
   readChromeDevtoolsRegistration,
@@ -20,7 +21,16 @@ import {
 } from '../../browser_launch/node_deps.js';
 import { browserUrlFor } from '../../browser_launch/spawn_args.js';
 import { deriveBundledExtensionId } from '../../extension_identity/extension_id.js';
-import { cdpAddSnippet, cdpPortOf, expectedCdpPort } from './_cdp_registration.js';
+import {
+  defaultLauncherPath,
+  parseLauncherNodePath,
+} from '../../native-messaging/launcher.js';
+import {
+  cdpAddSnippet,
+  cdpPortOf,
+  expectedCdpPort,
+  liveManagedPorts,
+} from './_cdp_registration.js';
 
 const inputSchema = {} as Record<string, never>;
 
@@ -50,10 +60,18 @@ export type CheckSetupDeps = {
   readonly listConnections: () => readonly { readonly extensionId: string }[];
   /** The id the bundled extension's pinned manifest key resolves to (null if unkeyed/missing). */
   readonly deriveBundledExtensionId: () => Promise<string | null>;
-  /** Debug ports of browsers this host launched, tagged sandbox vs existing-profile. */
+  /** Debug ports of browsers this host launched (persisted, so possibly long
+   *  dead), tagged sandbox vs existing-profile. */
   readonly listManagedPorts: () => readonly ManagedPort[];
+  /** Whether a debug port still answers; dead launches are ignored. */
+  readonly probePort: (port: number) => Promise<boolean>;
   /** Extension ids of loaded service-worker targets on a debug port. */
   readonly fetchLoadedExtensionIds: (port: number) => Promise<readonly string[]>;
+  /** The NMH launcher script the manifests point at: its path and body, or
+   *  null when no launcher file exists. */
+  readonly readLauncher: () => Promise<{ readonly path: string; readonly body: string } | null>;
+  /** Whether a filesystem path exists (used for the launcher's baked node). */
+  readonly pathExists: (path: string) => Promise<boolean>;
   /** Optional phone check (adb + devices); informational, never a gap. */
   readonly probeAndroid?: () => Promise<AndroidSetupView>;
 };
@@ -94,7 +112,7 @@ export const checkSetupCore = async (
 ): Promise<ToolResponse> => {
   // Where chrome-devtools-mcp should attach: the active managed launch port if
   // one is live, otherwise the configured launch.defaultPort.
-  const managedPorts = deps.listManagedPorts();
+  const managedPorts = await liveManagedPorts(deps.listManagedPorts(), deps.probePort);
   const expectedPort = expectedCdpPort(managedPorts, deps.defaultPort());
   const expectedBrowserUrl = browserUrlFor(expectedPort);
   const cdpSnippet = cdpAddSnippet(expectedBrowserUrl);
@@ -189,6 +207,28 @@ export const checkSetupCore = async (
       'Re-launch the sandbox with pdl_launch_browser (it now auto-writes the per-profile manifest before spawn); ensure an extension id is registered first (host_register_extension), since the writer no-ops with no registered id.',
     );
   }
+  // NMH launcher health. The launcher bakes an ABSOLUTE node path in at
+  // register time; after an nvm switch/uninstall that binary is gone, Chrome
+  // spawns the launcher, exec fails, and the extension silently never
+  // connects. Re-registering rewrites the launcher with this host's node.
+  const launcher = await deps.readLauncher();
+  const launcherNodePath = launcher !== null ? parseLauncherNodePath(launcher.body) : null;
+  const launcherNodeExists =
+    launcherNodePath !== null ? await deps.pathExists(launcherNodePath) : null;
+  const reRegisterHint = (why: string): string =>
+    `${why} Run host_register_extension ${state.extensionIds[0] ?? '<extension-id>'} to rewrite the launcher with the node this host runs on, then reload the extension at chrome://extensions.`;
+  if (launcher === null && anyManifest) {
+    gaps.push(
+      'The native messaging host manifest is installed but the launcher script it points at is missing, so Chrome cannot spawn the host and the extension never connects.',
+    );
+    recommendations.push(reRegisterHint('Recreate the launcher.'));
+  } else if (launcher !== null && launcherNodePath !== null && launcherNodeExists === false) {
+    gaps.push(
+      `The native messaging launcher (${launcher.path}) runs node at ${launcherNodePath}, which no longer exists (node version switched or uninstalled), so the extension cannot connect.`,
+    );
+    recommendations.push(reRegisterHint('Repoint the launcher at an installed node.'));
+  }
+
   if (!extensionDist) {
     gaps.push('The bundled pwa-debug extension dist was not found.');
     recommendations.push(
@@ -270,6 +310,11 @@ export const checkSetupCore = async (
       },
       browserInstalls: installs.map((i) => i.browser),
       manifestInstalled: anyManifest,
+      launcher: {
+        path: launcher?.path ?? null,
+        nodePath: launcherNodePath,
+        nodeExists: launcherNodeExists,
+      },
       sandboxProfileManifests: sandboxManifestChecks,
       extensionDist,
       registeredExtensionIds: state.extensionIds.length,
@@ -309,6 +354,15 @@ export const checkSetupHandler = async (
     detectInstalls: () =>
       detectBrowserInstalls(process.env, process.platform, fileExists),
     manifestExists: fileExists,
+    pathExists: fileExists,
+    readLauncher: async () => {
+      try {
+        const path = defaultLauncherPath(process.platform, process.env);
+        return { path, body: await readFile(path, 'utf8') };
+      } catch {
+        return null;
+      }
+    },
     resolveExtensionPath: () => resolveExtensionPath(process.env),
     loadState: async () => {
       const state = await loadHostState(defaultStatePath());
@@ -351,13 +405,14 @@ export const checkSetupHandler = async (
             l.profileType === 'sandbox-temp',
           ...(l.userDataDir ? { userDataDir: l.userDataDir } : {}),
         })),
+    probePort: (port) => defaultLaunchDeps().probeDebugPort(port),
     fetchLoadedExtensionIds,
   });
 
 export const checkSetupTool: ToolDef<Record<string, never>> = Object.freeze({
   name: 'pdl_check_setup',
   description:
-    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Also reports phone readiness as information (never a gap): adb installed, connected Android devices, their authorization state and whether Chrome is debuggable, with what to ask the user. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
+    'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the NMH launcher script present and the node binary baked into it still on disk (an nvm switch/uninstall otherwise silently breaks the extension connection), the per-profile manifest present under each ACTIVE (debug port still answering) sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Also reports phone readiness as information (never a gap): adb installed, connected Android devices, their authorization state and whether Chrome is debuggable, with what to ask the user. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
   inputSchema,
   handler: checkSetupHandler,
 });

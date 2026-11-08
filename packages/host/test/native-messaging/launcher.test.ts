@@ -6,6 +6,7 @@ import {
   buildPosixLauncher,
   buildWindowsLauncher,
   defaultLauncherPath,
+  parseLauncherNodePath,
   writeLauncher,
 } from '../../src/native-messaging/launcher.js';
 
@@ -180,5 +181,27 @@ describe('writeLauncher', () => {
       launcherPath,
     );
     await expect(stat(launcherPath)).resolves.toBeTruthy();
+  });
+});
+
+describe('parseLauncherNodePath', () => {
+  const spec = {
+    nodePath: '/home/u/.nvm/versions/node/v26.13.0/bin/node',
+    mainJsPath: '/abs/dist/main.js',
+    socketPath: '/run/mcp.sock',
+  };
+
+  it('round-trips the node path from a POSIX launcher', () => {
+    expect(parseLauncherNodePath(buildPosixLauncher(spec))).toBe(spec.nodePath);
+  });
+
+  it('round-trips the node path from a Windows launcher', () => {
+    const win = { ...spec, nodePath: 'C:\\Program Files\\nodejs\\node.exe' };
+    expect(parseLauncherNodePath(buildWindowsLauncher(win))).toBe(win.nodePath);
+  });
+
+  it('returns null for a body with no generated exec line', () => {
+    expect(parseLauncherNodePath('#!/bin/sh\nnode /x.js\n')).toBeNull();
+    expect(parseLauncherNodePath('')).toBeNull();
   });
 });

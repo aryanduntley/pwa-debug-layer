@@ -73,6 +73,16 @@ export const buildWindowsLauncher = (spec: LauncherSpec): string => {
   return lines.join('\r\n');
 };
 
+// Inverse of the two builders above: the POSIX exec line is
+// `exec '<node>' '<main>' "$@"`, the Windows one `"<node>" "<main>" %*`.
+const POSIX_EXEC_RE = /^exec '([^']+)' '[^']+' "\$@"\s*$/m;
+const WINDOWS_EXEC_RE = /^"([^"]+)" "[^"]+" %\*\s*$/m;
+
+/** The node binary path baked into a generated launcher, or null if the body
+ *  has no recognisable exec line (hand-edited or foreign script). */
+export const parseLauncherNodePath = (body: string): string | null =>
+  POSIX_EXEC_RE.exec(body)?.[1] ?? WINDOWS_EXEC_RE.exec(body)?.[1] ?? null;
+
 export const defaultLauncherPath = (
   platform: NodeJS.Platform,
   env: { HOME?: string; XDG_CONFIG_HOME?: string; APPDATA?: string },

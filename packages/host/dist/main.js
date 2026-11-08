@@ -4600,6 +4600,13 @@ const buildWindowsLauncher = (spec) => {
     ];
     return lines.join('\r\n');
 };
+// Inverse of the two builders above: the POSIX exec line is
+// `exec '<node>' '<main>' "$@"`, the Windows one `"<node>" "<main>" %*`.
+const POSIX_EXEC_RE = /^exec '([^']+)' '[^']+' "\$@"\s*$/m;
+const WINDOWS_EXEC_RE = /^"([^"]+)" "[^"]+" %\*\s*$/m;
+/** The node binary path baked into a generated launcher, or null if the body
+ *  has no recognisable exec line (hand-edited or foreign script). */
+const parseLauncherNodePath = (body) => POSIX_EXEC_RE.exec(body)?.[1] ?? WINDOWS_EXEC_RE.exec(body)?.[1] ?? null;
 const defaultLauncherPath = (platform, env) => {
     if (platform === 'win32') {
         if (!env.APPDATA || env.APPDATA.length === 0) {
@@ -16659,10 +16666,23 @@ const cdpPortOf = (url) => {
     }
 };
 /**
- * Where chrome-devtools-mcp should attach: the active managed launch port if a
- * managed browser is live, otherwise the configured launch.defaultPort.
+ * The managed launches whose debug port still answers. The launch registry is
+ * persisted (launches.json) across host restarts, so its records include
+ * browsers closed long ago; anything that reasons about the "active" browser
+ * must filter through this first. Each distinct port is probed once; a probe
+ * that throws counts as dead. Order (newest-last) is preserved.
  */
-const expectedCdpPort = (managedPorts, defaultPort) => managedPorts[0]?.port ?? defaultPort;
+const liveManagedPorts = async (ports, probe) => {
+    const distinct = [...new Set(ports.map((p) => p.port))];
+    const live = new Set((await Promise.all(distinct.map(async (port) => ((await probe(port).catch(() => false)) ? port : null)))).filter((p) => p !== null));
+    return Object.freeze(ports.filter((p) => live.has(p.port)));
+};
+/**
+ * Where chrome-devtools-mcp should attach: the most recent live managed launch
+ * port (the registry is newest-last), otherwise the configured
+ * launch.defaultPort. Callers pass ports already filtered by liveManagedPorts.
+ */
+const expectedCdpPort = (managedPorts, defaultPort) => managedPorts[managedPorts.length - 1]?.port ?? defaultPort;
 
 const inputSchema$3 = {};
 const HOST_NAME = 'com.pwa_debug.host';
@@ -16687,7 +16707,7 @@ const androidHints = (a) => {
 const checkSetupCore = async (deps) => {
     // Where chrome-devtools-mcp should attach: the active managed launch port if
     // one is live, otherwise the configured launch.defaultPort.
-    const managedPorts = deps.listManagedPorts();
+    const managedPorts = await liveManagedPorts(deps.listManagedPorts(), deps.probePort);
     const expectedPort = expectedCdpPort(managedPorts, deps.defaultPort());
     const expectedBrowserUrl = browserUrlFor(expectedPort);
     const cdpSnippet = cdpAddSnippet(expectedBrowserUrl);
@@ -16752,6 +16772,22 @@ const checkSetupCore = async (deps) => {
         gaps.push(`Active sandbox profile(s) lack the native messaging host manifest under <user-data-dir>/NativeMessagingHosts/: ${where}. Chrome cannot find the host there, so the extension loads but its connectNative is rejected.`);
         recommendations.push('Re-launch the sandbox with pdl_launch_browser (it now auto-writes the per-profile manifest before spawn); ensure an extension id is registered first (host_register_extension), since the writer no-ops with no registered id.');
     }
+    // NMH launcher health. The launcher bakes an ABSOLUTE node path in at
+    // register time; after an nvm switch/uninstall that binary is gone, Chrome
+    // spawns the launcher, exec fails, and the extension silently never
+    // connects. Re-registering rewrites the launcher with this host's node.
+    const launcher = await deps.readLauncher();
+    const launcherNodePath = launcher !== null ? parseLauncherNodePath(launcher.body) : null;
+    const launcherNodeExists = launcherNodePath !== null ? await deps.pathExists(launcherNodePath) : null;
+    const reRegisterHint = (why) => `${why} Run host_register_extension ${state.extensionIds[0] ?? '<extension-id>'} to rewrite the launcher with the node this host runs on, then reload the extension at chrome://extensions.`;
+    if (launcher === null && anyManifest) {
+        gaps.push('The native messaging host manifest is installed but the launcher script it points at is missing, so Chrome cannot spawn the host and the extension never connects.');
+        recommendations.push(reRegisterHint('Recreate the launcher.'));
+    }
+    else if (launcher !== null && launcherNodePath !== null && launcherNodeExists === false) {
+        gaps.push(`The native messaging launcher (${launcher.path}) runs node at ${launcherNodePath}, which no longer exists (node version switched or uninstalled), so the extension cannot connect.`);
+        recommendations.push(reRegisterHint('Repoint the launcher at an installed node.'));
+    }
     if (!extensionDist) {
         gaps.push('The bundled pwa-debug extension dist was not found.');
         recommendations.push('Build it (`pnpm --filter @pwa-debug/extension build`) or set PWA_DEBUG_EXTENSION_PATH. Call pdl_install_extension to copy it for unpacked install — or use pdl_launch_browser sandbox-persistent, which preloads it.');
@@ -16811,6 +16847,11 @@ const checkSetupCore = async (deps) => {
             },
             browserInstalls: installs.map((i) => i.browser),
             manifestInstalled: anyManifest,
+            launcher: {
+                path: launcher?.path ?? null,
+                nodePath: launcherNodePath,
+                nodeExists: launcherNodeExists,
+            },
             sandboxProfileManifests: sandboxManifestChecks,
             extensionDist,
             registeredExtensionIds: state.extensionIds.length,
@@ -16842,6 +16883,16 @@ const checkSetupHandler = async (_args, ctx) => checkSetupCore({
     defaultPort: () => ctx.settingsStore.getSetting('launch.defaultPort'),
     detectInstalls: () => detectBrowserInstalls(process.env, process.platform, fileExists),
     manifestExists: fileExists,
+    pathExists: fileExists,
+    readLauncher: async () => {
+        try {
+            const path = defaultLauncherPath(process.platform, process.env);
+            return { path, body: await readFile(path, 'utf8') };
+        }
+        catch {
+            return null;
+        }
+    },
     resolveExtensionPath: () => resolveExtensionPath(process.env),
     loadState: async () => {
         const state = await loadHostState(defaultStatePath());
@@ -16881,11 +16932,12 @@ const checkSetupHandler = async (_args, ctx) => checkSetupCore({
             l.profileType === 'sandbox-temp',
         ...(l.userDataDir ? { userDataDir: l.userDataDir } : {}),
     })),
+    probePort: (port) => defaultLaunchDeps().probeDebugPort(port),
     fetchLoadedExtensionIds,
 });
 const checkSetupTool = Object.freeze({
     name: 'pdl_check_setup',
-    description: 'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the per-profile manifest present under each ACTIVE sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Also reports phone readiness as information (never a gap): adb installed, connected Android devices, their authorization state and whether Chrome is debuggable, with what to ask the user. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
+    description: 'Diagnose pwa-debug + chrome-devtools-mcp setup and return { ok, gaps[], recommendations[], detail }. Checks: chrome-devtools-mcp registration (read from the `claude` CLI via `claude mcp get`) AND that its configured --browserUrl matches the active managed debug port (or launch.defaultPort) — flagging both not-registered and registered-at-the-wrong-port; native-messaging host manifest installed for a detected browser, the NMH launcher script present and the node binary baked into it still on disk (an nvm switch/uninstall otherwise silently breaks the extension connection), the per-profile manifest present under each ACTIVE (debug port still answering) sandbox launch\'s <user-data-dir>/NativeMessagingHosts/ (a custom --user-data-dir searches there, not the install location), bundled extension dist present, an extension ID registered, live NMH connections, AND extension-id / allow-list consistency — it derives the bundled extension\'s id from its pinned manifest key and probes any managed browser\'s debug port for loaded extension ids, flagging the case where an extension is loaded but its id is not whitelisted in allowed_origins (so it loads yet never connects). ok=true means no gaps. When gaps exist, next_steps carries the exact remediation (the `claude mcp add chrome-devtools …` snippet, the host install/register command, the host_register_extension <id> fix for a mismatch, or a pdl_install_extension pointer). detail also reports bundledExtensionId + loadedExtensionIds. Also reports phone readiness as information (never a gap): adb installed, connected Android devices, their authorization state and whether Chrome is debuggable, with what to ask the user. Cheap, no side effects. Run this first on a new machine, then chain pdl_install_extension → pdl_launch_browser.',
     inputSchema: inputSchema$3,
     handler: checkSetupHandler,
 });
@@ -16942,7 +16994,8 @@ const postRegisterSteps = (browserUrl) => [
     `Lower-friction alternative (NO restart): install chrome-devtools as a Claude Code PLUGIN instead of a direct MCP, then run /reload-plugins to hot-load it in this same session.`,
 ];
 const registerChromeDevtoolsCore = async (args, deps) => {
-    const expectedPort = args.port ?? expectedCdpPort(deps.listManagedPorts(), deps.defaultPort());
+    const expectedPort = args.port ??
+        expectedCdpPort(await liveManagedPorts(deps.listManagedPorts(), deps.probePort), deps.defaultPort());
     const browserUrl = browserUrlFor(expectedPort);
     const snippet = cdpAddSnippet(browserUrl);
     const reg = await deps.readCdpRegistration();
@@ -16983,10 +17036,11 @@ const registerChromeDevtoolsHandler = async (args, ctx) => registerChromeDevtool
     listManagedPorts: () => getLaunchRegistry()
         .list()
         .map((l) => ({ port: l.port })),
+    probePort: (port) => defaultLaunchDeps().probeDebugPort(port),
 });
 const registerChromeDevtoolsTool = Object.freeze({
     name: 'pdl_register_chrome_devtools',
-    description: "Register the separate, optional chrome-devtools-mcp server with Claude Code on the user's behalf, pinned to the active debug port. Runs `claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:<port>` via the `claude` CLI. Port resolves to: the `port` arg if given, else the active managed launch port (from pdl_launch_browser), else the host launch.defaultPort. Idempotent: no-op when already registered at the correct port; removes + re-adds when registered at the wrong port. IMPORTANT: this MUTATES the user's global (user-scope) MCP config — ALWAYS ask the user for confirmation before calling it. Because it writes a DIRECT MCP registration, a full Claude Code restart is required afterward for the tools to load (next_steps explains the restart, the context-handoff to hand the user before restarting, and the lower-friction plugin alternative that needs only /reload-plugins). Args: port? (override the debug port).",
+    description: "Register the separate, optional chrome-devtools-mcp server with Claude Code on the user's behalf, pinned to the active debug port. Runs `claude mcp add chrome-devtools --scope user -- npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:<port>` via the `claude` CLI. Port resolves to: the `port` arg if given, else the most recent managed launch whose debug port still answers (from pdl_launch_browser), else the host launch.defaultPort. Idempotent: no-op when already registered at the correct port; removes + re-adds when registered at the wrong port. IMPORTANT: this MUTATES the user's global (user-scope) MCP config — ALWAYS ask the user for confirmation before calling it. Because it writes a DIRECT MCP registration, a full Claude Code restart is required afterward for the tools to load (next_steps explains the restart, the context-handoff to hand the user before restarting, and the lower-friction plugin alternative that needs only /reload-plugins). Args: port? (override the debug port).",
     inputSchema: inputSchema$1,
     handler: registerChromeDevtoolsHandler,
 });
